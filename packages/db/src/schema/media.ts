@@ -2,6 +2,7 @@ import {
   boolean,
   index,
   integer,
+  jsonb,
   pgTable,
   serial,
   text,
@@ -11,6 +12,16 @@ import {
 } from "drizzle-orm/pg-core";
 import { audioDubType } from "./enums";
 import { episodes, items } from "./catalog";
+
+/** Метаданные спрайта для скраббинга плеера. */
+export interface SpriteMeta {
+  intervalSeconds: number;
+  tileWidth: number;
+  tileHeight: number;
+  columns: number;
+  rows: number;
+  count: number;
+}
 
 /**
  * Проигрываемая единица: у фильмов/концертов привязана к item напрямую,
@@ -28,6 +39,9 @@ export const media = pgTable(
     title: varchar("title", { length: 255 }),
     thumbnailUrl: text("thumbnail_url"),
     runtime: integer("runtime").notNull().default(0),
+    posterKey: text("poster_key"),
+    spriteKey: text("sprite_key"),
+    spriteMeta: jsonb("sprite_meta").$type<SpriteMeta | null>(),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

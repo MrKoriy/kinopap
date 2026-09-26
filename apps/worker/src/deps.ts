@@ -1,0 +1,87 @@
+/**
+ * Прод-обвязка воркера: реальные коннекторы, хранилище и пайплайн.
+ */
+import {
+  LocalFolderConnector,
+  LocalStorage,
+  TmdbEnricher,
+  UrlSourceConnector,
+  probeMedia,
+  runIngest,
+  transcodeToHls,
+  type FfmpegConfig,
+  type MediaStorage,
+  type MetadataEnricher,
+  type SourceConnector,
+} from "@zal/ingest";
+import { updateIngestJob, type Db } from "@zal/db";
+import type { IngestJobStore, WorkerDeps } from "./worker";
+
+export interface WorkerDepsConfig {
+  db: Db;
+  /** Корень хранилища медиа (в проде — точка монтирования бакета). */
+  mediaRoot: string;
+  mediaBaseUrl: string;
+  /** Папка с твоими файлами для LocalFolder-коннектора. */
+  localSourceRoot: string;
+  tmdbApiKey?: string;
+  ffmpeg?: FfmpegConfig;
+  fetch?: typeof fetch;
+}
+
+export function makeWorkerDeps(cfg: WorkerDepsConfig): WorkerDeps {
+  const storage: MediaStorage = new LocalStorage(cfg.mediaRoot, cfg.mediaBaseUrl);
+  const connectors: Record<"local" | "url", SourceConnector> = {
+    local: new LocalFolderConnector(cfg.localSourceRoot, cfg.ffmpeg),
+    url: new UrlSourceConnector({ ...cfg.ffmpeg, fetch: cfg.fetch }),
+  };
+  const enricher: MetadataEnricher | undefined = cfg.tmdbApiKey
+    ? new TmdbEnricher({ apiKey: cfg.tmdbApiKey, fetch: cfg.fetch })
+    : undefined;
+
+  const jobStore: IngestJobStore = {
+    markRunning: (id) => updateIngestJob(cfg.db, id, { status: "running" }),
+    markDone: (id, result) =>
+      updateIngestJob(cfg.db, id, {
+        status: "done",
+        itemId: result.itemId,
+        mediaId: result.mediaId,
+      }),
+    markFailed: (id, error) =>
+      updateIngestJob(cfg.db, id, { status: "failed", error }),
+  };
+
+  return {
+    jobStore,
+    runIngest: (job) =>
+      runIngest(
+        {
+          db: cfg.db,
+          storage,
+          connectors,
+          enricher,
+          ffmpeg: cfg.ffmpeg,
+        },
+        {
+          source: job.source,
+          item: job.item,
+          ladders: job.ladders,
+          episode: job.episode,
+        },
+      ),
+    runProbe: (job) => probeMedia(storage.resolveDir(job.sourceKey), cfg.ffmpeg),
+    runTranscode: async (job) => {
+      const src = storage.resolveDir(job.sourceKey);
+      const info = await probeMedia(src, cfg.ffmpeg);
+      const height = info.video[0]?.height ?? 720;
+      const baseKey = `jobs/transcode-${Date.now()}`;
+      const rungs = await transcodeToHls(src, storage.resolveDir(baseKey), height, {
+        ...cfg.ffmpeg,
+        ladder: job.ladders,
+      });
+      return {
+        keys: rungs.map((r) => `${baseKey}/${r.dirName}/index.m3u8`),
+      };
+    },
+  };
+}

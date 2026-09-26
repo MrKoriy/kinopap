@@ -132,6 +132,7 @@ describe("itemSummarySchema", () => {
       countries: [{ id: 1, title: "США" }],
       imdb: { id: 133093, rating: 8.7, votes: 2000000 },
       kinopoisk: { id: 301, rating: 8.6, votes: 500000 },
+      tmdb: { id: 603, rating: 8.2, votes: 25000 },
       rating: 1200,
       votes: { positive: 1300, negative: 100, total: 1400 },
       views: 15,

@@ -5,8 +5,9 @@ import { migrate } from "drizzle-orm/pglite/migrator";
 import { migrationsDir, schema, type Db } from "@zal/db";
 import { buildApp } from "../src/app";
 import { loadConfig } from "../src/config";
+import type { IngestQueue } from "../src/ingest-queue";
 
-export async function createTestApp() {
+export async function createTestApp(opts: { queue?: IngestQueue } = {}) {
   const client = new PGlite({ extensions: { pg_trgm } });
   const db = drizzle(client, { schema });
   await migrate(db, { migrationsFolder: migrationsDir });
@@ -18,6 +19,6 @@ export async function createTestApp() {
     CORS_ORIGIN: "*",
   });
 
-  const app = await buildApp({ db, config });
+  const app = await buildApp({ db, config, queue: opts.queue });
   return { app, db: db as unknown as Db };
 }

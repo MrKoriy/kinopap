@@ -8,6 +8,8 @@ import {
   authResponseSchema,
   countrySchema,
   genreSchema,
+  ingestJobStatusSchema,
+  ingestRequestSchema,
   itemDetailSchema,
   itemPageSchema,
   itemSummarySchema,
@@ -162,6 +164,26 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           responses: { 200: jsonBody("ItemPage"), 404: errorResponse },
         },
       },
+      "/v1/ingest": {
+        post: {
+          summary: "Запуск ingest источника (owner/admin)",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonBody("IngestRequest"),
+          responses: {
+            202: jsonBody("IngestResponse", "Задача поставлена в очередь"),
+            403: errorResponse,
+            503: errorResponse,
+          },
+        },
+      },
+      "/v1/ingest/{id}": {
+        get: {
+          summary: "Статус ingest-задачи",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: jsonBody("IngestResponse"), 404: errorResponse },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -218,6 +240,14 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           type: "object",
           properties: {
             countries: { type: "array", items: { $ref: "#/components/schemas/Country" } },
+          },
+        },
+        IngestRequest: z.toJSONSchema(ingestRequestSchema),
+        IngestJobStatus: z.toJSONSchema(ingestJobStatusSchema),
+        IngestResponse: {
+          type: "object",
+          properties: {
+            job: { $ref: "#/components/schemas/IngestJobStatus" },
           },
         },
         TypesResponse: {

@@ -1,15 +1,19 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Config } from "./config";
 import type { Db } from "@zal/db";
+import { noopIngestQueue, type IngestQueue } from "./ingest-queue";
 import { HttpError } from "./lib/http";
 import { registerAuth } from "./plugins/auth";
 import { authRoutes } from "./routes/auth";
 import { catalogRoutes } from "./routes/catalog";
 import { docsRoutes } from "./routes/docs";
+import { ingestRoutes } from "./routes/ingest";
 
 export interface BuildAppOptions {
   db: Db;
   config: Config;
+  /** Очередь ingest: BullMQ в проде, фейк в тестах. */
+  queue?: IngestQueue;
   logger?: boolean;
 }
 
@@ -50,6 +54,11 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     async (scope) => {
       await authRoutes(scope, { db: opts.db, config: opts.config });
       await catalogRoutes(scope, { db: opts.db, config: opts.config });
+      await ingestRoutes(scope, {
+        db: opts.db,
+        config: opts.config,
+        queue: opts.queue ?? noopIngestQueue,
+      });
     },
     { prefix: "/v1" },
   );

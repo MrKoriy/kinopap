@@ -173,6 +173,11 @@ export const itemSummarySchema = z.object({
     rating: z.number().nullable(),
     votes: z.number().int().nullable(),
   }),
+  tmdb: z.object({
+    id: z.number().int().nullable(),
+    rating: z.number().nullable(),
+    votes: z.number().int().nullable(),
+  }),
   rating: z.number(),
   votes: z.object({
     positive: z.number().int(),
@@ -274,12 +279,26 @@ export type MediaFile = z.infer<typeof mediaFileSchema>;
 export type AudioTrack = z.infer<typeof audioTrackSchema>;
 export type Subtitle = z.infer<typeof subtitleSchema>;
 
+/** Спрайт для скраббинга: картинка + раскладка тайлов. */
+export const spriteMetaSchema = z.object({
+  url: z.string(),
+  intervalSeconds: z.number(),
+  tileWidth: z.number().int(),
+  tileHeight: z.number().int(),
+  columns: z.number().int(),
+  rows: z.number().int(),
+  count: z.number().int(),
+});
+export type SpriteMetaDto = z.infer<typeof spriteMetaSchema>;
+
 export const mediaLinksSchema = z.object({
   mediaId: z.number().int(),
   itemId: z.number().int(),
   files: z.array(mediaFileSchema),
   audios: z.array(audioTrackSchema),
   subtitles: z.array(subtitleSchema),
+  posterUrl: z.string().nullable(),
+  sprites: spriteMetaSchema.nullable(),
 });
 export type MediaLinks = z.infer<typeof mediaLinksSchema>;
 

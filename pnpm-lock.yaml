@@ -26,9 +26,15 @@ importers:
       '@zal/db':
         specifier: workspace:*
         version: link:../../packages/db
+      bullmq:
+        specifier: ^6.3.9
+        version: 6.3.9(ioredis@5.11.1)(pg@8.23.0)
       fastify:
         specifier: ^5.12.5
         version: 5.12.5
+      ioredis:
+        specifier: ^5.4.0
+        version: 5.11.1
       zod:
         specifier: ^4.6.5
         version: 4.6.5
@@ -113,6 +119,15 @@ importers:
 
   apps/worker:
     dependencies:
+      '@zal/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
+      '@zal/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@zal/ingest':
+        specifier: workspace:*
+        version: link:../../packages/ingest
       bullmq:
         specifier: ^6.3.9
         version: 6.3.9(ioredis@5.11.1)(pg@8.23.0)
@@ -179,6 +194,31 @@ importers:
       tsx:
         specifier: ^4.23.15
         version: 4.23.15
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^5.0.2
+        version: 5.0.2(@types/node@26.6.3)(vite@8.3.1(@types/node@26.6.3)(esbuild@0.28.2)(terser@5.51.2)(tsx@4.23.15)(yaml@2.9.1))
+
+  packages/ingest:
+    dependencies:
+      '@zal/api-client':
+        specifier: workspace:*
+        version: link:../api-client
+      '@zal/db':
+        specifier: workspace:*
+        version: link:../db
+    devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.5.8
+        version: 0.5.8
+      '@types/node':
+        specifier: ^26.6.3
+        version: 26.6.3
+      drizzle-orm:
+        specifier: ^0.45.3
+        version: 0.45.3(@electric-sql/pglite@0.5.8)(@types/pg@8.23.1)(pg@8.23.0)
       typescript:
         specifier: ^5.9.0
         version: 5.9.3

@@ -1,28 +1,25 @@
 {
-  "name": "@zal/api",
+  "name": "@zal/ingest",
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
-    "dev": "tsx watch src/server.ts",
-    "start": "tsx src/server.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@fastify/jwt": "^10.2.2",
     "@zal/api-client": "workspace:*",
-    "@zal/db": "workspace:*",
-    "bullmq": "^6.3.9",
-    "fastify": "^5.12.5",
-    "ioredis": "^5.4.0",
-    "zod": "^4.6.5"
+    "@zal/db": "workspace:*"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.8",
     "@types/node": "^26.6.3",
     "drizzle-orm": "^0.45.3",
-    "tsx": "^4.23.15",
     "typescript": "^5.9.0",
     "vitest": "^5.0.2"
   }

@@ -28,6 +28,11 @@ import {
   type Tokens,
   type User,
 } from "./auth";
+import {
+  ingestResponseSchema,
+  ingestRequestSchema,
+  type IngestRequest,
+} from "./ingest";
 import type { ApiErrorBody, ItemType } from "./common";
 import { apiErrorSchema } from "./common";
 
@@ -185,6 +190,18 @@ export function createApiClient(opts: ApiClientOptions) {
       request(`/v1/items/${id}/similar`, itemPageSchema),
     getShortcut: (kind: "fresh" | "hot" | "popular", q?: Record<string, unknown>) =>
       request(`/v1/items/${kind}`, itemPageSchema, { query: q }),
+
+    /* ingest */
+    ingest: (input: IngestRequest) => {
+      ingestRequestSchema.parse(input);
+      return request("/v1/ingest", ingestResponseSchema, {
+        method: "POST",
+        body: input,
+        auth: true,
+      });
+    },
+    getIngestJob: (id: number) =>
+      request(`/v1/ingest/${id}`, ingestResponseSchema, { auth: true }),
 
     /* meta */
     listTypes: () => request("/v1/types", typesResponseSchema),

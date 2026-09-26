@@ -31,12 +31,16 @@ export const WATCH_STATUSES = ["unwatched", "in_progress", "watched"] as const;
 
 export const USER_ROLES = ["owner", "admin", "member"] as const;
 
+/** Рейды качества (лестница HLS). */
+export const QUALITIES = ["480p", "720p", "1080p", "2160p"] as const;
+
 export const itemTypeSchema = z.enum(ITEM_TYPES);
 export const genreTypeSchema = z.enum(GENRE_TYPES);
 export const personRoleSchema = z.enum(PERSON_ROLES);
 export const audioDubTypeSchema = z.enum(AUDIO_DUB_TYPES);
 export const watchStatusSchema = z.enum(WATCH_STATUSES);
 export const userRoleSchema = z.enum(USER_ROLES);
+export const qualitySchema = z.enum(QUALITIES);
 
 export type ItemType = z.infer<typeof itemTypeSchema>;
 export type GenreType = z.infer<typeof genreTypeSchema>;
@@ -44,6 +48,7 @@ export type PersonRole = z.infer<typeof personRoleSchema>;
 export type AudioDubType = z.infer<typeof audioDubTypeSchema>;
 export type WatchStatus = z.infer<typeof watchStatusSchema>;
 export type UserRole = z.infer<typeof userRoleSchema>;
+export type Quality = z.infer<typeof qualitySchema>;
 
 /** Единая форма ошибки API: { error: { code, message, details? } }. */
 export const apiErrorSchema = z.object({

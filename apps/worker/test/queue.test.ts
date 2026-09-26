@@ -23,13 +23,13 @@ describe("transcode job schemas", () => {
     expect(transcode.ladders).toEqual(["720p", "1080p"]);
   });
 
-  it("applies default ladder", () => {
+  it("без ladders рунги выбирает selectLadder по высоте исходника", () => {
     const job = transcodeJobSchema.parse({
       kind: "transcode",
       mediaId: 2,
       sourceKey: "uploads/x.mkv",
     });
-    expect(job.ladders).toEqual(["720p", "1080p"]);
+    expect(job.ladders).toBeUndefined();
   });
 
   it("rejects garbage payloads", () => {

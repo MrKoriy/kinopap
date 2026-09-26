@@ -64,10 +64,12 @@ const itemColumns = {
   quality: items.quality,
   imdbId: items.imdbId,
   imdbRating: items.imdbRating,
-  imdbVotes: items.imdbVotes,
-  kinopoiskId: items.kinopoiskId,
-  kinopoiskRating: items.kinopoiskRating,
-  kinopoiskVotes: items.kinopoiskVotes,
+  imdbVotes: items.imdbVotes,    kinopoiskId: items.kinopoiskId,
+    kinopoiskRating: items.kinopoiskRating,
+    kinopoiskVotes: items.kinopoiskVotes,
+    tmdbId: items.tmdbId,
+    tmdbRating: items.tmdbRating,
+    tmdbVotes: items.tmdbVotes,
   rating: items.rating,
   votesPositive: items.votesPositive,
   votesNegative: items.votesNegative,
@@ -150,6 +152,7 @@ function mapItem(row: ItemRow, refs: ItemRefs): ItemSummary {
       rating: row.kinopoiskRating,
       votes: row.kinopoiskVotes,
     },
+    tmdb: { id: row.tmdbId, rating: row.tmdbRating, votes: row.tmdbVotes },
     rating: row.rating,
     votes: {
       positive: row.votesPositive,
@@ -508,6 +511,19 @@ export async function mediaLinks(
   return {
     mediaId: m.id,
     itemId: m.itemId,
+    posterUrl: mediaUrl(baseUrl, m.posterKey),
+    sprites:
+      m.spriteKey && m.spriteMeta
+        ? {
+            url: mediaUrl(baseUrl, m.spriteKey) ?? "",
+            intervalSeconds: m.spriteMeta.intervalSeconds,
+            tileWidth: m.spriteMeta.tileWidth,
+            tileHeight: m.spriteMeta.tileHeight,
+            columns: m.spriteMeta.columns,
+            rows: m.spriteMeta.rows,
+            count: m.spriteMeta.count,
+          }
+        : null,
     files: files.map((f) => ({
       quality: f.quality,
       qualityId: f.qualityId,
