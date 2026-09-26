@@ -1,0 +1,11 @@
+node_modules/
+.freebuff/
+dist/
+.next/
+.turbo/
+.expo/
+coverage/
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store

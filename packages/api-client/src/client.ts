@@ -1,0 +1,201 @@
+/**
+ * Типизированный HTTP-клиент API «Зал».
+ * Общий для web и mobile: пара fetch + базовый URL, ошибки — в ApiError.
+ */
+import {
+  countriesResponseSchema,
+  genresResponseSchema,
+  itemDetailSchema,
+  itemPageSchema,
+  mediaLinksSchema,
+  typesResponseSchema,
+  type CatalogFilters,
+  type ItemDetail,
+  type ItemPage,
+  type MediaLinks,
+} from "./catalog";
+import {
+  authResponseSchema,
+  loginSchema,
+  logoutResponseSchema,
+  meResponseSchema,
+  refreshResponseSchema,
+  registerSchema,
+  refreshSchema,
+  type AuthResponse,
+  type LoginInput,
+  type RegisterInput,
+  type Tokens,
+  type User,
+} from "./auth";
+import type { ApiErrorBody, ItemType } from "./common";
+import { apiErrorSchema } from "./common";
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    public readonly body: ApiErrorBody,
+  ) {
+    super(`${status}: ${body.error.message}`);
+    this.name = "ApiError";
+  }
+}
+
+export interface ApiClientOptions {
+  baseUrl: string;
+  fetch?: typeof fetch;
+  /** Вызывается при 401 от защищённого запроса — шанс сделать refresh. */
+  onUnauthorized?: () => Promise<void>;
+}
+
+/** CatalogFilters → query-строка (формат API 1.3). */
+export function filtersToQuery(f: CatalogFilters): Record<string, string> {
+  const q: Record<string, string> = {};
+  if (f.type) q.type = f.type;
+  if (f.title) q.title = f.title;
+  if (f.genreIds?.length) q.genre = f.genreIds.join(",");
+  if (f.countryIds?.length) q.country = f.countryIds.join(",");
+  if (f.yearFrom != null) {
+    q.year =
+      f.yearTo != null && f.yearTo !== f.yearFrom
+        ? `${f.yearFrom}-${f.yearTo}`
+        : String(f.yearFrom);
+  }
+  if (f.letter) q.letter = f.letter;
+  if (f.actor) q.actor = f.actor;
+  if (f.director) q.director = f.director;
+  if (f.sort) {
+    q.sort = f.sort.dir === "desc" ? `${f.sort.field}-` : f.sort.field;
+  }
+  if (f.cursor) q.cursor = f.cursor;
+  q.limit = String(f.limit);
+  return q;
+}
+
+function buildUrl(baseUrl: string, path: string, query?: Record<string, unknown>): string {
+  const url = new URL(path, baseUrl);
+  if (query) {
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== null && v !== "") url.searchParams.set(k, String(v));
+    }
+  }
+  return url.toString();
+}
+
+export function createApiClient(opts: ApiClientOptions) {
+  const doFetch = opts.fetch ?? fetch;
+  let accessToken: string | null = null;
+
+  async function request<T>(
+    path: string,
+    schema: { parse: (v: unknown) => T },
+    init: {
+      method?: string;
+      body?: unknown;
+      query?: Record<string, unknown>;
+      auth?: boolean;
+      retryOn401?: boolean;
+    } = {},
+  ): Promise<T> {
+    const headers: Record<string, string> = {};
+    if (init.body !== undefined) headers["content-type"] = "application/json";
+    if (init.auth && accessToken) headers.authorization = `Bearer ${accessToken}`;
+
+    const res = await doFetch(buildUrl(opts.baseUrl, path, init.query), {
+      method: init.method ?? "GET",
+      headers,
+      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+    });
+
+    if (res.status === 401 && init.auth && init.retryOn401 !== false && opts.onUnauthorized) {
+      await opts.onUnauthorized();
+      return request(path, schema, { ...init, retryOn401: false });
+    }
+
+    const json: unknown = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const parsed = apiErrorSchema.safeParse(json);
+      throw new ApiError(
+        res.status,
+        parsed.success
+          ? parsed.data
+          : { error: { code: "unknown", message: res.statusText } },
+      );
+    }
+    return schema.parse(json);
+  }
+
+  const client = {
+    get accessToken() {
+      return accessToken;
+    },
+    setToken(token: string | null) {
+      accessToken = token;
+    },
+
+    health: () =>
+      request("/healthz", { parse: (v) => v as { ok: boolean } }),
+
+    /* auth */
+    register: (input: RegisterInput) => {
+      registerSchema.parse(input);
+      return request("/v1/auth/register", authResponseSchema, {
+        method: "POST",
+        body: input,
+      });
+    },
+    login: (input: LoginInput) => {
+      loginSchema.parse(input);
+      return request("/v1/auth/login", authResponseSchema, {
+        method: "POST",
+        body: input,
+      });
+    },
+    refresh: (input: { refreshToken: string }) => {
+      refreshSchema.parse(input);
+      return request("/v1/auth/refresh", refreshResponseSchema, {
+        method: "POST",
+        body: input,
+      });
+    },
+    logout: (input: { refreshToken: string }) =>
+      request("/v1/auth/logout", logoutResponseSchema, {
+        method: "POST",
+        body: input,
+      }),
+    me: () => request("/v1/auth/me", meResponseSchema, { auth: true }),
+
+    /* catalog */
+    listItems: (filters: CatalogFilters) =>
+      request("/v1/items", itemPageSchema, {
+        query: filtersToQuery(filters) as Record<string, unknown>,
+      }),
+    searchItems: (q: {
+      q: string;
+      type?: ItemType;
+      field?: "title" | "director" | "cast";
+      limit?: number;
+    }) => request("/v1/items/search", itemPageSchema, { query: q }),
+    getItem: (id: number) => request(`/v1/items/${id}`, itemDetailSchema),
+    getMediaLinks: (itemId: number, mediaId: number) =>
+      request(`/v1/items/${itemId}/media-links`, mediaLinksSchema, {
+        query: { mid: mediaId },
+      }),
+    getSimilar: (id: number) =>
+      request(`/v1/items/${id}/similar`, itemPageSchema),
+    getShortcut: (kind: "fresh" | "hot" | "popular", q?: Record<string, unknown>) =>
+      request(`/v1/items/${kind}`, itemPageSchema, { query: q }),
+
+    /* meta */
+    listTypes: () => request("/v1/types", typesResponseSchema),
+    listGenres: (type?: string) =>
+      request("/v1/genres", genresResponseSchema, { query: { type } }),
+    listCountries: () => request("/v1/countries", countriesResponseSchema),
+  };
+
+  return client;
+}
+
+export type ApiClient = ReturnType<typeof createApiClient>;
+
+export type { AuthResponse, ItemDetail, ItemPage, MediaLinks, Tokens, User };

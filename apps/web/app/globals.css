@@ -1,0 +1,112 @@
+:root {
+  --zal-bg: #0b0b0f;
+  --zal-surface: #141419;
+  --zal-surface-hover: #1c1c24;
+  --zal-border: #26262f;
+  --zal-text: #f2f2f5;
+  --zal-text-muted: #9a9aa8;
+  --zal-accent: #e50914;
+  --zal-accent-hover: #ff1f2b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--zal-bg);
+  color: var(--zal-text);
+  font-family: "Inter", "Helvetica Neue", Arial, sans-serif;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.container {
+  max-width: 72rem;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+.hero {
+  padding: 6rem 0 4rem;
+}
+
+.hero h1 {
+  font-size: clamp(2.5rem, 6vw, 4.5rem);
+  letter-spacing: -0.02em;
+  margin: 0 0 1rem;
+}
+
+.hero h1 span {
+  color: var(--zal-accent);
+}
+
+.hero p {
+  color: var(--zal-text-muted);
+  font-size: 1.25rem;
+  max-width: 36rem;
+  line-height: 1.6;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+  gap: 1rem;
+  padding: 2rem 0 4rem;
+}
+
+.card {
+  background: var(--zal-surface);
+  border: 1px solid var(--zal-border);
+  border-radius: 10px;
+  padding: 1.25rem;
+  transition: background 120ms ease;
+}
+
+.card:hover {
+  background: var(--zal-surface-hover);
+}
+
+.card h3 {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+
+.card p {
+  margin: 0;
+  color: var(--zal-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border: 1px solid var(--zal-border);
+  border-radius: 999px;
+  padding: 0.4rem 1rem;
+  font-size: 0.875rem;
+  color: var(--zal-text-muted);
+}
+
+.status .dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 999px;
+  background: var(--zal-text-muted);
+}
+
+.status.ok .dot {
+  background: #2ecc71;
+}
+
+.status.fail .dot {
+  background: var(--zal-accent);
+}
