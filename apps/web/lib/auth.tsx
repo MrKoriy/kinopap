@@ -1,41 +1,32 @@
 "use client";
 
-/**
- * Авторизация веб-клиента: токены в localStorage, состояние в контексте.
- * Для закрытого клуба достаточно; httpOnly-куки — задача фазы харденинга.
- */
-import * as React from "react";
 import {
-  createApiClient,
   type ApiClient,
+  createApiClient,
   type Tokens,
   type User,
 } from "@zal/api-client";
+/**
+ * Авторизация веб-клиента.
+ *
+ * Refresh-токен живёт в httpOnly-cookie (доступна только API, XSS её не
+ * читает), access — в памяти процесса: перезагрузка страницы восстанавливает
+ * сессию через POST /v1/auth/refresh по куке. localStorage больше не хранит
+ * ничего критичного. 401 → single-flight refresh → повтор запроса; logout —
+ * только если refresh сам не прошёл.
+ */
+import * as React from "react";
 
 const API_URL =
   process.env.NEXT_PUBLIC_API_URL ||
   (typeof window !== "undefined" ? window.location.origin : "http://localhost:3001");
-const TOKENS_KEY = "zal.tokens";
-
-export function loadTokens(): Tokens | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const raw = window.localStorage.getItem(TOKENS_KEY);
-    return raw ? (JSON.parse(raw) as Tokens) : null;
-  } catch {
-    return null;
-  }
-}
-
-export function saveTokens(tokens: Tokens | null): void {
-  if (typeof window === "undefined") return;
-  if (tokens) window.localStorage.setItem(TOKENS_KEY, JSON.stringify(tokens));
-  else window.localStorage.removeItem(TOKENS_KEY);
-}
 
 interface AuthState {
   user: User | null;
-  tokens: Tokens | null;
+  /** null пока cookie-refresh не попробован; после — юзер или гость. */
+  ready: boolean;
+  /** Залогинен ли (прогресс/голоса/подписки персональны). */
+  isAuthed: boolean;
   api: ApiClient;
   login: (email: string, password: string) => Promise<void>;
   register: (input: {
@@ -50,42 +41,71 @@ interface AuthState {
 const AuthContext = React.createContext<AuthState | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [tokens, setTokens] = React.useState<Tokens | null>(null);
   const [user, setUser] = React.useState<User | null>(null);
+  const [ready, setReady] = React.useState(false);
 
   const api = React.useMemo(() => {
+    const clearSession = () => {
+      client.setToken(null);
+      setUser(null);
+    };
+
+    // Single-flight: несколько параллельных 401 дожидаются одного refresh.
+    let refreshInFlight: Promise<boolean> | null = null;
+
     const client = createApiClient({
       baseUrl: API_URL,
+      // httpOnly-cookie с refresh-токеном ходит с каждым auth-запросом.
+      credentials: "include",
       onUnauthorized: async () => {
-        saveTokens(null);
-        setTokens(null);
-        setUser(null);
+        if (!refreshInFlight) {
+          refreshInFlight = (async () => {
+            try {
+              // Пустое тело: токен в куке.
+              const res = await client.refresh();
+              client.setToken(res.tokens.accessToken);
+              return true;
+            } catch {
+              clearSession();
+              return false;
+            } finally {
+              refreshInFlight = null;
+            }
+          })();
+        }
+        await refreshInFlight;
       },
     });
-    const saved = loadTokens();
-    if (saved) client.setToken(saved.accessToken);
     return client;
   }, []);
 
-  // При монтировании восстанавливаем сессию и тянем профиль.
+  // Восстановление сессии: refresh по httpOnly-cookie → me.
   React.useEffect(() => {
-    const saved = loadTokens();
-    if (!saved) return;
-    setTokens(saved);
-    api.me().then(
-      (res) => setUser(res.user),
-      () => {
-        saveTokens(null);
-        setTokens(null);
-      },
-    );
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await api.refresh();
+        if (cancelled) return;
+        api.setToken(res.tokens.accessToken);
+        const me = await api.me().catch(() => null);
+        if (!cancelled) setUser(me?.user ?? null);
+      } catch (err) {
+        // 401 — гость (куки нет/отозвана); сбой сети — тоже гость до
+        // следующего логина, повторный refresh безопасен.
+        if (!cancelled) setUser(null);
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [api]);
 
   const applyAuth = React.useCallback(
     (res: { user: User; tokens: Tokens }) => {
-      saveTokens(res.tokens);
+      // Refresh уже в httpOnly-cookie; в памяти только короткоживущий access.
       api.setToken(res.tokens.accessToken);
-      setTokens(res.tokens);
       setUser(res.user);
     },
     [api],
@@ -94,7 +114,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value = React.useMemo<AuthState>(
     () => ({
       user,
-      tokens,
+      ready,
+      isAuthed: user != null,
       api,
       login: async (email, password) => {
         applyAuth(await api.login({ email, password }));
@@ -103,15 +124,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         applyAuth(await api.register(input));
       },
       logout: async () => {
-        const refresh = loadTokens()?.refreshToken;
-        if (refresh) await api.logout({ refreshToken: refresh }).catch(() => {});
-        saveTokens(null);
+        // Куку чистит API; тело не нужно.
+        await api.logout().catch(() => {});
         api.setToken(null);
-        setTokens(null);
         setUser(null);
       },
     }),
-    [user, tokens, api, applyAuth],
+    [user, ready, api, applyAuth],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

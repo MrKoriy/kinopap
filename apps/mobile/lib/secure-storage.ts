@@ -3,8 +3,9 @@
  * (expo-secure-store), а на web-таргете (Expo web для e2e) — localStorage.
  * Отдельный модуль, чтобы чистая логика (lib/session.ts) не тянула натив.
  */
-import { Platform } from "react-native";
+
 import * as SecureStore from "expo-secure-store";
+import { Platform } from "react-native";
 import type { TokenStorage } from "./session";
 
 const webStorage: TokenStorage = {

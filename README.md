@@ -14,8 +14,12 @@ packages/
   db/          Drizzle ORM + Postgres 16: схема, миграции, репозитории, seed
   api-client/  Общие zod-схемы (контракт API) + типизированный клиент
   ingest/      SourceConnector + коннекторы (Local/URL/TMDb) + ffmpeg-пайплайн
+  shared/      WebVTT-парсер, дерево комментариев, форматтеры (web + mobile)
   ui/          Дизайн-токены и UI-примитивы
 ```
+
+Качество: `pnpm lint` (Biome), `pnpm typecheck`, `pnpm test` — CI гоняет всё
+включая e2e (GitHub Actions, без Docker: PGlite + реальный ffmpeg).
 
 ## Границы
 
@@ -43,7 +47,7 @@ HLS-лестницу (480p/720p/1080p, h264/aac, без апскейла), де�
 ```bash
 pnpm install
 docker compose up -d          # postgres 16, redis, minio (для dev)
-cp .env.example .env
+cp .env.example .env          # JWT_SECRET обязателен (от 32 символов)
 pnpm db:setup                 # миграции + seed (owner, инвайты, жанры, страны)
 pnpm dev                      # web :3000, api :3001, worker
 ```
@@ -64,8 +68,14 @@ title/director/cast, media-links (лестница качеств http+hls, ау
 
 - `GET /openapi.json` — спецификация
 - `GET /docs` — страница с описанием
+- `POST /v1/discover` (owner/admin) — наполнить каталог трендами и популярным
+  из официального TMDb API (нужен `TMDB_API_KEY`): постеры, описания, рейтинги,
+  жанры. Просмотр таких тайтлов — zero-storage через media-links.
 
-Auth: JWT access (15 мин) + refresh (30 дней, ротация). Регистрация по инвайт-коду.
+Auth: JWT access (15 мин) + refresh (30 дней, ротация с guard от гонок).
+Регистрация по инвайт-коду (CSPRNG; создаёт owner через `POST /v1/invites`).
+Rate limit: точечные лимиты на login/register/refresh/search/discover,
+лёгкий глобальный потолок.
 
 ## Социалка
 

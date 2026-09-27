@@ -26,14 +26,3 @@ export function HeroSkeleton() {
     <div className="mb-10 h-[420px] w-full animate-pulse rounded-[var(--radius-card)] bg-surface-2 sm:h-[520px]" />
   );
 }
-
-export function DetailSkeleton() {
-  return (
-    <div className="space-y-6">
-      <div className="h-[380px] w-full animate-pulse rounded-[var(--radius-card)] bg-surface-2" />
-      <div className="h-8 w-1/2 animate-pulse rounded bg-surface-2" />
-      <div className="h-4 w-full animate-pulse rounded bg-surface-2" />
-      <div className="h-4 w-5/6 animate-pulse rounded bg-surface-2" />
-    </div>
-  );
-}

@@ -1,10 +1,10 @@
-import { describe, expect, it } from "vitest";
 import { ingestResponseSchema } from "@zal/api-client";
 import { users } from "@zal/db";
 import { eq } from "drizzle-orm";
-import { createTestApp } from "./setup";
-import { makeOwnerWithInvite } from "./fixtures";
+import { describe, expect, it } from "vitest";
 import type { IngestJobPayload, IngestQueue } from "../src/ingest-queue";
+import { makeOwnerWithInvite } from "./fixtures";
+import { createTestApp } from "./setup";
 
 function recordingQueue() {
   const enqueued: IngestJobPayload[] = [];

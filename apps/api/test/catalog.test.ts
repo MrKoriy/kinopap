@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
 import {
   itemDetailSchema,
   itemPageSchema,
   mediaLinksSchema,
 } from "@zal/api-client";
-import { createTestApp } from "./setup";
+import { describe, expect, it } from "vitest";
 import { makeFixtures } from "./fixtures";
+import { createTestApp } from "./setup";
 
 describe("catalog routes", () => {
   it("serves types, genres, countries", async () => {
@@ -45,7 +45,7 @@ describe("catalog routes", () => {
 
     const byActor = await app.inject({
       method: "GET",
-      url: "/v1/items?actor=" + encodeURIComponent("Киану"),
+      url: `/v1/items?actor=${encodeURIComponent("Киану")}`,
     });
     expect(itemPageSchema.parse(byActor.json()).items.length).toBe(2);
 
@@ -70,7 +70,7 @@ describe("catalog routes", () => {
 
     const byTitle = await app.inject({
       method: "GET",
-      url: "/v1/items/search?q=" + encodeURIComponent("Матрица"),
+      url: `/v1/items/search?q=${encodeURIComponent("Матрица")}`,
     });
     expect(itemPageSchema.parse(byTitle.json()).items.map((i) => i.id)).toEqual([
       ids.movie,
@@ -78,13 +78,13 @@ describe("catalog routes", () => {
 
     const byCast = await app.inject({
       method: "GET",
-      url: "/v1/items/search?q=" + encodeURIComponent("Киану") + "&field=cast",
+      url: `/v1/items/search?q=${encodeURIComponent("Киану")}&field=cast`,
     });
     expect(itemPageSchema.parse(byCast.json()).items.length).toBe(2);
 
     const missing = await app.inject({
       method: "GET",
-      url: "/v1/items/search?q=" + encodeURIComponent("Неттакого"),
+      url: `/v1/items/search?q=${encodeURIComponent("Неттакого")}`,
     });
     expect(itemPageSchema.parse(missing.json()).items).toEqual([]);
   });

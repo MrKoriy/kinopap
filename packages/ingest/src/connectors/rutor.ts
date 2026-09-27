@@ -30,7 +30,7 @@ const CATEGORY_MAP: Record<RutorCategory, number> = {
 };
 
 function parseSizeBytes(str: string): number {
-  const match = str.match(/([\d\.]+)\s*(GB|MB|KB|B)/i);
+  const match = str.match(/([\d.]+)\s*(GB|MB|KB|B)/i);
   if (!match) return 0;
   const val = parseFloat(match[1]);
   const unit = match[2].toUpperCase();
@@ -128,7 +128,7 @@ export class RutorConnector {
       const row = rows[i];
       const magnetMatch = row.match(/href="(magnet:\?xt=urn:btih:([a-zA-Z0-9]+)[^"]*)"/);
       const titleMatch = row.match(/<a href="\/torrent\/\d+\/[^"]+">([^<]+)<\/a>/);
-      const sizeMatch = row.match(/<td align="right">([\d\.]+(?:&nbsp;|\s+)(?:GB|MB|KB|B))<\/td>/i);
+      const sizeMatch = row.match(/<td align="right">([\d.]+(?:&nbsp;|\s+)(?:GB|MB|KB|B))<\/td>/i);
       const seedersMatch = row.match(/<span class="green"[^>]*>[\s\S]*?(\d+)\s*<\/span>/i);
       const leechersMatch = row.match(/<span class="red"[^>]*>[\s\S]*?(\d+)\s*<\/span>/i);
 

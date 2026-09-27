@@ -72,7 +72,7 @@ export class AnilibriaConnector {
       });
       if (!res.ok) return null;
       const data = (await res.json()) as any;
-      if (!data || !data.id) return null;
+      if (!data?.id) return null;
 
       const rawEpisodes: any[] = data.episodes ?? [];
       const episodes: AnilibriaEpisode[] = rawEpisodes.map((ep) => ({

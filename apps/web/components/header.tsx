@@ -93,6 +93,7 @@ export function Header() {
               {user.name ?? user.email}
             </span>
             <button
+        type="button"
               className="text-sm text-muted transition hover:text-white"
               onClick={() => void logout()}
               data-testid="logout-button"

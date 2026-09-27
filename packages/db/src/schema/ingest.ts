@@ -27,7 +27,11 @@ export const ingestJobs = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("ingest_jobs_status_idx").on(t.status)],
+  (t) => [
+    index("ingest_jobs_status_idx").on(t.status),
+    // Опрос статусов: свежие задачи статуса.
+    index("ingest_jobs_status_created_idx").on(t.status, t.createdAt),
+  ],
 );
 
 export type IngestJobStatus = "queued" | "running" | "done" | "failed";

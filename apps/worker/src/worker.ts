@@ -2,15 +2,16 @@
  * BullMQ-воркер очереди транскода. Обработчики инжектируются —
  * тесты гоняют фейки, прод-обвязка идёт в deps.
  */
-import { Worker, type ConnectionOptions, type Job } from "bullmq";
+
 import type { SourceInfo } from "@zal/ingest";
+import { type ConnectionOptions, type Job, Worker } from "bullmq";
 import {
-  TRANSCODE_QUEUE,
-  transcodeJobPayloadSchema,
   type IngestJobData,
   type ProbeJob,
+  TRANSCODE_QUEUE,
   type TranscodeJob,
   type TranscodeJobPayload,
+  transcodeJobPayloadSchema,
 } from "./queue";
 
 export interface IngestRunResult {
@@ -30,6 +31,13 @@ export interface WorkerDeps {
   runProbe: (job: ProbeJob) => Promise<SourceInfo>;
   runTranscode: (job: TranscodeJob) => Promise<{ keys: string[] }>;
   jobStore: IngestJobStore;
+  /** Чистка сирот в хранилище после успешного ingest (опционально для тестов). */
+  gc?: () => Promise<void>;
+}
+
+/** Ошибка задачи в БД — не бесконечный stderr ffmpeg. */
+function truncateError(err: unknown): string {
+  return String(err).slice(0, 4000);
 }
 
 export async function handleJob(
@@ -48,9 +56,19 @@ export async function handleJob(
       try {
         const result = await deps.runIngest(payload);
         await deps.jobStore.markDone(payload.jobId, result);
+        // Сироты в хранилище (перезаписи дедупа, упавшие прогоны) — после
+        // успешной публикации, с grace-периодом внутри GC.
+        await deps.gc?.().catch((err) => {
+          console.warn("worker: gc failed (non-fatal):", String(err).slice(0, 200));
+        });
         return result;
       } catch (err) {
-        await deps.jobStore.markFailed(payload.jobId, String(err));
+        // BullMQ ретраит задачу: «failed» ставим только на последней попытке,
+        // иначе промежуточный статус врёт (running → failed → running…).
+        const isLastAttempt = (job.attemptsMade ?? 0) + 1 >= (job.opts?.attempts ?? 1);
+        if (isLastAttempt) {
+          await deps.jobStore.markFailed(payload.jobId, truncateError(err));
+        }
         throw err;
       }
     }

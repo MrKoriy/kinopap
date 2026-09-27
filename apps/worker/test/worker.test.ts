@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
 import type { Job } from "bullmq";
+import { describe, expect, it } from "vitest";
+import { ingestJobSchema, transcodeJobPayloadSchema } from "../src/queue";
 import {
   handleJob,
   type IngestJobStore,
   type WorkerDeps,
 } from "../src/worker";
-import { ingestJobSchema, transcodeJobPayloadSchema } from "../src/queue";
 
 function fakeStore() {
   const calls: string[] = [];
@@ -27,7 +27,7 @@ function fakeDeps(overrides: Partial<WorkerDeps> = {}) {
   const { store, calls } = fakeStore();
   const deps: WorkerDeps = {
     jobStore: store,
-    runIngest: async (job) => ({ itemId: 10, mediaId: 20 }),
+    runIngest: async (_job) => ({ itemId: 10, mediaId: 20 }),
     runProbe: async () => ({
       ref: "x",
       container: "mp4",

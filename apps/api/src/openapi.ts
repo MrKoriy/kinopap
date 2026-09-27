@@ -2,39 +2,40 @@
  * OpenAPI 3.1 спецификация. Компоненты генерируются из zod-схем
  * (@zal/api-client) через z.toJSONSchema — контракт не разъезжается.
  */
-import { z } from "zod";
+
 import {
   apiErrorSchema,
   authResponseSchema,
-  countrySchema,
-  genreSchema,
-  ingestJobStatusSchema,
-  ingestRequestSchema,
-  progressPutSchema,
-  progressSchema,
-  itemDetailSchema,
-  itemPageSchema,
-  itemSummarySchema,
-  mediaLinksSchema,
   commentListResponseSchema,
   commentPostSchema,
   commentPutSchema,
   commentResponseSchema,
   commentSchema,
+  countrySchema,
+  genreSchema,
+  ingestJobStatusSchema,
+  ingestRequestSchema,
+  itemDetailSchema,
+  itemPageSchema,
   itemSocialResponseSchema,
+  itemSummarySchema,
+  mediaLinksSchema,
   newEpisodeSchema,
   newEpisodesResponseSchema,
+  progressPutSchema,
+  progressSchema,
   refreshResponseSchema,
   subscriptionListResponseSchema,
   subscriptionPutSchema,
   subscriptionResponseSchema,
   subscriptionSchema,
+  tokensSchema,
+  userSchema,
   votePutSchema,
   voteResponseSchema,
   voteStateSchema,
-  tokensSchema,
-  userSchema,
 } from "@zal/api-client";
+import { z } from "zod";
 
 const errorResponse = {
   description: "Ошибка",

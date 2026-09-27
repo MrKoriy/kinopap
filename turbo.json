@@ -9,7 +9,7 @@
       "dependsOn": ["^typecheck"]
     },
     "test": {
-      "dependsOn": ["^test"]
+      "dependsOn": ["^typecheck"]
     },
     "dev": {
       "cache": false,

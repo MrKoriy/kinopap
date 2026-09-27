@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { formatDuration, formatTime } from "@/lib/format";
 import {
   activeCues,
   isIntroVisible,
@@ -6,7 +7,6 @@ import {
   parseVtt,
   spriteTileFor,
 } from "@/lib/player-logic";
-import { formatDuration, formatTime } from "@/lib/format";
 
 const VTT = `WEBVTT
 

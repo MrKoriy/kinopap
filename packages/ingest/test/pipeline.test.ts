@@ -3,26 +3,26 @@
  * Реальный ffmpeg, реальные миграции на PGlite.
  */
 import { stat } from "node:fs/promises";
-import { describe, expect, it } from "vitest";
-import { eq } from "drizzle-orm";
 import {
   audioTracks,
+  type Db,
   episodes,
-  items,
   itemGenres,
+  items,
   media,
   mediaFiles,
   seasons,
   subtitles,
-  type Db,
 } from "@zal/db";
+import { eq } from "drizzle-orm";
+import { describe, expect, it } from "vitest";
 import {
+  type IngestPipelineDeps,
   LocalFolderConnector,
   LocalStorage,
-  UrlSourceConnector,
-  runIngest,
-  type IngestPipelineDeps,
   type MetadataEnricher,
+  runIngest,
+  UrlSourceConnector,
 } from "../src";
 import { createTestDb, makeTestMedia, makeTmpDir, TEST_FFMPEG } from "./helpers";
 
@@ -47,7 +47,7 @@ function makeDeps(db: Db, mediaDir: string, storageRoot: string): IngestPipeline
     storage: new LocalStorage(storageRoot, "http://cdn.test/m"),
     connectors: {
       local: new LocalFolderConnector(mediaDir, TEST_FFMPEG),
-      url: new UrlSourceConnector(TEST_FFMPEG),
+      url: new UrlSourceConnector({ ...TEST_FFMPEG, allowPrivateHosts: true }),
     },
     enricher,
     ffmpeg: TEST_FFMPEG,
@@ -139,13 +139,48 @@ describe("runIngest (полный пайплайн)", () => {
       await stat(deps.storage.resolveDir(s.fileKey!));
     }
 
-    // Повторный ingest того же фильма не плодит дубли item'а.
+    // Повторный ingest другого источника — новая media у того же item'а.
     const again = await runIngest(deps, {
       source: { type: "local", ref: "sample.mp4" },
       item: { type: "movie", title: "Матрица", year: 1999 },
     });
     expect(again.itemId).toBe(result.itemId);
     expect(again.mediaId).not.toBe(result.mediaId);
+  });
+
+  it("повторный ingest того же источника обновляет media, а не дублирует", async () => {
+    const src = await makeTestMedia();
+    const db = await createTestDb();
+    const deps = makeDeps(db, src.dir, await makeTmpDir("zal-store-"));
+
+    const request = {
+      source: { type: "local" as const, ref: "sample.mp4" },
+      item: { type: "movie" as const, title: "Дюна", year: 2021 },
+      ladders: ["480p"] as ("480p")[],
+    };
+    const first = await runIngest(deps, request);
+    const second = await runIngest(deps, request);
+
+    // Тот же источник → та же media-строка, файлы заменены.
+    expect(second.itemId).toBe(first.itemId);
+    expect(second.mediaId).toBe(first.mediaId);
+
+    const mediaRows = await db.select().from(media).where(eq(media.itemId, first.itemId));
+    expect(mediaRows).toHaveLength(1);
+
+    const files = await db
+      .select()
+      .from(mediaFiles)
+      .where(eq(mediaFiles.mediaId, first.mediaId));
+    expect(files).toHaveLength(1);
+    expect(files[0]!.fileKey).toBe(`${second.baseKey}/480p/index.m3u8`);
+
+    // Аудио/субтитры тоже не дублируются.
+    const audios = await db
+      .select()
+      .from(audioTracks)
+      .where(eq(audioTracks.mediaId, first.mediaId));
+    expect(audios).toHaveLength(1);
   });
 
   it("дубляжи укладываются в мастер как отдельные аудио-рендitions", async () => {

@@ -2,10 +2,11 @@
  * Публикация ингеста: фолбэк-постер (сгенерированный кадр) попадает в карточку
  * тайтла, но не перебивает уже имеющиеся постеры (например из обогащения).
  */
-import { describe, expect, it } from "vitest";
+
 import { eq } from "drizzle-orm";
-import { createTestDb } from "./helpers";
+import { describe, expect, it } from "vitest";
 import { items, publishIngest } from "../src/index";
+import { createTestDb } from "./helpers";
 
 const POSTER = "http://localhost:9000/zal-media/ingest/1-film/poster.jpg";
 

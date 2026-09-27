@@ -1,7 +1,7 @@
-import { beforeEach, describe, expect, it } from "vitest";
 import { authResponseSchema, meResponseSchema } from "@zal/api-client";
-import { createTestApp } from "./setup";
+import { describe, expect, it } from "vitest";
 import { makeOwnerWithInvite } from "./fixtures";
+import { createTestApp } from "./setup";
 
 describe("auth", () => {
   it("registers with invite, returns tokens, me works", async () => {
@@ -189,5 +189,108 @@ describe("auth", () => {
     const res = await app.inject({ method: "GET", url: "/v1/auth/me" });
     expect(res.statusCode).toBe(401);
     expect(res.json().error.code).toBe("unauthorized");
+  });
+});
+
+describe("invites (owner/admin)", () => {
+  it("owner создаёт инвайт и видит список; member — 403", async () => {
+    const { app, db } = await createTestApp();
+    const { invite } = await makeOwnerWithInvite(db);
+
+    // Логин owner'ом.
+    const login = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      payload: { email: "owner@zal.local", password: "owner-password-1" },
+    });
+    const { tokens } = login.json();
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/v1/invites",
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+      payload: { maxUses: 3, expiresInDays: 7 },
+    });
+    expect(created.statusCode).toBe(201);
+    const body = created.json().invite;
+    expect(body.code).toMatch(/^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{12}$/);
+    expect(body.maxUses).toBe(3);
+    expect(body.expiresAt).toBeTruthy();
+
+    const list = await app.inject({
+      method: "GET",
+      url: "/v1/invites",
+      headers: { authorization: `Bearer ${tokens.accessToken}` },
+    });
+    expect(list.statusCode).toBe(200);
+    const codes = list.json().invites.map((i: { code: string }) => i.code);
+    expect(codes).toContain(body.code);
+    expect(codes).toContain(invite);
+
+    // Зарегистрируем member'а и проверим 403.
+    const reg = await app.inject({
+      method: "POST",
+      url: "/v1/auth/register",
+      payload: {
+        invite,
+        email: "member@zal.local",
+        password: "hunter2hunter2",
+        name: "Member",
+      },
+    });
+    const memberTokens = reg.json().tokens;
+    const denied = await app.inject({
+      method: "POST",
+      url: "/v1/invites",
+      headers: { authorization: `Bearer ${memberTokens.accessToken}` },
+    });
+    expect(denied.statusCode).toBe(403);
+  });
+});
+
+describe("refresh через httpOnly-cookie (веб)", () => {
+  it("логин ставит куку, refresh по ней ротирует и переписывает её", async () => {
+    const { app, db } = await createTestApp();
+    const { invite } = await makeOwnerWithInvite(db);
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      payload: { email: "owner@zal.local", password: "owner-password-1" },
+    });
+    expect(login.statusCode).toBe(200);
+
+    // Кука выдана, httpOnly, узкий path.
+    const setCookie = login.cookies.find((c) => c.name === "zal_rt");
+    expect(setCookie).toBeTruthy();
+    expect(setCookie?.httpOnly).toBe(true);
+    expect(setCookie?.path).toBe("/v1/auth");
+
+    // Ротация по куке, без тела.
+    const refresh = await app.inject({
+      method: "POST",
+      url: "/v1/auth/refresh",
+      cookies: { zal_rt: setCookie!.value },
+    });
+    expect(refresh.statusCode).toBe(200);
+    const refreshed = refresh.cookies.find((c) => c.name === "zal_rt");
+    expect(refreshed?.value).not.toBe(setCookie!.value);
+
+    // Старая кука отозвана: reuse → 401 и все токены погашены.
+    const reuse = await app.inject({
+      method: "POST",
+      url: "/v1/auth/refresh",
+      cookies: { zal_rt: setCookie!.value },
+    });
+    expect(reuse.statusCode).toBe(401);
+
+    // Logout по актуальной куке отзывает её.
+    const logout = await app.inject({
+      method: "POST",
+      url: "/v1/auth/logout",
+      cookies: { zal_rt: refreshed!.value },
+    });
+    expect(logout.statusCode).toBe(200);
+    expect(logout.cookies.find((c) => c.name === "zal_rt")?.value).toBe("");
   });
 });

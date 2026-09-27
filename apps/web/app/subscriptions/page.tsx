@@ -1,12 +1,12 @@
 "use client";
 
+import type { NewEpisodeDto, SubscriptionDto } from "@zal/api-client";
+import Link from "next/link";
 /**
  * Мои подписки: лента новых серий (что вышло и не досмотрено)
  * и список подписанных тайтлов с отпиской.
  */
 import * as React from "react";
-import Link from "next/link";
-import type { NewEpisodeDto, SubscriptionDto } from "@zal/api-client";
 import { useOptionalAuth } from "@/lib/auth";
 import { formatDate, formatDuration } from "@/lib/format";
 
@@ -121,6 +121,7 @@ export default function SubscriptionsPage() {
                 {s.item.year ? <span className="text-muted"> ({s.item.year})</span> : null}
               </Link>
               <button
+        type="button"
                 className="text-sm text-muted transition hover:text-red-400"
                 onClick={() => void unsubscribe(s.itemId)}
                 data-testid="unsub-button"

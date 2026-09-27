@@ -3,6 +3,7 @@ import { createHash, randomBytes } from "node:crypto";
 /** Access живёт 15 минут, refresh — 30 дней с ротацией. */
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60;
 export const REFRESH_TOKEN_TTL_DAYS = 30;
+export const REFRESH_TOKEN_TTL_SECONDS = REFRESH_TOKEN_TTL_DAYS * 24 * 3600;
 
 export interface RefreshTokenIssue {
   raw: string;

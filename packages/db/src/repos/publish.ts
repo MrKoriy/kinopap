@@ -2,22 +2,23 @@
  * Публикация ingest-результата в каталог: item → media → файлы/аудио/субтитры.
  * Вся запись идёт через слой @zal/db, чтобы API и worker делили одну логику.
  */
-import { and, eq } from "drizzle-orm";
+
 import type { AudioDubType, ItemType } from "@zal/api-client";
+import { and, eq } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   audioTracks,
   countries,
+  episodes,
+  genres,
   itemCountries,
   itemGenres,
   items,
   media,
   mediaFiles,
-  genres,
-  seasons,
-  episodes,
-  subtitles,
   type SpriteMeta,
+  seasons,
+  subtitles,
 } from "../schema/index";
 
 export interface PublishItemDraft {
@@ -92,6 +93,8 @@ export interface PublishIngestInput {
     spriteMeta?: SpriteMeta | null;
     partNumber?: number;
     episode?: PublishEpisode | null;
+    /** Ключ источника: тот же ref → обновляем существующую media, не дублируем. */
+    sourceKey?: string | null;
   };
   files: PublishFile[];
   audios: PublishAudio[];
@@ -162,116 +165,158 @@ export async function upsertItem(
   return row!.id;
 }
 
-/** Полная публикация: item (upsert) → media (+сезон/эпизод) → файлы/аудио/субтитры. */
+/** Полная публикация: item (upsert) → media (+сезон/эпизод) → файлы/аудио/субтитры.
+ * Одна транзакция: падение посередине больше не оставляет в каталоге
+ * media без файлов / item без media. Дедуп media по (item, sourceKey):
+ * повторный ingest того же источника обновляет существующую запись —
+ * файлы/аудио/субтитры заменяются, mediaId сохраняется. */
 export async function publishIngest(
   db: Db,
   input: PublishIngestInput,
 ): Promise<PublishResult> {
-  const itemId = await upsertItem(db, input.item);
+  return db.transaction(async (tx) => {
+    const itemId = await upsertItem(tx, input.item);
 
-  let episodeId: number | null = null;
-  if (input.media.episode) {
-    const ep = input.media.episode;
-    const [season] = await db
-      .insert(seasons)
-      .values({ itemId, number: ep.seasonNumber })
-      .onConflictDoNothing({
-        target: [seasons.itemId, seasons.number],
-      })
-      .returning({ id: seasons.id });
-    const seasonId =
-      season?.id ??
-      (
-        await db
-          .select({ id: seasons.id })
-          .from(seasons)
-          .where(and(eq(seasons.itemId, itemId), eq(seasons.number, ep.seasonNumber)))
-          .limit(1)
-      )[0]!.id;
+    let episodeId: number | null = null;
+    if (input.media.episode) {
+      const ep = input.media.episode;
+      const [season] = await tx
+        .insert(seasons)
+        .values({ itemId, number: ep.seasonNumber })
+        .onConflictDoNothing({
+          target: [seasons.itemId, seasons.number],
+        })
+        .returning({ id: seasons.id });
+      const seasonId =
+        season?.id ??
+        (
+          await tx
+            .select({ id: seasons.id })
+            .from(seasons)
+            .where(and(eq(seasons.itemId, itemId), eq(seasons.number, ep.seasonNumber)))
+            .limit(1)
+        )[0]!.id;
 
-    const [episode] = await db
-      .insert(episodes)
-      .values({
-        seasonId,
-        number: ep.episodeNumber,
-        title: ep.title ?? null,
-        runtime: input.media.duration,
-      })
-      .onConflictDoNothing({ target: [episodes.seasonId, episodes.number] })
-      .returning({ id: episodes.id });
-    episodeId =
-      episode?.id ??
-      (
-        await db
-          .select({ id: episodes.id })
-          .from(episodes)
-          .where(and(eq(episodes.seasonId, seasonId), eq(episodes.number, ep.episodeNumber)))
-          .limit(1)
-      )[0]!.id;
-  }
+      const [episode] = await tx
+        .insert(episodes)
+        .values({
+          seasonId,
+          number: ep.episodeNumber,
+          title: ep.title ?? null,
+          runtime: input.media.duration,
+        })
+        .onConflictDoNothing({ target: [episodes.seasonId, episodes.number] })
+        .returning({ id: episodes.id });
+      episodeId =
+        episode?.id ??
+        (
+          await tx
+            .select({ id: episodes.id })
+            .from(episodes)
+            .where(and(eq(episodes.seasonId, seasonId), eq(episodes.number, ep.episodeNumber)))
+            .limit(1)
+        )[0]!.id;
+    }
 
-  const [mediaRow] = await db
-    .insert(media)
-    .values({
-      itemId,
-      episodeId,
-      partNumber: input.media.partNumber ?? 1,
-      title: input.media.title ?? null,
-      thumbnailUrl: input.media.thumbnailUrl ?? null,
-      runtime: input.media.duration,
-      posterKey: input.media.posterKey ?? null,
-      spriteKey: input.media.spriteKey ?? null,
-      spriteMeta: input.media.spriteMeta ?? null,
-    })
-    .returning({ id: media.id });
-  const mediaId = mediaRow!.id;
+    // Дедуп по источнику: обновляем существующую media вместо новой записи.
+    let mediaId: number | null = null;
+    if (input.media.sourceKey) {
+      const existing = await tx
+        .select({ id: media.id })
+        .from(media)
+        .where(
+          and(eq(media.itemId, itemId), eq(media.sourceKey, input.media.sourceKey)),
+        )
+        .limit(1);
+      if (existing[0]) {
+        mediaId = existing[0].id;
+        await tx
+          .update(media)
+          .set({
+            episodeId,
+            partNumber: input.media.partNumber ?? 1,
+            title: input.media.title ?? null,
+            thumbnailUrl: input.media.thumbnailUrl ?? null,
+            runtime: input.media.duration,
+            posterKey: input.media.posterKey ?? null,
+            spriteKey: input.media.spriteKey ?? null,
+            spriteMeta: input.media.spriteMeta ?? null,
+          })
+          .where(eq(media.id, mediaId));
+        // Старые файлы/дорожки/субтитры заменяются новыми (каскад не годится —
+        // media жива). Сироты на диске подчистит GC воркера.
+        await tx.delete(mediaFiles).where(eq(mediaFiles.mediaId, mediaId));
+        await tx.delete(audioTracks).where(eq(audioTracks.mediaId, mediaId));
+        await tx.delete(subtitles).where(eq(subtitles.mediaId, mediaId));
+      }
+    }
 
-  if (input.files.length) {
-    await db.insert(mediaFiles).values(
-      input.files.map((f) => ({
-        mediaId,
-        quality: f.quality,
-        qualityId: f.qualityId,
-        width: f.width,
-        height: f.height,
-        codec: f.codec,
-        bitrate: f.bitrate ?? null,
-        sizeBytes: f.sizeBytes ?? null,
-        fileKey: f.fileKey,
-        hlsKey: f.hlsKey ?? null,
-      })),
-    );
-  }
-  if (input.audios.length) {
-    await db.insert(audioTracks).values(
-      input.audios.map((a) => ({
-        mediaId,
-        trackIndex: a.trackIndex,
-        codec: a.codec,
-        channels: a.channels,
-        lang: a.lang,
-        dubType: a.dubType,
-        authorTitle: a.authorTitle ?? null,
-        authorShortTitle: a.authorShortTitle ?? null,
-        fileKey: a.fileKey ?? null,
-        masterKey: a.masterKey ?? null,
-      })),
-    );
-  }
-  if (input.subtitles.length) {
-    await db.insert(subtitles).values(
-      input.subtitles.map((s) => ({
-        mediaId,
-        lang: s.lang,
-        shiftMs: s.shiftMs ?? 0,
-        embed: s.embed,
-        title: s.title ?? null,
-        fileKey: s.fileKey ?? null,
-      })),
-    );
-  }
+    if (mediaId == null) {
+      const [mediaRow] = await tx
+        .insert(media)
+        .values({
+          itemId,
+          episodeId,
+          partNumber: input.media.partNumber ?? 1,
+          title: input.media.title ?? null,
+          thumbnailUrl: input.media.thumbnailUrl ?? null,
+          runtime: input.media.duration,
+          posterKey: input.media.posterKey ?? null,
+          spriteKey: input.media.spriteKey ?? null,
+          spriteMeta: input.media.spriteMeta ?? null,
+          sourceKey: input.media.sourceKey ?? null,
+        })
+        .returning({ id: media.id });
+      mediaId = mediaRow!.id;
+    }
 
-  return { itemId, mediaId };
+    if (input.files.length) {
+      await tx.insert(mediaFiles).values(
+        input.files.map((f) => ({
+          mediaId,
+          quality: f.quality,
+          qualityId: f.qualityId,
+          width: f.width,
+          height: f.height,
+          codec: f.codec,
+          bitrate: f.bitrate ?? null,
+          sizeBytes: f.sizeBytes ?? null,
+          fileKey: f.fileKey,
+          hlsKey: f.hlsKey ?? null,
+        })),
+      );
+    }
+    if (input.audios.length) {
+      await tx.insert(audioTracks).values(
+        input.audios.map((a) => ({
+          mediaId,
+          trackIndex: a.trackIndex,
+          codec: a.codec,
+          channels: a.channels,
+          lang: a.lang,
+          dubType: a.dubType,
+          authorTitle: a.authorTitle ?? null,
+          authorShortTitle: a.authorShortTitle ?? null,
+          fileKey: a.fileKey ?? null,
+          masterKey: a.masterKey ?? null,
+        })),
+      );
+    }
+    if (input.subtitles.length) {
+      await tx.insert(subtitles).values(
+        input.subtitles.map((s) => ({
+          mediaId,
+          lang: s.lang,
+          shiftMs: s.shiftMs ?? 0,
+          embed: s.embed,
+          title: s.title ?? null,
+          fileKey: s.fileKey ?? null,
+        })),
+      );
+    }
+
+    return { itemId, mediaId };
+  });
 }
 
 export interface Enrichment {

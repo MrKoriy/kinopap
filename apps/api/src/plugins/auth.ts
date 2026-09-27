@@ -1,8 +1,8 @@
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import jwt from "@fastify/jwt";
 import type { UserRole } from "@zal/api-client";
-import { unauthorized } from "../lib/http";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Config } from "../config";
+import { unauthorized } from "../lib/http";
 
 export interface AccessPayload {
   sub: number;

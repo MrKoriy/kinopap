@@ -11,21 +11,21 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
-import { drizzle } from "drizzle-orm/pglite";
-import { migrate } from "drizzle-orm/pglite/migrator";
 import {
   createUser,
+  type Db,
   hashPassword,
   migrationsDir,
   schema,
-  type Db,
 } from "@zal/db";
 import {
   LocalFolderConnector,
   LocalStorage,
-  UrlSourceConnector,
   runIngest,
+  UrlSourceConnector,
 } from "@zal/ingest";
+import { drizzle } from "drizzle-orm/pglite";
+import { migrate } from "drizzle-orm/pglite/migrator";
 import { buildApp } from "../../api/src/app";
 import { loadConfig } from "../../api/src/config";
 
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
       storage,
       connectors: {
         local: new LocalFolderConnector(sourceDir, ffmpeg),
-        url: new UrlSourceConnector(ffmpeg),
+        url: new UrlSourceConnector({ ...ffmpeg, allowPrivateHosts: true }),
       },
       ffmpeg,
     },
@@ -123,15 +123,17 @@ async function main(): Promise<void> {
   const config = loadConfig({
     NODE_ENV: "test",
     DATABASE_URL: "postgresql://e2e",
-    JWT_SECRET: "e2e-secret-0123456789abcdef",
+    JWT_SECRET: "e2e-secret-0123456789abcdef-0123456789",
     MEDIA_BASE_URL: PUBLIC_BASE,
-    CORS_ORIGIN: "*",
+    // Конкретные origin'ы: refresh-cookie требует credentials в CORS
+    // (это же окружение использует мобильный e2e на :3002).
+    CORS_ORIGIN: "http://localhost:3000,http://localhost:3002",
   });
   // ZAL_E2E_LOG=1 включает лог запросов (нужен, когда клиент — не браузер,
   // например симулятор iOS: иначе трафик приложения нигде не видно).
   const app = await buildApp({ db, config, logger: process.env.ZAL_E2E_LOG === "1" });
 
-  app.get("/media/*", async (request, reply) => {
+  app.get("/media/*", { config: { rateLimit: false } }, async (request, reply) => {
     const rel = (request.params as Record<string, string>)["*"] ?? "";
     const abs = path.resolve(mediaRoot, rel);
     console.log(`MEDIA ${request.method} raw=${request.url} rel=${rel}`);

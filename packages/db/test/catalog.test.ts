@@ -1,3 +1,4 @@
+import { decodeCursor, parseCatalogQuery } from "@zal/api-client";
 import { describe, expect, it } from "vitest";
 import {
   getItem,
@@ -7,7 +8,6 @@ import {
   shortcutItems,
   similarItems,
 } from "../src/repos/catalog";
-import { decodeCursor, parseCatalogQuery } from "@zal/api-client";
 import { createTestDb, seedFixtures } from "./helpers";
 
 describe("listItems", () => {

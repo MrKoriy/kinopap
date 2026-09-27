@@ -1,32 +1,20 @@
 "use client";
 
+import type { CommentDto } from "@zal/api-client";
+import { buildCommentTree, type CommentNode as CommentNodeType } from "@zal/shared";
 /**
  * Дерево комментариев: плоский список из API собирается в дерево на клиенте.
  * Страницы — корневые ветки целиком (со всеми ответами), «показать ещё»
  * догружает следующие. Удалённые узлы остаются в ветке.
+ * Сборка дерева — @zal/shared, тот же код на мобиле.
  */
 import * as React from "react";
-import type { CommentDto } from "@zal/api-client";
 import { useOptionalAuth } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
 
-interface TreeNode {
-  comment: CommentDto;
-  children: TreeNode[];
-}
+type TreeNode = CommentNodeType;
 
-export function buildCommentTree(flat: CommentDto[]): TreeNode[] {
-  const byId = new Map<number, TreeNode>();
-  for (const c of flat) byId.set(c.id, { comment: c, children: [] });
-  const roots: TreeNode[] = [];
-  for (const node of byId.values()) {
-    const parent =
-      node.comment.parentId != null ? byId.get(node.comment.parentId) : undefined;
-    if (parent) parent.children.push(node);
-    else roots.push(node);
-  }
-  return roots;
-}
+export { buildCommentTree };
 
 interface BodyFormProps {
   onSubmit: (body: string) => Promise<void>;
@@ -133,6 +121,7 @@ function CommentNode({ node, currentUserId, onReply, onEdit, onDelete }: Comment
         {!comment.deleted && !editing && (
           <div className="mt-2 flex gap-3 text-xs">
             <button
+        type="button"
               className="text-muted transition hover:text-white"
               onClick={() => setReplying((v) => !v)}
               data-testid="reply-button"
@@ -141,6 +130,7 @@ function CommentNode({ node, currentUserId, onReply, onEdit, onDelete }: Comment
             </button>
             {own && (
               <button
+        type="button"
                 className="text-muted transition hover:text-white"
                 onClick={() => setEditing(true)}
                 data-testid="edit-comment"
@@ -150,6 +140,7 @@ function CommentNode({ node, currentUserId, onReply, onEdit, onDelete }: Comment
             )}
             {own && (
               <button
+        type="button"
                 className="text-muted transition hover:text-red-400"
                 onClick={() => void onDelete(comment.id)}
                 data-testid="delete-comment"
@@ -306,6 +297,7 @@ export function Comments({ itemId }: { itemId: number }) {
 
       {nextOffset != null && (
         <button
+        type="button"
           className="mt-4 rounded-full border border-border bg-surface-2 px-4 py-1.5 text-sm text-muted transition hover:text-white"
           onClick={() => void loadMore()}
           data-testid="comments-more"

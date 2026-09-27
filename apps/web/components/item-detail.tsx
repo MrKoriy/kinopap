@@ -1,18 +1,18 @@
 "use client";
 
+import type { ItemDetail } from "@zal/api-client";
+import { Film, Play, X } from "lucide-react";
+import Link from "next/link";
 /**
  * Страница тайтла: инфо, рейтинги, кнопка «Смотреть», сезоны и эпизоды.
  */
 import * as React from "react";
-import Link from "next/link";
-import type { ItemDetail } from "@zal/api-client";
-import { Badge } from "@/components/ui/badge";
-import { buttonVariants } from "@/components/ui/button";
 import { Comments } from "@/components/comments";
 import { ItemActions } from "@/components/item-actions";
+import { PosterImage } from "@/components/poster-image";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { formatDuration } from "@/lib/format";
-
-import { Play, Film, X } from "lucide-react";
 
 export function ItemDetailView({ item }: { item: ItemDetail }) {
   const [activeSeason, setActiveSeason] = React.useState(0);
@@ -20,23 +20,28 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
 
   const firstMovieMedia = item.media?.[0]?.id ?? null;
   const firstEpisodeMedia = item.seasons?.[0]?.episodes.find((e) => e.mediaId)?.mediaId ?? null;
-  const playMediaId = firstMovieMedia ?? firstEpisodeMedia ?? item.media?.[0]?.id ?? item.id ?? 1;
+  const playMediaId = firstMovieMedia ?? firstEpisodeMedia ?? item.id;
 
   const poster = item.posters.big ?? item.posters.medium;
   const rating = item.rating > 0 ? item.rating : item.imdb.rating;
 
   const trailerEmbedUrl = item.trailer?.url
     ? item.trailer.url.replace("watch?v=", "embed/")
-    : `https://www.youtube-nocookie.com/embed?listType=search&list=${encodeURIComponent(item.title + " трейлер русский")}&autoplay=1`;
+    : `https://www.youtube-nocookie.com/embed?listType=search&list=${encodeURIComponent(`${item.title} трейлер русский`)}&autoplay=1`;
 
   return (
     <div>
       {/* Шапка */}
       <div className="relative mb-8 min-h-[380px] overflow-hidden rounded-[var(--radius-card)] bg-surface-2">
-        {poster && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={poster} alt="" className="h-[380px] w-full object-cover object-top" />
-        )}
+        <div className="relative h-[380px] w-full">
+          <PosterImage
+            src={poster}
+            alt={item.title}
+            className="h-full w-full object-cover object-top"
+            sizes="100vw"
+            priority
+          />
+        </div>
         <div className="absolute inset-0 bg-gradient-to-t from-background via-background/60 to-transparent" />
         <div className="absolute bottom-6 left-6 right-6">
           <h1 className="text-3xl font-bold text-white sm:text-4xl" data-testid="item-title">
@@ -152,6 +157,7 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
           <div className="mb-4 flex gap-2">
             {item.seasons.map((s, i) => (
               <button
+        type="button"
                 key={s.id}
                 className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
                   i === activeSeason
@@ -178,12 +184,11 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
                       {ep.number}
                     </span>
                     {ep.thumbnailUrl && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img
+                      <PosterImage
                         src={ep.thumbnailUrl}
                         alt=""
                         className="h-12 w-20 rounded object-cover"
-                        loading="lazy"
+                        sizes="80px"
                       />
                     )}
                     <span className="flex-1 text-sm text-white">{ep.title ?? `Серия ${ep.number}`}</span>

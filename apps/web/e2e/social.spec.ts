@@ -4,7 +4,7 @@
  * страница «Мои подписки». Состояние сбрасывается через API —
  * оба проекта (webkit/chromium) идут по одним и тем же данным.
  */
-import { expect, test, request as pwRequest, type Page } from "@playwright/test";
+import { expect, type Page, request as pwRequest, test } from "@playwright/test";
 
 const E2E_USER = { email: "e2e@zal.dev", password: "e2e-password-123" };
 

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   doublePrecision,
@@ -11,7 +12,6 @@ import {
   uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
 import { genreType, itemType, personRole } from "./enums";
 
 export const genres = pgTable(
@@ -74,6 +74,12 @@ export const items = pgTable(
     index("items_views_idx").on(t.views),
     index("items_created_idx").on(t.createdAt),
     index("items_updated_idx").on(t.updatedAt),
+    // sort=title без b-tree — всегда filesort.
+    index("items_title_idx").on(t.title),
+    // Композиты под shortcuts: фильтр типа + сортировка fresh/hot/popular.
+    index("items_type_year_idx").on(t.type, t.year),
+    index("items_type_views_idx").on(t.type, t.views),
+    index("items_type_rating_idx").on(t.type, t.rating),
     // Поиск по триграммам (pg_trgm) — включается в миграции.
     index("items_title_trgm").using("gin", sql`title gin_trgm_ops`),
     index("items_original_title_trgm").using("gin", sql`original_title gin_trgm_ops`),
@@ -120,10 +126,7 @@ export const itemGenres = pgTable(
       .notNull()
       .references(() => genres.id, { onDelete: "cascade" }),
   },
-  (t) => [
-    primaryKey({ columns: [t.itemId, t.genreId] }),
-    index("item_genres_genre_idx").on(t.genreId),
-  ],
+  (t) => [primaryKey({ columns: [t.itemId, t.genreId] })],
 );
 
 export const itemCountries = pgTable(
@@ -151,7 +154,7 @@ export const people = pgTable(
     photoUrl: text("photo_url"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [
+  (_t) => [
     index("people_name_trgm").using("gin", sql`name gin_trgm_ops`),
   ],
 );

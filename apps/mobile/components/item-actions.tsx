@@ -1,13 +1,13 @@
 "use client";
 
+import type { ItemSocialDto } from "@zal/api-client";
+import { tokens } from "@zal/ui";
 /**
  * Действия на карточке тайтла: голос за/против и подписка на новые серии.
  * Оптимистичный UI — состояние меняется сразу, при ошибке откатывается.
  */
 import * as React from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import type { ItemSocialDto } from "@zal/api-client";
-import { tokens } from "@zal/ui";
 import { useAuth } from "../lib/auth";
 import { useTvFocus } from "./tv-focus";
 
@@ -33,7 +33,7 @@ export function ItemActions({ itemId }: { itemId: number }) {
     return () => {
       cancelled = true;
     };
-  }, [api, itemId, user]);
+  }, [api, itemId]);
 
   /** Голос: клик по активному голосу снимает его. */
   const vote = React.useCallback(

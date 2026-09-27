@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { fetchSearch } from "@/lib/api";
 import { ItemCard } from "@/components/item-card";
+import { fetchSearch } from "@/lib/api";
 
 const FIELDS = [
   { id: "", title: "Везде" },

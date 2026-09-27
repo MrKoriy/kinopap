@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  type CursorPayload,
   decodeCursor,
   encodeCursor,
   makeCursor,
-  type CursorPayload,
 } from "../src/cursor";
 
 describe("cursor codec", () => {

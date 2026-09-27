@@ -1,14 +1,14 @@
-import { describe, expect, it } from "vitest";
 import { sql } from "drizzle-orm";
-import { createTestDb } from "./helpers";
-import * as schema from "../src/schema/index";
+import { describe, expect, it } from "vitest";
+import { hashPassword, verifyPassword } from "../src/password";
 import {
   consumeInvite,
   createInvite,
   createUser,
   findUserByEmail,
 } from "../src/repos/accounts";
-import { hashPassword, verifyPassword } from "../src/password";
+import * as schema from "../src/schema/index";
+import { createTestDb } from "./helpers";
 
 describe("schema + migrations", () => {
   it("applies migrations and enables pg_trgm", async () => {
@@ -116,6 +116,7 @@ describe("schema shape", () => {
       "lists",
       "listEntries",
     ]) {
+      // biome-ignore lint/performance/noDynamicNamespaceImportAccess: тест перебирает таблицы схемы
       expect(schema[name as keyof typeof schema]).toBeDefined();
     }
   });

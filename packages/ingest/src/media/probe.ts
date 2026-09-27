@@ -17,6 +17,30 @@ export interface FfmpegConfig {
   crf?: number;
   /** Длительность HLS-сегмента, сек. */
   hlsTime?: number;
+  /** Таймаут ffprobe, мс (по умолчанию 30с). */
+  probeTimeoutMs?: number;
+  /** Таймаут транскода, мс (по умолчанию 4ч — длинные фильмы кодируются часами). */
+  encodeTimeoutMs?: number;
+  /** Таймаут генерации ассетов (постер/тумбы/спрайт/субтитры), мс. */
+  assetTimeoutMs?: number;
+}
+
+export const DEFAULT_PROBE_TIMEOUT_MS = 30_000;
+export const DEFAULT_ENCODE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
+export const DEFAULT_ASSET_TIMEOUT_MS = 10 * 60 * 1000;
+
+/**
+ * execFile с таймаутом: зависший ffmpeg/ffprobe раньше занимал единственный
+ * слот воркера навсегда (лок продлевается, event loop жив — BullMQ не
+ * детектит stall). timeout у child_process посылает SIGTERM процессу.
+ */
+export function execWithTimeout(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+  maxBuffer = 64 * 1024 * 1024,
+): Promise<{ stdout: string; stderr: string }> {
+  return execFileAsync(file, args, { maxBuffer, timeout: timeoutMs });
 }
 
 function parseFps(rate: string | undefined): number {
@@ -53,10 +77,11 @@ export async function probeMedia(
   cfg: FfmpegConfig = {},
 ): Promise<SourceInfo> {
   const ffprobe = cfg.ffprobePath ?? "ffprobe";
-  const { stdout } = await execFileAsync(
+  const { stdout } = await execWithTimeout(
     ffprobe,
     ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath],
-    { maxBuffer: 32 * 1024 * 1024 },
+    cfg.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
+    32 * 1024 * 1024,
   );
   const raw = JSON.parse(stdout) as {
     format?: { format_name?: string; duration?: string };

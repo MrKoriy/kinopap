@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { ITEM_TYPE_TITLES, type ItemType } from "@zal/api-client";
-import { fetchItems, type CatalogParams } from "@/lib/api";
+import Link from "next/link";
 import { ItemCard } from "@/components/item-card";
+import { type CatalogParams, fetchItems } from "@/lib/api";
 
 export const revalidate = 30;
 

@@ -1,11 +1,9 @@
 "use client";
 
-/** Карточка тайтла: постер, название, рейтинг. */
-import * as React from "react";
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
-import { Link } from "expo-router";
 import type { ItemSummary } from "@zal/api-client";
 import { tokens } from "@zal/ui";
+import { Link } from "expo-router";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { useTvFocus } from "./tv-focus";
 
 export function ItemCard({

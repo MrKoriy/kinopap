@@ -37,7 +37,11 @@ export const refreshTokens = pgTable(
     ip: varchar("ip", { length: 45 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (t) => [index("refresh_tokens_user_idx").on(t.userId)],
+  (t) => [
+    index("refresh_tokens_user_idx").on(t.userId),
+    // Очистка истёкших токенов сканирует по expires_at.
+    index("refresh_tokens_expires_idx").on(t.expiresAt),
+  ],
 );
 
 /** Инвайты закрытого клуба: код, лимит использований, срок. */
@@ -46,10 +50,12 @@ export const invites = pgTable(
   {
     id: serial("id").primaryKey(),
     code: varchar("code", { length: 32 }).notNull().unique(),
-    createdBy: integer("created_by")
-      .notNull()
-      .references(() => users.id),
-    usedBy: integer("used_by").references(() => users.id),
+    // set null: удаление пригласившего/приглашённого не должно ронять
+    // компенсирующий deleteUser по FK (раньше падало гарантированно).
+    createdBy: integer("created_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    usedBy: integer("used_by").references(() => users.id, { onDelete: "set null" }),
     maxUses: integer("max_uses").notNull().default(1),
     uses: integer("uses").notNull().default(0),
     expiresAt: timestamp("expires_at", { withTimezone: true }),

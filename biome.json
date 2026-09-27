@@ -1,0 +1,103 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": {
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!**/.next",
+      "!**/.turbo",
+      "!**/dist",
+      "!**/dist-e2e",
+      "!**/build",
+      "!**/coverage",
+      "!**/test-results",
+      "!**/playwright-report",
+      "!**/.expo",
+      "!**/drizzle/meta",
+      "!apps/web/next-env.d.ts",
+      "!**/public",
+      "!**/*.css"
+    ]
+  },
+  "assist": {
+    "actions": {
+      "source": {
+        "organizeImports": "on"
+      }
+    }
+  },
+  "formatter": {
+    "enabled": false,
+    "indentStyle": "space",
+    "indentWidth": 2
+  },
+  "javascript": {
+    "formatter": { "quoteStyle": "double", "semicolons": "always" }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "noNonNullAssertion": "off",
+        "useNamingConvention": "off"
+      },
+      "suspicious": {
+        "noExplicitAny": "off",
+        "noArrayIndexKey": "off",
+        "noConsole": "off"
+      },
+      "complexity": {
+        "useArrowFunction": "off"
+      },
+      "correctness": {
+        "noUnusedVariables": "warn",
+        "noUnusedImports": "warn",
+        "useExhaustiveDependencies": "warn"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": ["**/*.cjs"],
+      "linter": {
+        "rules": {
+          "style": { "noCommonJs": "off" },
+          "suspicious": { "noUndeclaredEnvVars": "off" }
+        }
+      }
+    },
+    {
+      "includes": ["apps/web/components/player/**"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noSvgWithoutTitle": "off",
+            "noStaticElementInteractions": "off",
+            "useKeyWithClickEvents": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/web/components/player/player.tsx"],
+      "linter": {
+        "rules": {
+          "a11y": {
+            "noStaticElementInteractions": "off",
+            "useMediaCaption": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["apps/web/components/poster-image.tsx"],
+      "linter": {
+        "rules": {
+          "performance": { "noImgElement": "off" }
+        }
+      }
+    }
+  ]
+}

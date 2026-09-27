@@ -110,7 +110,7 @@ export class StreamResolver {
             });
           }
         }
-      } catch (err) {
+      } catch {
         // Fallback to torrent search
       }
     }
@@ -124,6 +124,10 @@ export class StreamResolver {
       const s = String(query.seasonNumber).padStart(2, "0");
       const e = String(query.episodeNumber).padStart(2, "0");
       searchQuery += ` s${s}e${e}`;
+    } else if (query.year) {
+      // Год в запросе сужает выдачу rutor'а и убирает лишний третий
+      // раунд поиска «title + год» — минус до 4с латентности резолва.
+      searchQuery += ` ${query.year}`;
     }
 
     let releases: RutorRelease[] = [];
@@ -136,14 +140,16 @@ export class StreamResolver {
     // If no releases found, try searching with originalTitle
     if (releases.length === 0 && cleanOriginal) {
       try {
-        releases = await this.rutor.search(cleanOriginal);
+        releases = await this.rutor.search(
+          query.year ? `${cleanOriginal} ${query.year}` : cleanOriginal,
+        );
       } catch {
         // ignore
       }
     }
 
-    // If still no releases and title has year, try title + year
-    if (releases.length === 0 && query.year) {
+    // If still no releases and year not yet used, try title + year
+    if (releases.length === 0 && query.year && !searchQuery.includes(`${query.year}`)) {
       try {
         releases = await this.rutor.search(`${cleanTitle} ${query.year}`);
       } catch {
@@ -170,7 +176,7 @@ export class StreamResolver {
       } else if (gb > 35.0) {
         score -= 200; // Gigantic remuxes buffer very slowly over browser
       }
-      if (/web-dl|webrip|bdrip/i.test(r.title)) {
+      if (/web-dl|webrip/i.test(r.title)) {
         score += 150;
       }
       return { rel: r, score };
@@ -185,9 +191,18 @@ export class StreamResolver {
 
     let audioIndex = audios.length + 1;
 
+    // Warm-up лучшего релиза: добавляем торрент в TorrServer заранее и
+    // выбираем крупнейший видеофайл. Прогрев стартует с открытием
+    // watch-страницы — к нажатию «play» пиры уже подключены, а index
+    // указывает на фильм, а не на sample/jacket в multi-file релизах.
+    const warmed = await this.warmBestRelease(viableReleases[0] ?? null);
+
     for (const rel of viableReleases) {
       // Generate TorrServer stream link for the magnet
-      const streamUrl = this.torrServer.getStreamUrlForMagnet(rel.magnet, 1);
+      const streamUrl =
+        warmed && warmed.magnet === rel.magnet
+          ? warmed.url
+          : this.torrServer.getStreamUrlForMagnet(rel.magnet, 1);
       const is4k = rel.quality.includes("4K") || rel.quality.includes("2160");
       const is1080 = rel.quality.includes("1080");
 
@@ -215,7 +230,7 @@ export class StreamResolver {
           type: "dub",
           author: {
             title: `${rel.dub} (${rel.quality})`,
-            shortTitle: rel.dub.split(",")[0],
+            shortTitle: rel.dub.split(",")[0] ?? rel.dub,
           },
           url: null,
           masterUrl: null,
@@ -250,5 +265,37 @@ export class StreamResolver {
       sprites: null,
       intro,
     };
+  }
+
+  /**
+   * Добавляет релиз в TorrServer (idempotent) и возвращает прямую ссылку
+   * на крупнейший видеофайл торрента. null — TorrServer недоступен или
+   * метаданные не подтянулись: вызывающий код откатывается на magnet-URL.
+   */
+  private async warmBestRelease(
+    rel: RutorRelease | null,
+  ): Promise<{ magnet: string; url: string } | null> {
+    if (!rel) return null;
+    try {
+      const added = await this.torrServer.addTorrent(rel.magnet, rel.title);
+      let torrent =
+        added.file_stats && added.file_stats.length > 0
+          ? added
+          : await this.torrServer.getTorrent(added.hash);
+      if (!torrent?.file_stats || torrent.file_stats.length === 0) {
+        // Метаданные качаются через DHT — даём полторы секунды и пробуем снова.
+        await new Promise((r) => setTimeout(r, 1500));
+        torrent = await this.torrServer.getTorrent(added.hash);
+      }
+      const best = torrent ? this.torrServer.findBestVideoFile(torrent.file_stats) : null;
+      const index = best ? best.id : 1;
+      const filename = best?.path.split(/[\\/]/).pop();
+      return {
+        magnet: rel.magnet,
+        url: this.torrServer.getStreamUrl(added.hash, index, filename),
+      };
+    } catch {
+      return null;
+    }
   }
 }

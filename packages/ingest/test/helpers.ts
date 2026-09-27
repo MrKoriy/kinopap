@@ -9,9 +9,9 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
+import { migrationsDir, schema } from "@zal/db";
 import { drizzle, type PgliteDatabase } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
-import { migrationsDir, schema } from "@zal/db";
 
 const execFileAsync = promisify(execFile);
 

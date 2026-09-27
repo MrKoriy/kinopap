@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { userRoleSchema, type UserRole } from "./common";
+import { type UserRole, userRoleSchema } from "./common";
 
 export const registerSchema = z.object({
   invite: z.string().trim().min(6).max(32),

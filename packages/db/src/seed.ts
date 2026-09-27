@@ -3,7 +3,6 @@
  * Контент (items) не сидируется — он приходит через ingest (фаза 2).
  */
 import type { Db } from "./db";
-import { countries, genres, invites } from "./schema/index";
 import {
   createInvite,
   createProfile,
@@ -12,6 +11,7 @@ import {
   type InviteRow,
   type UserRow,
 } from "./repos/accounts";
+import { countries, genres, invites } from "./schema/index";
 
 const GENRES: { type: "movie" | "music" | "docu" | "tvshow"; title: string }[] = [
   { type: "movie", title: "Комедия" },
@@ -26,6 +26,14 @@ const GENRES: { type: "movie" | "music" | "docu" | "tvshow"; title: string }[] =
   { type: "movie", title: "Мультфильм" },
   { type: "movie", title: "Документальный" },
   { type: "movie", title: "Катастрофа" },
+  { type: "movie", title: "Криминал" },
+  { type: "movie", title: "Фэнтези" },
+  { type: "movie", title: "Аниме" },
+  { type: "movie", title: "Мюзикл" },
+  { type: "movie", title: "Семейный" },
+  { type: "movie", title: "Военный" },
+  { type: "movie", title: "Исторический" },
+  { type: "movie", title: "Вестерн" },
   { type: "music", title: "Рок" },
   { type: "music", title: "Поп" },
   { type: "music", title: "Классика" },

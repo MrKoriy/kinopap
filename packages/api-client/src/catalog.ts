@@ -1,11 +1,11 @@
 import { z } from "zod";
 import {
-  audioDubTypeSchema,
-  genreTypeSchema,
-  itemTypeSchema,
   type AudioDubType,
+  audioDubTypeSchema,
   type GenreType,
+  genreTypeSchema,
   type ItemType,
+  itemTypeSchema,
 } from "./common";
 
 /* ---------- Сортировка ---------- */
@@ -331,4 +331,4 @@ export const countriesResponseSchema = z.object({
   countries: z.array(countrySchema),
 });
 
-export type { ItemType, GenreType, AudioDubType };
+export type { AudioDubType, GenreType, ItemType };

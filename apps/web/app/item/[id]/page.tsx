@@ -1,9 +1,9 @@
-import { Suspense } from "react";
 import { notFound } from "next/navigation";
-import { fetchItem, fetchSimilar } from "@/lib/api";
+import { Suspense } from "react";
 import { ItemDetailView } from "@/components/item-detail";
 import { ItemRail } from "@/components/item-rail";
 import { RailSkeleton } from "@/components/skeletons";
+import { fetchItem, fetchSimilar } from "@/lib/api";
 
 export const revalidate = 30;
 

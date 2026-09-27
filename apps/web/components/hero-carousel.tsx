@@ -1,10 +1,11 @@
 "use client";
 
+import type { ItemSummary } from "@zal/api-client";
+import { AnimatePresence, motion } from "motion/react";
+import Link from "next/link";
 /** Hero-карусель: крупные тайтлы с авто-ротацией и переходом к просмотру. */
 import * as React from "react";
-import Link from "next/link";
-import { AnimatePresence, motion } from "motion/react";
-import type { ItemSummary } from "@zal/api-client";
+import { PosterImage } from "@/components/poster-image";
 
 const ROTATE_MS = 6000;
 
@@ -38,10 +39,13 @@ export function HeroCarousel({ items }: { items: ItemSummary[] }) {
           transition={{ duration: 0.8, ease: "easeOut" }}
           className="absolute inset-0"
         >
-          {backdrop && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={backdrop} alt="" className="h-full w-full object-cover" />
-          )}
+          <PosterImage
+            src={backdrop}
+            alt={item.title}
+            className="h-full w-full object-cover"
+            sizes="100vw"
+            priority
+          />
           <div className="absolute inset-0 bg-gradient-to-r from-black via-black/70 to-transparent" />
         </motion.div>
       </AnimatePresence>
@@ -81,6 +85,7 @@ export function HeroCarousel({ items }: { items: ItemSummary[] }) {
           {items.map((it, i) => (
             <button
               key={it.id}
+              type="button"
               aria-label={`Слайд ${i + 1}`}
               onClick={() => setIndex(i)}
               className={`h-1.5 rounded-full transition-all ${

@@ -1,7 +1,6 @@
-import * as React from "react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { CommentDto, ItemSocialDto, SubscriptionDto } from "@zal/api-client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // useOptionalAuth подменяем: компоненты социалки ходят в API через него.
 const mocks = vi.hoisted(() => ({
@@ -20,9 +19,9 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-import { Comments, buildCommentTree } from "@/components/comments";
-import { ItemActions } from "@/components/item-actions";
+import { buildCommentTree, Comments } from "@/components/comments";
 import { Header } from "@/components/header";
+import { ItemActions } from "@/components/item-actions";
 
 afterEach(cleanup);
 beforeEach(() => {

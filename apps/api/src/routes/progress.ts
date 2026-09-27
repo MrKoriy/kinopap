@@ -2,19 +2,20 @@
  * Прогресс просмотра: резюме с любого устройства, лента «продолжить».
  * Профиль — дефолтный (переключение профилей придёт в фазе 4).
  */
-import type { FastifyInstance } from "fastify";
-import { eq } from "drizzle-orm";
-import { z } from "zod";
-import { progressPutSchema, type ProgressDto } from "@zal/api-client";
+
+import { type ProgressDto, progressPutSchema } from "@zal/api-client";
 import {
+  type Db,
   getDefaultProfile,
   getProgress,
   listProgress,
   media,
-  upsertProgress,
-  type Db,
   type ProgressRow,
+  upsertProgress,
 } from "@zal/db";
+import { eq } from "drizzle-orm";
+import type { FastifyInstance } from "fastify";
+import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
 

@@ -2,8 +2,12 @@ import type { Db } from "@zal/db";
 import {
   audioTracks,
   countries,
+  createInvite,
+  createUser,
   episodes,
+  findUserByEmail,
   genres,
+  hashPassword,
   itemCountries,
   itemGenres,
   itemPeople,
@@ -13,10 +17,6 @@ import {
   people,
   seasons,
   subtitles,
-  createInvite,
-  createUser,
-  findUserByEmail,
-  hashPassword,
 } from "@zal/db";
 
 export interface ApiFixtureIds {

@@ -1,5 +1,5 @@
 /** Тесты социальных роутов: подписки, комментарии, голосование. */
-import { describe, expect, it } from "vitest";
+
 import {
   commentListResponseSchema,
   commentResponseSchema,
@@ -9,8 +9,9 @@ import {
   subscriptionResponseSchema,
   voteResponseSchema,
 } from "@zal/api-client";
-import { createTestApp } from "./setup";
+import { describe, expect, it } from "vitest";
 import { makeFixtures, makeOwnerWithInvite } from "./fixtures";
+import { createTestApp } from "./setup";
 
 type App = Awaited<ReturnType<typeof createTestApp>>;
 

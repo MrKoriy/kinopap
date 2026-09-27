@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.34.5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint (biome)
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Unit tests (PGlite, без Docker)
+        run: pnpm test
+
+      - name: ffmpeg для e2e-харнесса
+        run: |
+          which ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
+          ffmpeg -version | head -1
+
+      - name: Playwright browsers
+        run: pnpm --filter @zal/web exec playwright install --with-deps chromium
+
+      - name: Build web (e2e-инлайн API URL)
+        run: pnpm --filter @zal/web build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3001
+
+      - name: Web e2e (chromium, реальный ffmpeg-ингест)
+        run: pnpm --filter @zal/web exec playwright test --project=chromium
+
+      - name: Mobile e2e (expo web, chromium)
+        run: pnpm --filter @zal/mobile exec playwright test --project=chromium
+
+      - name: Артефакты упавших прогонов
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/web/test-results
+            apps/mobile/test-results
+          retention-days: 7

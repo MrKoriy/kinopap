@@ -11,10 +11,13 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write --unsafe .",
     "db:generate": "pnpm --filter @zal/db db:generate",
     "db:setup": "pnpm --filter @zal/db db:setup"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
     "turbo": "^2.11.4",
     "typescript": "^5.9.0"
   }

@@ -1,5 +1,8 @@
 "use client";
 
+import type { NewEpisodeDto, SubscriptionDto } from "@zal/api-client";
+import { tokens } from "@zal/ui";
+import { type Href, Link } from "expo-router";
 /** Мои подписки: лента нового (серии + части фильмов) и список тайтлов. */
 import * as React from "react";
 import {
@@ -10,9 +13,6 @@ import {
   Text,
   View,
 } from "react-native";
-import { Link, type Href } from "expo-router";
-import type { NewEpisodeDto, SubscriptionDto } from "@zal/api-client";
-import { tokens } from "@zal/ui";
 import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";
 import { feedLabel, feedTitle } from "../lib/feed";

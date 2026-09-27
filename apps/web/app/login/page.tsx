@@ -1,10 +1,10 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 /** Вход и регистрация по инвайту. */
 import * as React from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -91,6 +91,7 @@ export default function LoginPage() {
       </form>
 
       <button
+        type="button"
         className="mt-6 text-sm text-muted transition hover:text-white"
         onClick={() => setMode(mode === "login" ? "register" : "login")}
         data-testid="auth-mode-toggle"

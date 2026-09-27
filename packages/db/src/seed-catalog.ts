@@ -1,6 +1,6 @@
-import { createPool, createDb } from "./db";
-import { items, media, itemGenres, genres } from "./schema/index";
 import { eq } from "drizzle-orm";
+import { createDb, createPool } from "./db";
+import { genres, itemGenres, items, media } from "./schema/index";
 
 interface MovieSeed {
   title: string;
@@ -12,6 +12,80 @@ interface MovieSeed {
   views: number;
   poster: string;
   genre: string;
+}
+
+/** Живые метаданные из TMDb: постеры не гниют, описания и рейтинги точные. */
+interface TmdbMeta {
+  title: string;
+  originalTitle: string | null;
+  year: number | null;
+  plot: string | null;
+  rating: number;
+  runtimeSeconds: number | null;
+  posterSmall: string | null;
+  posterMedium: string | null;
+  posterBig: string | null;
+}
+
+const TMDB_KEY = process.env.TMDB_API_KEY ?? null;
+
+async function tmdbMeta(seed: MovieSeed): Promise<TmdbMeta | null> {
+  if (!TMDB_KEY) return null;
+  const url = new URL(
+    `https://api.themoviedb.org/3/search/${seed.type === "serial" ? "tv" : "movie"}`,
+  );
+  url.searchParams.set("api_key", TMDB_KEY);
+  url.searchParams.set("language", "ru-RU");
+  // Оригинальное название ищется точнее локализованного.
+  url.searchParams.set("query", seed.originalTitle || seed.title);
+  if (seed.type !== "serial") {
+    url.searchParams.set("year", String(seed.year));
+  }
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { results?: Array<Record<string, unknown>> };
+    const results = data.results ?? [];
+    const withYear =
+      seed.type === "serial"
+        ? results.find((r) => {
+            const d = String(r.first_air_date ?? "");
+            return d.slice(0, 4) === String(seed.year);
+          })
+        : undefined;
+    const hit = withYear ?? results[0];
+    if (!hit) return null;
+
+    const date = String(hit.release_date ?? hit.first_air_date ?? "");
+    const year = date.length >= 4 ? parseInt(date.slice(0, 4), 10) : null;
+    const runtimeRaw =
+      seed.type === "movie"
+        ? hit.runtime
+        : Array.isArray(hit.episode_run_time)
+          ? hit.episode_run_time[0]
+          : null;
+    const posterPath = hit.poster_path ? String(hit.poster_path) : null;
+
+    return {
+      title: seed.title,
+      originalTitle: hit.original_title ?? hit.original_name
+        ? String(hit.original_title ?? hit.original_name)
+        : null,
+      year: year && year > 1900 ? year : seed.year,
+      plot: hit.overview ? String(hit.overview) : seed.plot,
+      rating:
+        typeof hit.vote_average === "number" && hit.vote_average > 0
+          ? Math.round(hit.vote_average * 10) / 10
+          : seed.rating,
+      runtimeSeconds:
+        typeof runtimeRaw === "number" && runtimeRaw > 0 ? runtimeRaw * 60 : null,
+      posterSmall: posterPath ? `https://image.tmdb.org/t/p/w185${posterPath}` : seed.poster,
+      posterMedium: posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : seed.poster,
+      posterBig: posterPath ? `https://image.tmdb.org/t/p/original${posterPath}` : seed.poster,
+    };
+  } catch {
+    return null;
+  }
 }
 
 const TOP_TITLES: MovieSeed[] = [
@@ -546,60 +620,103 @@ export async function seedCatalog() {
   const pool = createPool(databaseUrl);
   const customDb = createDb(pool);
   console.log("Seeding extensive catalog into", databaseUrl);
-  
+  if (!TMDB_KEY) {
+    console.warn("TMDB_API_KEY не задан: постеры/описания берутся из сид-констант");
+  }
+
   // Ensure genres exist
   const genreList = await customDb.select().from(genres);
   const genreMap = new Map(genreList.map((g) => [g.title, g.id]));
 
+  let enriched = 0;
   for (const item of TOP_TITLES) {
+    const meta = await tmdbMeta(item);
+    if (meta) enriched++;
+
+    const title = item.title;
+    const year = meta?.year ?? item.year;
+    const plot = meta?.plot ?? item.plot;
+    const rating = meta?.rating ?? item.rating;
+    const posterSmall = meta?.posterSmall ?? item.poster;
+    const posterMedium = meta?.posterMedium ?? item.poster;
+    const posterBig = meta?.posterBig ?? item.poster;
+    const originalTitle = meta?.originalTitle ?? item.originalTitle;
+    const runtime = meta?.runtimeSeconds ?? 7200;
+
     const existing = await customDb
       .select({ id: items.id })
       .from(items)
-      .where(eq(items.title, item.title))
+      .where(eq(items.title, title))
       .limit(1);
 
     let itemId = existing[0]?.id;
 
-    if (!itemId) {
-      const [inserted] = await customDb
-        .insert(items)
-        .values({
-          type: item.type,
-          title: item.title,
-          originalTitle: item.originalTitle,
-          year: item.year,
-          plot: item.plot,
-          rating: item.rating,
-          views: item.views,
-          posterSmall: item.poster,
-          posterMedium: item.poster,
-          posterBig: item.poster,
-          quality: 2160,
+    if (itemId) {
+      // Обновляем метаданные существующих: битые хардкод-постеры сида
+      // (около трети URL 404-ят) замещаются живыми TMDb-данными.
+      await customDb
+        .update(items)
+        .set({
+          originalTitle,
+          year,
+          plot,
+          rating,
+          posterSmall,
+          posterMedium,
+          posterBig,
+          runtimeAvg: runtime,
+          updatedAt: new Date(),
         })
-        .returning({ id: items.id });
-      itemId = inserted.id;
-
-      // Link genre
-      const gid = genreMap.get(item.genre);
-      if (gid) {
-        await customDb
-          .insert(itemGenres)
-          .values({ itemId, genreId: gid })
-          .onConflictDoNothing();
-      }
-
-      // Create media row
-      await customDb.insert(media).values({
-        itemId,
-        title: item.title,
-        runtime: 7200,
-      });
-
-      console.log(`+ Seeded: ${item.title} (${item.year})`);
+        .where(eq(items.id, itemId));
+      await customDb
+        .update(media)
+        .set({ runtime })
+        .where(eq(media.itemId, itemId));
+      continue;
     }
+
+    const [inserted] = await customDb
+      .insert(items)
+      .values({
+        type: item.type,
+        title,
+        originalTitle,
+        year,
+        plot,
+        rating,
+        views: item.views,
+        posterSmall,
+        posterMedium,
+        posterBig,
+        quality: 2160,
+        runtimeAvg: runtime,
+      })
+      .returning({ id: items.id });
+    itemId = inserted.id;
+
+    // Link genre
+    const gid = genreMap.get(item.genre);
+    if (gid) {
+      await customDb
+        .insert(itemGenres)
+        .values({ itemId, genreId: gid })
+        .onConflictDoNothing();
+    }
+
+    // Create media row
+    await customDb.insert(media).values({
+      itemId,
+      title,
+      runtime,
+    });
+
+    console.log(`+ Seeded: ${title} (${year})`);
   }
 
-  console.log("Extensive catalog seeded successfully.");
+  console.log(
+    `Extensive catalog seeded successfully. TMDb enrichment: ${enriched}/${TOP_TITLES.length}.`,
+  );
+  await pool.end();
 }
 
 // Allow direct CLI execution

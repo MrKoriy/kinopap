@@ -1,12 +1,12 @@
 "use client";
 
+import type { ItemSocialDto } from "@zal/api-client";
 /**
  * Действия на карточке тайтла: голос за/против, подписка на новые серии,
  * счётчик комментариев. Оптимистичный UI — состояние меняется сразу,
  * при ошибке откатывается.
  */
 import * as React from "react";
-import type { ItemSocialDto } from "@zal/api-client";
 import { useOptionalAuth } from "@/lib/auth";
 
 export function ItemActions({ itemId }: { itemId: number }) {
@@ -32,7 +32,7 @@ export function ItemActions({ itemId }: { itemId: number }) {
     return () => {
       cancelled = true;
     };
-  }, [api, itemId, user]);
+  }, [api, itemId]);
 
   /** Голос: клик по активному голосу снимает его. Оптимистично + откат. */
   const vote = React.useCallback(
@@ -103,6 +103,7 @@ export function ItemActions({ itemId }: { itemId: number }) {
     <div className="flex flex-wrap items-center gap-3" data-testid="item-actions">
       <div className="flex items-center gap-1 rounded-full border border-border bg-surface-2 px-2 py-1">
         <button
+        type="button"
           className={`rounded-full px-2 py-0.5 text-sm transition ${
             myVote === true ? "bg-accent text-white" : "text-muted hover:text-white"
           }`}
@@ -116,6 +117,7 @@ export function ItemActions({ itemId }: { itemId: number }) {
           {social?.vote.votes.positive ?? 0}
         </span>
         <button
+        type="button"
           className={`rounded-full px-2 py-0.5 text-sm transition ${
             myVote === false ? "bg-red-500 text-white" : "text-muted hover:text-white"
           }`}
@@ -131,6 +133,7 @@ export function ItemActions({ itemId }: { itemId: number }) {
       </div>
 
       <button
+        type="button"
         className={`rounded-full px-4 py-1.5 text-sm font-semibold transition ${
           subscribed
             ? "border border-accent text-accent hover:border-red-400 hover:text-red-400"

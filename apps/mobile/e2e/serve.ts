@@ -2,8 +2,9 @@
  * Раздача expo web-экспорта (dist-e2e) для e2e: обычные файлы + SPA-фолбэк
  * на index.html, чтобы клиентский роутер сам разобрал глубокие ссылки.
  */
-import { createServer } from "node:http";
+
 import { createReadStream, existsSync, mkdirSync, statSync } from "node:fs";
+import { createServer } from "node:http";
 import path from "node:path";
 
 const root = path.resolve(import.meta.dirname, "..", "dist-e2e");

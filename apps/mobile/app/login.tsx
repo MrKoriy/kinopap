@@ -1,5 +1,7 @@
 "use client";
 
+import { tokens } from "@zal/ui";
+import { useRouter } from "expo-router";
 /** Вход по email+паролю; регистрация — по инвайт-коду закрытого клуба. */
 import * as React from "react";
 import {
@@ -10,8 +12,6 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { useRouter } from "expo-router";
-import { tokens } from "@zal/ui";
 import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";
 
@@ -35,7 +35,10 @@ export default function LoginScreen() {
     try {
       if (mode === "login") await login(email.trim(), password);
       else await register({ invite: invite.trim(), email: email.trim(), password, name: name.trim() });
-      router.back();
+      // replace, а не back: если /login — точка входа (deep link), back
+      // выкидывал из приложения вместо перехода на главную.
+      if (router.canGoBack()) router.back();
+      else router.replace("/");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Не вышло. Попробуйте снова.");
     } finally {

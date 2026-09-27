@@ -1,12 +1,12 @@
+import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   LocalFolderConnector,
-  UrlSourceConnector,
   type MetadataEnricher,
+  UrlSourceConnector,
 } from "../src";
 import { makeTestMedia, makeTmpDir, TEST_FFMPEG, type TestMedia } from "./helpers";
 
@@ -77,7 +77,7 @@ describe("UrlSourceConnector", () => {
   });
 
   it("search у ссылки пустой, probe работает по URL", async () => {
-    const connector = new UrlSourceConnector(TEST_FFMPEG);
+    const connector = new UrlSourceConnector({ ...TEST_FFMPEG, allowPrivateHosts: true });
     expect(await connector.search({})).toEqual([]);
 
     const info = await connector.probe(`${server.url}/sample.mp4`);
@@ -85,7 +85,7 @@ describe("UrlSourceConnector", () => {
   });
 
   it("pull скачивает файл и субтитры", async () => {
-    const connector = new UrlSourceConnector(TEST_FFMPEG);
+    const connector = new UrlSourceConnector({ ...TEST_FFMPEG, allowPrivateHosts: true });
     const workDir = await makeTmpDir("zal-url-");
     const pulled = await connector.pull(`${server.url}/sample.mp4`, {
       workDir,
@@ -102,6 +102,31 @@ describe("UrlSourceConnector", () => {
     await expect(
       connector.pull("not-a-url", { workDir: await makeTmpDir("zal-url-") }),
     ).rejects.toThrow(/not a valid URL/);
+  });
+
+  it("SSRF-guard: приватные адреса и чужие схемы запрещены по умолчанию", async () => {
+    const connector = new UrlSourceConnector(TEST_FFMPEG);
+    await expect(
+      connector.pull(`${server.url}/sample.mp4`, { workDir: await makeTmpDir("zal-url-") }),
+    ).rejects.toThrow(/private address|suspicious port/);
+    await expect(
+      connector.pull(`file:///etc/passwd`, { workDir: await makeTmpDir("zal-url-") }),
+    ).rejects.toThrow(/only http\(s\) allowed/);
+  });
+
+  it("лимит размера скачивания соблюдается", async () => {
+    const connector = new UrlSourceConnector({
+      ...TEST_FFMPEG,
+      allowPrivateHosts: true,
+      maxBytes: 1024,
+    });
+    const workDir = await makeTmpDir("zal-url-");
+    await expect(
+      connector.pull(`${server.url}/sample.mp4`, { workDir }),
+    ).rejects.toThrow(/size limit/);
+    // Недокачанный файл не остаётся на диске.
+    const { readdir } = await import("node:fs/promises");
+    expect((await readdir(workDir)).filter((f) => f.endsWith(".mp4"))).toEqual([]);
   });
 });
 

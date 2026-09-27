@@ -38,5 +38,5 @@ body {
 
 /* Скрываем дефолтные контролы видео — у нас свои. */
 video::-webkit-media-controls {
-  display: none !important;
+  display: none;
 }

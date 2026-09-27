@@ -1,12 +1,12 @@
 /** Статистика просмотров: первый прогресс по media увеличивает items.views. */
 import { describe, expect, it } from "vitest";
-import { createTestDb, seedFixtures, type TestDb } from "./helpers";
 import {
   createUser,
   getDefaultProfile,
   hashPassword,
   upsertProgress,
 } from "../src/index";
+import { createTestDb, seedFixtures, type TestDb } from "./helpers";
 
 async function makeProfile(db: TestDb, email: string) {
   const user = await createUser(db, {

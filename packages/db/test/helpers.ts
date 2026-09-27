@@ -4,11 +4,11 @@
  */
 import { PGlite } from "@electric-sql/pglite";
 import { pg_trgm } from "@electric-sql/pglite/contrib/pg_trgm";
+import type { PgliteDatabase } from "drizzle-orm/pglite";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
-import type { PgliteDatabase } from "drizzle-orm/pglite";
-import * as schema from "../src/schema/index";
 import { migrationsDir } from "../src/db";
+import * as schema from "../src/schema/index";
 
 export type TestDb = PgliteDatabase<typeof schema>;
 

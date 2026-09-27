@@ -19,8 +19,9 @@ export default defineConfig({
   webServer: [
     {
       // Сироты от прошлых прогонов держат порты — гасим перед стартом.
+      // Лог сервера — в файл: видно 429/ошибки, когда тесты зелёные.
       command:
-        "sh -c 'for p in $(lsof -ti tcp:3001); do kill -9 $p 2>/dev/null; done; exec npx tsx e2e/server.ts'",
+        "sh -c 'for p in $(lsof -ti tcp:3001); do kill -9 $p 2>/dev/null; done; exec npx tsx e2e/server.ts > /tmp/zal-e2e-server.log 2>&1'",
       url: "http://localhost:3001/healthz",
       reuseExistingServer: false,
       timeout: 180_000,

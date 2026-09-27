@@ -1,53 +1,14 @@
 /**
- * Чистая логика плеера без DOM: парсер WebVTT и математика спрайтов.
- * Вынесено отдельно, чтобы юнит-тесты не тянули React и hls.js.
+ * Чистая логика плеера без DOM: спрайты и интро.
+ * WebVTT-парсер и активные реплики живут в @zal/shared (одинаковы для
+ * веба и мобилы), здесь — только реэкспорт для обратной совместимости.
  */
-
-export interface VttCue {
-  start: number;
-  end: number;
-  text: string;
-}
-
-function parseTimestamp(ts: string): number {
-  // "HH:MM:SS.mmm" | "MM:SS.mmm"
-  const parts = ts.trim().split(":");
-  const secs = Number(parts.pop()?.replace(",", ".") ?? NaN);
-  const mins = Number(parts.pop() ?? 0);
-  const hours = Number(parts.pop() ?? 0);
-  if (!Number.isFinite(secs)) return NaN;
-  return hours * 3600 + mins * 60 + secs;
-}
-
-/** Разбор WebVTT в таймлайн-кью. Теги вида <b> вырезаются. */
-export function parseVtt(content: string): VttCue[] {
-  const cues: VttCue[] = [];
-  const blocks = content.replace(/\r\n/g, "\n").split(/\n\n+/);
-
-  for (const block of blocks) {
-    const lines = block.split("\n").filter((l) => l.trim() !== "");
-    const timingIdx = lines.findIndex((l) => l.includes("-->"));
-    if (timingIdx === -1) continue;
-
-    const [startRaw, endRaw] = lines[timingIdx]!.split("-->");
-    const start = parseTimestamp(startRaw ?? "");
-    const end = parseTimestamp((endRaw ?? "").trim().split(/\s+/)[0] ?? "");
-    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
-
-    const text = lines
-      .slice(timingIdx + 1)
-      .join("\n")
-      .replace(/<[^>]+>/g, "");
-    if (text) cues.push({ start, end, text });
-  }
-  return cues;
-}
-
-/** Кью, активные в момент времени (с учётом сдвига ±мс). */
-export function activeCues(cues: VttCue[], timeSeconds: number, shiftMs = 0): VttCue[] {
-  const t = timeSeconds + shiftMs / 1000;
-  return cues.filter((c) => t >= c.start && t <= c.end);
-}
+export {
+  activeCues,
+  cueAt,
+  parseVtt,
+  type SubtitleCue,
+} from "@zal/shared";
 
 /* ---------- Спрайты скраббинга ---------- */
 
@@ -79,6 +40,26 @@ export function spriteTileFor(timeSeconds: number, meta: SpriteMetaLike): Sprite
     col,
     row,
     backgroundPosition: `-${col * meta.tileWidth}px -${row * meta.tileHeight}px`,
+  };
+}
+
+/**
+ * Тайл спрайта с масштабированием под дисплейный размер превью.
+ * Спрайт — сетка tileWidth×tileHeight; превью-бокс рисуется в
+ * displayW×displayH. background-size и позиция обязаны масштабироваться
+ * одинаково, иначе превью показывает соседний тайл/сдвиг.
+ */
+export function spriteTileScaledFor(
+  timeSeconds: number,
+  meta: SpriteMetaLike,
+  displayWidth: number,
+  displayHeight: number,
+): SpriteTile & { backgroundSize: string } {
+  const tile = spriteTileFor(timeSeconds, meta);
+  return {
+    ...tile,
+    backgroundPosition: `-${tile.col * displayWidth}px -${tile.row * displayHeight}px`,
+    backgroundSize: `${Math.round(meta.columns * displayWidth)}px ${Math.round(meta.rows * displayHeight)}px`,
   };
 }
 

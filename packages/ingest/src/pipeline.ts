@@ -2,15 +2,17 @@
  * Пайплайн ingest: pull → ffprobe → ffmpeg (HLS-лестница, тумбы, спрайт,
  * WebVTT) → публикация в каталог через @zal/db → обогащение метаданными.
  */
-import { cp, mkdtemp, mkdir, rm } from "node:fs/promises";
+
+import { createHash } from "node:crypto";
+import { cp, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AudioDubType, IngestRequest } from "@zal/api-client";
 import {
   applyEnrichment,
-  publishIngest,
   type Db,
   type PublishIngestInput,
+  publishIngest,
 } from "@zal/db";
 import {
   convertSubtitlesToVtt,
@@ -19,9 +21,9 @@ import {
   generateSprite,
   generateThumbs,
 } from "./media/assets";
-import { probeMedia, type FfmpegConfig } from "./media/probe";
-import { transcodeToHls, type AudioRenditionInput } from "./media/transcode";
-import { slugify, type MediaStorage } from "./storage";
+import { type FfmpegConfig, probeMedia } from "./media/probe";
+import { type AudioRenditionInput, transcodeToHls } from "./media/transcode";
+import { type MediaStorage, slugify } from "./storage";
 import type { MetadataEnricher, SourceAudioInfo, SourceConnector } from "./types";
 
 export interface IngestPipelineDeps {
@@ -62,6 +64,29 @@ function langFromFilename(p: string): string {
   return m?.[1]?.toLowerCase() ?? "und";
 }
 
+/** Текстовые субтитры: ffmpeg умеет конвертировать в WebVTT только их.
+ * Растровые (PGS/DVB/VobSub) раньше валили весь ingest. */
+const TEXT_SUBTITLE_CODECS = new Set([
+  "subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text", "sami",
+  "microdvd", "subviewer", "subviewer1", "vplayer", "realtext", "stl",
+  "pjs", "jacosub", "mpl2",
+]);
+
+export function isTextSubtitleCodec(codec: string): boolean {
+  return TEXT_SUBTITLE_CODECS.has(codec.toLowerCase());
+}
+
+/** Ключ дедупа media: тот же источник (и тот же эпизод) → та же запись. */
+export function mediaSourceKey(request: IngestRequest): string {
+  const ep = request.episode
+    ? `s${request.episode.seasonNumber}e${request.episode.episodeNumber}`
+    : "";
+  return createHash("sha256")
+    .update(`${request.source.type}:${request.source.ref}:${ep}`)
+    .digest("hex")
+    .slice(0, 16);
+}
+
 export async function runIngest(
   deps: IngestPipelineDeps,
   request: IngestRequest,
@@ -97,8 +122,12 @@ export async function runIngest(
     );
 
     // 2. Ассеты плеера: постер, тумбы, спрайт для скраббинга.
+    // Клик короче секунды не отдаёт кадр по умолтному seek=1 — пробуем 0.
     const posterPath = path.join(workDir, "poster.jpg");
     await generatePoster(pulled.filePath, posterPath, cfg);
+    if (!(await stat(posterPath).then(() => true).catch(() => false))) {
+      await generatePoster(pulled.filePath, posterPath, { ...cfg, seekSeconds: 0 });
+    }
     const thumbsDir = path.join(workDir, "thumbs");
     await generateThumbs(pulled.filePath, thumbsDir, {
       ...cfg,
@@ -112,29 +141,44 @@ export async function runIngest(
       sourceHeight: video.height,
     });
 
-    // 3. Субтитры: внешние и встроенные → WebVTT.
+    // 3. Субтитры: внешние и встроенные → WebVTT. Ошибка одного трека
+    // (растровый PGS/DVB, битый файл) пропускает трек, а не весь ingest.
     const subsDir = path.join(workDir, "subs");
     await mkdir(subsDir, { recursive: true });
     const vttFiles: { lang: string; filePath: string; embed: boolean; title: string | null }[] = [];
     for (const [i, s] of pulled.subtitlePaths.entries()) {
       const out = path.join(subsDir, `external_${i}.vtt`);
-      await convertSubtitlesToVtt(s.path, out, cfg);
-      vttFiles.push({
-        lang: s.lang ?? langFromFilename(s.path),
-        filePath: out,
-        embed: false,
-        title: path.basename(s.path),
-      });
+      try {
+        await convertSubtitlesToVtt(s.path, out, cfg);
+        vttFiles.push({
+          lang: s.lang ?? langFromFilename(s.path),
+          filePath: out,
+          embed: false,
+          title: path.basename(s.path),
+        });
+      } catch (err) {
+        console.warn(`ingest: external subtitle ${i} skipped:`, String(err).slice(0, 200));
+      }
     }
     for (const [i, s] of info.subtitles.entries()) {
+      if (!isTextSubtitleCodec(s.codec)) {
+        console.warn(
+          `ingest: embedded subtitle ${i} (${s.codec}) skipped: raster codec`,
+        );
+        continue;
+      }
       const out = path.join(subsDir, `embedded_${i}.vtt`);
-      await extractEmbeddedSubtitles(pulled.filePath, out, i, cfg);
-      vttFiles.push({
-        lang: s.lang ?? "und",
-        filePath: out,
-        embed: true,
-        title: s.title,
-      });
+      try {
+        await extractEmbeddedSubtitles(pulled.filePath, out, i, cfg);
+        vttFiles.push({
+          lang: s.lang ?? "und",
+          filePath: out,
+          embed: true,
+          title: s.title,
+        });
+      } catch (err) {
+        console.warn(`ingest: embedded subtitle ${i} skipped:`, String(err).slice(0, 200));
+      }
     }
 
     // 4. Ключи хранилища и перенос результатов (до записи в БД).
@@ -173,6 +217,9 @@ export async function runIngest(
       media: {
         title: request.item.title,
         duration: Math.round(info.durationSeconds),
+        // Дедуп: повторный ingest того же источника обновляет эту же media,
+        // а не плодит дубль (старые файлы на диске зачистит GC воркера).
+        sourceKey: mediaSourceKey(request),
         posterKey: `${baseKey}/poster.jpg`,
         spriteKey: `${baseKey}/sprite.jpg`,
         spriteMeta: {
@@ -219,14 +266,20 @@ export async function runIngest(
     };
     const { itemId, mediaId } = await publishIngest(deps.db, publish);
 
-    // 6. Обогащение метаданными (например TMDb).
+    // 6. Обогащение метаданными (например TMDb) — non-fatal: item/media уже
+    // опубликованы, битый ключ/недоступный TMDb не должен переводить
+    // живую задачу в failed.
     if (deps.enricher) {
-      const found = await deps.enricher.find({
-        title: request.item.title,
-        year: request.item.year ?? null,
-        type: request.item.type,
-      });
-      if (found[0]) await applyEnrichment(deps.db, itemId, found[0]);
+      try {
+        const found = await deps.enricher.find({
+          title: request.item.title,
+          year: request.item.year ?? null,
+          type: request.item.type,
+        });
+        if (found[0]) await applyEnrichment(deps.db, itemId, found[0]);
+      } catch (err) {
+        console.warn("ingest: enrichment failed (non-fatal):", String(err).slice(0, 200));
+      }
     }
 
     return {

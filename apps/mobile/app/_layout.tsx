@@ -1,9 +1,9 @@
 "use client";
 
+import { tokens } from "@zal/ui";
 /** Корневой навигатор: AuthProvider + тёмная тема «Зал». */
 import { Stack } from "expo-router";
 import { StatusBar } from "expo-status-bar";
-import { tokens } from "@zal/ui";
 import { AuthProvider } from "../lib/auth";
 
 export default function RootLayout() {

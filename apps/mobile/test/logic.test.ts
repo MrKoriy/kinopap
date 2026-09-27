@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { feedLabel, feedTitle } from "../lib/feed";
-import { buildCommentTree } from "../lib/comment-tree";
 import type { CommentDto } from "@zal/api-client";
+import { describe, expect, it } from "vitest";
+import { buildCommentTree } from "../lib/comment-tree";
+import { feedLabel, feedTitle } from "../lib/feed";
 
 describe("feedLabel / feedTitle", () => {
   it("серии подписываются как S1E2", () => {

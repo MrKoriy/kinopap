@@ -1,5 +1,9 @@
 "use client";
 
+import type { ItemDetail, MediaLinks } from "@zal/api-client";
+import { tokens } from "@zal/ui";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useVideoPlayer, type VideoSource, VideoView } from "expo-video";
 /**
  * Плеер: нативный HLS (expo-video), резюме и синхронизация прогресса,
  * «пропустить интро», следующая серия, скорость, полный экран.
@@ -19,10 +23,7 @@ import {
   useWindowDimensions,
   View,
 } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { VideoView, useVideoPlayer, type VideoSource } from "expo-video";
-import type { ItemDetail, MediaLinks } from "@zal/api-client";
-import { tokens } from "@zal/ui";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { useTvFocus } from "../../../components/tv-focus";
 import { useAuth } from "../../../lib/auth";
 import { formatTime } from "../../../lib/format";
@@ -81,9 +82,18 @@ export default function WatchScreen() {
     p.play();
   });
 
-  // 1. Ссылки + позиция резюме.
+  // 1. Ссылки + позиция резюме. Смена media (следующая серия) сбрасывает
+  // стейт прошлого эпизода: субтитры, аудио, ошибку — иначе реплики
+  // предыдущей серии рисуются поверх нового видео.
   React.useEffect(() => {
     let cancelled = false;
+    setCues([]);
+    setActiveSub(null);
+    setActiveAudio(0);
+    setShiftMs(0);
+    setError(null);
+    setPlaying(false);
+    appliedResumeRef.current = false;
     void (async () => {
       try {
         const [linksRes, progressRes] = await Promise.all([
@@ -169,7 +179,7 @@ export default function WatchScreen() {
   React.useEffect(() => {
     if (sourceUri) loadSource(sourceUri, resumeRef.current);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceUri]);
+  }, [sourceUri, loadSource]);
 
   // 4. Тик таймера: позиция/длительность/пауза + резюме + автосохранение.
   React.useEffect(() => {
@@ -198,7 +208,7 @@ export default function WatchScreen() {
   React.useEffect(() => {
     if (!playing) saveProgress(true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing]);
+  }, [playing, saveProgress]);
 
   React.useEffect(
     () => () => {
@@ -270,7 +280,7 @@ export default function WatchScreen() {
   }
 
   return (
-    <View testID="player-screen" style={styles.container}>
+    <SafeAreaView testID="player-screen" style={styles.container} edges={["top", "left", "right"]}>
       <View style={[styles.videoWrap, { height: videoHeight }]}>
         <VideoView
           ref={videoRef}
@@ -387,7 +397,9 @@ export default function WatchScreen() {
           <Pressable
             testID="player-next"
             style={[styles.nextButton, focusNext.ring]}
-            onPress={() => router.push(`/watch/${itemIdNum}/${nextMedia}`)}
+            // replace: стек не должен расти с каждой серией — back уводит
+            // из плеера, а не листает все просмотренные эпизоды.
+            onPress={() => router.replace(`/watch/${itemIdNum}/${nextMedia}`)}
             accessibilityRole="button"
             {...focusNext.props}
           >
@@ -469,7 +481,7 @@ export default function WatchScreen() {
           </View>
         )}
       </ScrollView>
-    </View>
+    </SafeAreaView>
   );
 }
 

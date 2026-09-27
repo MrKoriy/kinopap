@@ -1,15 +1,21 @@
 /**
  * Доступ к API «Зал» из веба: обычный fetch + валидация ответов zod-схемами
  * из @zal/api-client. Работает и на сервере, и в браузере.
+ *
+ * Ошибки НЕ глотаются в рантайме: транспортный сбой/5xx/сломанный контракт
+ * летит наверх — error boundary показывает «API недоступен», а не пустой
+ * экран, неотличимый от «ничего не нашлось». Пустота — это 200 и [].
+ * Исключение — production-build: ISR-страницы пререндерятся до старта API,
+ * там деградируем в пусто, первый revalidate дорисует.
  */
 import {
-  itemDetailSchema,
-  itemPageSchema,
-  mediaLinksSchema,
   type ItemDetail,
   type ItemPage,
   type ItemType,
+  itemDetailSchema,
+  itemPageSchema,
   type MediaLinks,
+  mediaLinksSchema,
 } from "@zal/api-client";
 
 export const API_BASE =
@@ -19,13 +25,29 @@ export const API_BASE =
 
 export type ShortcutKind = "fresh" | "hot" | "popular";
 
+/** Ошибка доступа к API (сеть/5xx/сломанный контракт). 404 — отдельный случай. */
+export class ApiUnavailableError extends Error {
+  constructor(
+    public readonly status: number,
+    path: string,
+  ) {
+    super(`API ${path}: ${status}`);
+    this.name = "ApiUnavailableError";
+  }
+}
+
 /**
  * Без серверного кэша Next: данные ходят в API напрямую, иначе
  * протухшие media-links из прошлых сборок уезжают в плеер.
  */
 async function getJson(path: string): Promise<unknown> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`API ${path}: ${res.status}`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+  } catch {
+    throw new ApiUnavailableError(0, path);
+  }
+  if (!res.ok) throw new ApiUnavailableError(res.status, path);
   return res.json();
 }
 
@@ -54,35 +76,47 @@ export type CatalogParams = {
 
 const EMPTY_PAGE: ItemPage = { items: [], nextCursor: null };
 
-/**
- * Списки устойчивы к недоступному API: при сборке и при падении бэкенда
- * возвращаем пустую страницу (ISR перечеркнёт через revalidate).
- */
-export async function fetchItems(params: CatalogParams = {}): Promise<ItemPage> {
+/** Билд без API → fallback; рантайм → исключение наверх. */
+async function softOnBuildPhase<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
   try {
-    return itemPageSchema.parse(await getJson(`/v1/items${qs(params)}`));
-  } catch {
-    return EMPTY_PAGE;
+    return await fn();
+  } catch (err) {
+    if (process.env.NEXT_PHASE === "phase-production-build") return fallback;
+    throw err;
   }
+}
+
+/** Список каталога: 200 и пусто — пустая страница; сбой — исключение. */
+export async function fetchItems(params: CatalogParams = {}): Promise<ItemPage> {
+  return softOnBuildPhase(
+    async () => itemPageSchema.parse(await getJson(`/v1/items${qs(params)}`)),
+    EMPTY_PAGE,
+  );
 }
 
 export async function fetchShortcut(
   kind: ShortcutKind,
   limit = 12,
 ): Promise<ItemPage> {
-  try {
-    return itemPageSchema.parse(await getJson(`/v1/items/${kind}${qs({ limit })}`));
-  } catch {
-    return EMPTY_PAGE;
-  }
+  return softOnBuildPhase(
+    async () => itemPageSchema.parse(await getJson(`/v1/items/${kind}${qs({ limit })}`)),
+    EMPTY_PAGE,
+  );
 }
 
+/** null — тайтла нет (404). Сбой сети/5xx — исключение, не «не найдено». */
 export async function fetchItem(id: number): Promise<ItemDetail | null> {
-  try {
-    return itemDetailSchema.parse(await getJson(`/v1/items/${id}`));
-  } catch {
-    return null;
-  }
+  return softOnBuildPhase(
+    async () => {
+      try {
+        return itemDetailSchema.parse(await getJson(`/v1/items/${id}`));
+      } catch (err) {
+        if (err instanceof ApiUnavailableError && err.status === 404) return null;
+        throw err;
+      }
+    },
+    null,
+  );
 }
 
 /** Поиск с pg_trgm: title/director/cast. */
@@ -92,23 +126,32 @@ export async function fetchSearch(
   limit = 24,
 ): Promise<ItemPage> {
   if (!q.trim()) return EMPTY_PAGE;
-  try {
-    return itemPageSchema.parse(
-      await getJson(`/v1/items/search${qs({ q: q.trim(), field, limit })}`),
-    );
-  } catch {
-    return EMPTY_PAGE;
-  }
+  return softOnBuildPhase(
+    async () =>
+      itemPageSchema.parse(
+        await getJson(`/v1/items/search${qs({ q: q.trim(), field, limit })}`),
+      ),
+    EMPTY_PAGE,
+  );
 }
 
 export async function fetchSimilar(id: number): Promise<ItemPage> {
-  try {
-    return itemPageSchema.parse(await getJson(`/v1/items/${id}/similar`));
-  } catch {
-    return EMPTY_PAGE;
-  }
+  return softOnBuildPhase(
+    async () => {
+      try {
+        return itemPageSchema.parse(await getJson(`/v1/items/${id}/similar`));
+      } catch (err) {
+        if (err instanceof ApiUnavailableError && err.status === 404) {
+          return EMPTY_PAGE;
+        }
+        throw err;
+      }
+    },
+    EMPTY_PAGE,
+  );
 }
 
+/** null — пары item/media нет (404). Сбой — исключение. */
 export async function fetchMediaLinks(
   itemId: number,
   mediaId: number,
@@ -117,7 +160,8 @@ export async function fetchMediaLinks(
     return mediaLinksSchema.parse(
       await getJson(`/v1/items/${itemId}/media-links${qs({ mid: mediaId })}`),
     );
-  } catch {
-    return null;
+  } catch (err) {
+    if (err instanceof ApiUnavailableError && err.status === 404) return null;
+    throw err;
   }
 }

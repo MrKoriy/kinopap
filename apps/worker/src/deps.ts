@@ -1,20 +1,22 @@
 /**
  * Прод-обвязка воркера: реальные коннекторы, хранилище и пайплайн.
  */
+
+import { type Db, updateIngestJob } from "@zal/db";
 import {
+  type FfmpegConfig,
+  gcOrphanIngestDirs,
   LocalFolderConnector,
   LocalStorage,
-  TmdbEnricher,
-  UrlSourceConnector,
-  probeMedia,
-  runIngest,
-  transcodeToHls,
-  type FfmpegConfig,
   type MediaStorage,
   type MetadataEnricher,
+  probeMedia,
+  runIngest,
   type SourceConnector,
+  TmdbEnricher,
+  transcodeToHls,
+  UrlSourceConnector,
 } from "@zal/ingest";
-import { updateIngestJob, type Db } from "@zal/db";
 import type { IngestJobStore, WorkerDeps } from "./worker";
 
 export interface WorkerDepsConfig {
@@ -27,13 +29,19 @@ export interface WorkerDepsConfig {
   tmdbApiKey?: string;
   ffmpeg?: FfmpegConfig;
   fetch?: typeof fetch;
+  /** URL-ингест из LAN/NAS: приватные адреса разрешены явно, не по умолчанию. */
+  allowPrivateSources?: boolean;
 }
 
 export function makeWorkerDeps(cfg: WorkerDepsConfig): WorkerDeps {
   const storage: MediaStorage = new LocalStorage(cfg.mediaRoot, cfg.mediaBaseUrl);
   const connectors: Record<"local" | "url", SourceConnector> = {
     local: new LocalFolderConnector(cfg.localSourceRoot, cfg.ffmpeg),
-    url: new UrlSourceConnector({ ...cfg.ffmpeg, fetch: cfg.fetch }),
+    url: new UrlSourceConnector({
+      ...cfg.ffmpeg,
+      fetch: cfg.fetch,
+      allowPrivateHosts: cfg.allowPrivateSources,
+    }),
   };
   const enricher: MetadataEnricher | undefined = cfg.tmdbApiKey
     ? new TmdbEnricher({ apiKey: cfg.tmdbApiKey, fetch: cfg.fetch })
@@ -53,6 +61,12 @@ export function makeWorkerDeps(cfg: WorkerDepsConfig): WorkerDeps {
 
   return {
     jobStore,
+    gc: () =>
+      gcOrphanIngestDirs(cfg.db, cfg.mediaRoot).then((removed) => {
+        if (removed.length > 0) {
+          console.log(`worker gc: removed ${removed.length} orphan dirs`);
+        }
+      }),
     runIngest: (job) =>
       runIngest(
         {

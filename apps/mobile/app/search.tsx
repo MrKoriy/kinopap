@@ -1,5 +1,7 @@
 "use client";
 
+import type { ItemSummary } from "@zal/api-client";
+import { tokens } from "@zal/ui";
 /** Поиск с pg_trgm: запрос и плоская выдача карточек. */
 import * as React from "react";
 import {
@@ -11,8 +13,6 @@ import {
   TextInput,
   View,
 } from "react-native";
-import type { ItemSummary } from "@zal/api-client";
-import { tokens } from "@zal/ui";
 import { ItemCard } from "../components/item-card";
 import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";

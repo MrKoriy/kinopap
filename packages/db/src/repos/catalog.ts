@@ -3,21 +3,22 @@
  * год-диапазон/актёр/режиссёр/буква), сортировка, cursor-пагинация, поиск,
  * similar, fresh/hot/popular, media-links.
  */
-import { and, desc, eq, inArray, or, sql, type SQL } from "drizzle-orm";
+
 import {
-  decodeCursor,
-  makeCursor,
   type CatalogFilters,
+  type CursorPayload,
+  decodeCursor,
   type ItemDetail,
   type ItemPage,
   type ItemSummary,
   type ItemType,
   type MediaLinks,
+  makeCursor,
   type SortDir,
   type SortField,
   type SortSpec,
-  type CursorPayload,
 } from "@zal/api-client";
+import { and, desc, eq, inArray, or, type SQL, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   audioTracks,
@@ -219,11 +220,11 @@ function sortValue(row: ItemRow, field: SortField): string | number | null {
 function buildFilters(f: CatalogFilters): SQL[] {
   const conds: SQL[] = [];
   if (f.type) conds.push(eq(items.type, f.type));
-  if (f.title) conds.push(sql`${items.title} ilike ${f.title + "%"}`);
+  if (f.title) conds.push(sql`${items.title} ilike ${`${f.title}%`}`);
   if (f.yearFrom != null) conds.push(sql`${items.year} >= ${f.yearFrom}`);
   if (f.yearTo != null) conds.push(sql`${items.year} <= ${f.yearTo}`);
   if (f.letter) {
-    const pat = f.letter + "%";
+    const pat = `${f.letter}%`;
     conds.push(
       or(
         sql`left(${items.title}, 1) ilike ${pat}`,
@@ -256,7 +257,7 @@ function personFilter(role: "actor" | "director", name: string): SQL {
   return sql`${items.id} in (
     select ip.item_id from item_people ip
     join people p on p.id = ip.person_id
-    where ip.role = ${role} and p.name ilike ${"%" + name + "%"}
+    where ip.role = ${role} and p.name ilike ${`%${name}%`}
   )`;
 }
 
@@ -273,9 +274,11 @@ function cursorCond(cursor: CursorPayload): SQL {
 
 function orderBy(sort: SortSpec) {
   const col = SORT_COLS[sort.field];
+  // DESC в Postgres по умолчанию NULLS FIRST: тайтлы без года вылезали
+  // первыми в «Свежем». Явно уводим NULL-ключи в конец.
   return sort.dir === "desc"
-    ? [desc(col), desc(items.id)]
-    : [sql`${col} asc`, sql`${items.id} asc`];
+    ? [sql`${col} desc nulls last`, desc(items.id)]
+    : [sql`${col} asc nulls last`, sql`${items.id} asc`];
 }
 
 /* ---------- Публичные запросы ---------- */
@@ -467,11 +470,15 @@ export async function shortcutItems(
     field: kind === "fresh" ? "year" : kind === "hot" ? "views" : "rating",
     dir: "desc",
   };
+  // fresh: без года «свежесть» не определить — такие тайтлы не показываем
+  // (year >= 1900 отсекает NULL: NULL-сравнение в SQL ложно).
+  const yearFrom = kind === "fresh" ? 1900 : undefined;
   return listItems(db, {
     type: f.type,
     sort,
     limit: f.limit,
     cursor: f.cursor ?? null,
+    yearFrom,
   });
 }
 

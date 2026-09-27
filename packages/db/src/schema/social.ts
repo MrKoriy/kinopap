@@ -10,8 +10,8 @@ import {
   uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
-import { watchStatus } from "./enums";
 import { items } from "./catalog";
+import { watchStatus } from "./enums";
 import { media } from "./media";
 import { profiles } from "./users";
 
@@ -101,6 +101,8 @@ export const comments = pgTable(
   (t) => [
     index("comments_item_created_idx").on(t.itemId, t.createdAt),
     index("comments_parent_idx").on(t.parentId),
+    // BFS веток: фильтр item + parent в одном скане.
+    index("comments_item_parent_idx").on(t.itemId, t.parentId),
   ],
 );
 

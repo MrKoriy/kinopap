@@ -2,19 +2,20 @@
  * Очередь транскода. Источники — source-agnostic: job несёт ref
  * (путь или URL) и черновик item'а, никакой семантики чужих пираток.
  */
-import { z } from "zod";
+
 import {
   ingestEpisodeSchema,
   ingestItemSchema,
   ingestSourceSchema,
-  qualitySchema,
   type Quality,
+  qualitySchema,
 } from "@zal/api-client";
+import { z } from "zod";
 
 export const TRANSCODE_QUEUE = "transcode";
 
-export { qualitySchema };
 export type { Quality };
+export { qualitySchema };
 
 /** ffprobe: метаданные исходника (дорожки, длительность, кодеки). */
 export const probeJobSchema = z.object({

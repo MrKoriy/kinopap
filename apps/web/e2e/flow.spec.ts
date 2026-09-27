@@ -5,7 +5,7 @@
  * Прогресс сбрасывается перед плеером — каждый проект обязан пройти
  * через настоящее декодирование, а не через резюме прошлого прогона.
  */
-import { expect, test, request as pwRequest, type Page } from "@playwright/test";
+import { expect, type Page, request as pwRequest, test } from "@playwright/test";
 
 const E2E_USER = { email: "e2e@zal.dev", password: "e2e-password-123" };
 
@@ -37,9 +37,11 @@ test("каталог → плеер → прогресс → резюме", asyn
   await loginUi(page);
 
   // Каталог: фильтры и карточки из реального API.
+  // .first(): во время стриминг-гидратации (route-level Suspense) DOM
+  // на миг содержит и старый, и новый узел — strict-локатор падает на гонке.
   await page.goto("/catalog");
-  await expect(page.getByTestId("type-filters")).toBeVisible();
-  await expect(page.getByTestId("catalog-grid")).toBeVisible();
+  await expect(page.getByTestId("type-filters").first()).toBeVisible();
+  await expect(page.getByTestId("catalog-grid").first()).toBeVisible();
   await expect(page.getByTestId("item-card").first()).toBeVisible();
 
   // Постер ингеста: карточка грузит настоящую картинку, а не заглушку.
@@ -96,6 +98,8 @@ test("каталог → плеер → прогресс → резюме", asyn
     undefined,
     { timeout: 30_000 },
   );
+  // Контролы автоскрываются через 3с игры — двигаем мышь, как живой юзер.
+  await page.getByTestId("player").hover();
   await page.getByTestId("play-toggle").click(); // пауза
 
   // Прогресс виден через API (запись с паузы асинхронная — ждём позицию >5с).
@@ -146,6 +150,8 @@ test("субтитры и сдвиг в плеере", async ({ page }) => {
   // Субтитры включаются из media-links (WebVTT с ingest).
   await page.getByTestId("menu-субтитры").click();
   await page.getByText("sample.srt").click();
+  // Выбор дорожки закрывает меню — открываем снова для подстройки сдвига.
+  await page.getByTestId("menu-субтитры").click();
   await expect(page.getByTestId("shift-value")).toHaveText("0.0s");
   await page.getByTestId("shift-plus").click();
   await expect(page.getByTestId("shift-value")).toHaveText("0.1s");
@@ -184,8 +190,10 @@ test("дубляж переключается, воспроизведение п
   await expect(page.getByTestId("audio-option-0")).toContainText("MVO");
   await expect(page.getByTestId("audio-option-1")).toContainText("AVO");
 
-  // Переключение: активной становится вторая.
+  // Переключение: активной становится вторая. Выбор закрывает меню —
+  // открываем снова и проверяем состояние.
   await page.getByTestId("audio-option-1").click();
+  await page.getByTestId("menu-аудио").click();
   await expect(page.getByTestId("audio-option-1")).toHaveAttribute("data-active", "true");
   await expect(page.getByTestId("audio-option-0")).toHaveAttribute("data-active", "false");
 

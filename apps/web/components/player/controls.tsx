@@ -1,10 +1,10 @@
 "use client";
 
+import type { SpriteMetaDto } from "@zal/api-client";
 /** Контрол-бар плеера: seek со спрайт-превью, аудио, субтитры со сдвигом, скорость, PiP. */
 import * as React from "react";
-import type { SpriteMetaDto } from "@zal/api-client";
-import { spriteTileFor } from "@/lib/player-logic";
 import { formatDuration } from "@/lib/format";
+import { spriteTileScaledFor } from "@/lib/player-logic";
 
 export interface TrackOption {
   index: number;
@@ -29,6 +29,10 @@ export interface PlayerControlsProps {
   onQuality?(index: number): void;
   sprites: SpriteMetaDto | null;
   spriteUrl: string | null;
+  /** Реакт-нода живого превью (второй <video>) для стримов без спрайта. */
+  scrubPreview?: React.ReactNode;
+  /** Время под курсором при скраббинге (null — курсор ушёл). */
+  onScrubTime?(time: number | null): void;
   isFullscreen: boolean;
   onTogglePlay(): void;
   onSeek(time: number): void;
@@ -41,6 +45,9 @@ export interface PlayerControlsProps {
   onFullscreen(): void;
 }
 
+/** Контекст закрытия меню: MenuItem закрывает, служебные кнопки (сдвиг) — нет. */
+const MenuCloseContext = React.createContext<() => void>(() => {});
+
 function Menu({
   label,
   children,
@@ -49,9 +56,11 @@ function Menu({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = React.useState(false);
+  const close = React.useCallback(() => setOpen(false), []);
   return (
     <div className="relative">
       <button
+          type="button"
         className="rounded-full px-3 py-1.5 text-sm text-white/80 transition hover:bg-white/10 hover:text-white"
         onClick={() => setOpen((o) => !o)}
         data-testid={`menu-${label.toLowerCase()}`}
@@ -61,9 +70,9 @@ function Menu({
       {open && (
         <div
           className="absolute bottom-full right-0 mb-2 min-w-44 rounded-[var(--radius-card)] border border-border bg-surface p-1.5 shadow-lg"
-          onMouseLeave={() => setOpen(false)}
+          onMouseLeave={close}
         >
-          {children}
+          <MenuCloseContext.Provider value={close}>{children}</MenuCloseContext.Provider>
         </div>
       )}
     </div>
@@ -81,13 +90,17 @@ function MenuItem({
   children: React.ReactNode;
   testId?: string;
 }) {
+  const close = React.useContext(MenuCloseContext);
   return (
     <button
+          type="button"
       className={`block w-full rounded-lg px-3 py-2 text-left text-sm transition ${
         active ? "bg-accent text-white" : "text-white/80 hover:bg-white/10"
       }`}
       onClick={() => {
         onClick();
+        // Выбор пункта закрывает меню — раньше оно висело, пока мышь не уйдёт.
+        close();
       }}
       data-active={active}
       data-testid={testId}
@@ -127,11 +140,21 @@ export function PlayerControls(props: PlayerControlsProps) {
     if (!bar || !duration) return;
     const rect = bar.getBoundingClientRect();
     const r = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    setHoverTime(r * duration);
+    const t = r * duration;
+    setHoverTime(t);
     setHoverX(e.clientX - rect.left);
+    props.onScrubTime?.(t);
   };
 
-  const tile = hoverTime != null && sprites ? spriteTileFor(hoverTime, sprites) : null;
+  const onBarLeave = () => {
+    setHoverTime(null);
+    props.onScrubTime?.(null);
+  };
+
+  const tile =
+    hoverTime != null && sprites
+      ? spriteTileScaledFor(hoverTime, sprites, 192, 108)
+      : null;
 
   return (
     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent px-4 pb-3 pt-12">
@@ -140,7 +163,7 @@ export function PlayerControls(props: PlayerControlsProps) {
         ref={barRef}
         className="group relative mb-2 h-1.5 cursor-pointer rounded-full bg-white/20"
         onMouseMove={onBarMove}
-        onMouseLeave={() => setHoverTime(null)}
+        onMouseLeave={onBarLeave}
         onClick={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
           const r = (e.clientX - rect.left) / rect.width;
@@ -170,9 +193,13 @@ export function PlayerControls(props: PlayerControlsProps) {
                 style={{
                   backgroundImage: `url(${spriteUrl})`,
                   backgroundPosition: tile.backgroundPosition,
-                  backgroundSize: `${sprites!.columns * 192}px ${sprites!.rows * 108}px`,
+                  backgroundSize: tile.backgroundSize,
                 }}
               />
+            ) : props.scrubPreview ? (
+              <div className="h-[108px] w-[192px] overflow-hidden rounded">
+                {props.scrubPreview}
+              </div>
             ) : (
               <div className="h-[108px] w-[192px] rounded bg-surface-2" />
             )}
@@ -183,6 +210,7 @@ export function PlayerControls(props: PlayerControlsProps) {
 
       <div className="flex items-center gap-2 text-white">
         <button
+          type="button"
           className="rounded-full p-2 transition hover:bg-white/10"
           onClick={props.onTogglePlay}
           aria-label={playing ? "Пауза" : "Играть"}
@@ -207,6 +235,7 @@ export function PlayerControls(props: PlayerControlsProps) {
         {/* Громкость */}
         <div className="flex items-center gap-1.5">
           <button
+          type="button"
             className="rounded-full p-2 hover:bg-white/10"
             onClick={() => props.onVolume(muted || volume === 0 ? 1 : 0)}
             aria-label="Звук"
@@ -301,6 +330,7 @@ export function PlayerControls(props: PlayerControlsProps) {
           {activeSubtitle != null && (
             <div className="mt-1 flex items-center justify-between border-t border-border px-3 py-2 text-xs text-white/80">
               <button
+          type="button"
                 className="rounded px-2 py-1 hover:bg-white/10"
                 onClick={() => props.onShift(-100)}
                 data-testid="shift-minus"
@@ -311,6 +341,7 @@ export function PlayerControls(props: PlayerControlsProps) {
                 {(shiftMs / 1000).toFixed(1)}s
               </span>
               <button
+          type="button"
                 className="rounded px-2 py-1 hover:bg-white/10"
                 onClick={() => props.onShift(100)}
                 data-testid="shift-plus"
@@ -322,6 +353,7 @@ export function PlayerControls(props: PlayerControlsProps) {
         </Menu>
 
         <button
+          type="button"
           className="rounded-full p-2 hover:bg-white/10"
           onClick={props.onPip}
           aria-label="Картинка в картинке"
@@ -334,6 +366,7 @@ export function PlayerControls(props: PlayerControlsProps) {
         </button>
 
         <button
+          type="button"
           className="rounded-full p-2 hover:bg-white/10"
           onClick={props.onFullscreen}
           aria-label="Полный экран"

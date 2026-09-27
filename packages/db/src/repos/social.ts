@@ -3,13 +3,14 @@
  * Голоса суммируем в items (votes_positive/votes_negative), рейтинг —
  * доля «за» от всех голосов, шкала 0..10.
  */
-import { and, asc, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
+
 import type {
   CommentDto,
   NewEpisodeDto,
   SubscriptionDto,
   VoteStateDto,
 } from "@zal/api-client";
+import { and, asc, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   comments,
@@ -35,6 +36,9 @@ export type VoteRow = typeof votes.$inferSelect;
 
 /** Максимальная глубина вложенности ответов (дальше отвечаем на уровень ниже). */
 export const MAX_COMMENT_DEPTH = 6;
+
+/** Потолок сканирования подписочной ленты (см. listNewEpisodes). */
+const NEW_EPISODES_SCAN_CAP = 500;
 
 /* ---------- Подписки ---------- */
 
@@ -150,8 +154,7 @@ export async function listNewEpisodes(
   db: Db,
   profileId: number,
   limit = 20,
-): Promise<NewEpisodesFeed> {
-  const epRows = await db
+): Promise<NewEpisodesFeed> {  const epRows = await db
     .select({
       itemId: items.id,
       itemTitle: items.title,
@@ -170,7 +173,11 @@ export async function listNewEpisodes(
     .innerJoin(episodes, eq(episodes.id, media.episodeId))
     .innerJoin(seasons, eq(seasons.id, episodes.seasonId))
     .leftJoin(watchProgress, WATCHED_JOIN)
-    .where(and(eq(subscriptions.profileId, profileId), NOT_WATCHED));
+    .where(and(eq(subscriptions.profileId, profileId), NOT_WATCHED))
+    // Раньше оба запроса тянули ВСЮ ленту подписок в память ради total —
+    // на большой библиотеке это O(все media) на каждый запрос. Потолок
+    // достаточен для ленты: total = min(реальный, потолок).
+    .limit(NEW_EPISODES_SCAN_CAP);
 
   const partRows = await db
     .select({
@@ -189,7 +196,8 @@ export async function listNewEpisodes(
       and(eq(media.itemId, items.id), isNull(media.episodeId), gt(media.partNumber, 1)),
     )
     .leftJoin(watchProgress, WATCHED_JOIN)
-    .where(and(eq(subscriptions.profileId, profileId), NOT_WATCHED));
+    .where(and(eq(subscriptions.profileId, profileId), NOT_WATCHED))
+    .limit(NEW_EPISODES_SCAN_CAP);
 
   const merged: NewEpisodeDto[] = [
     ...epRows.map((r) => ({
@@ -401,8 +409,9 @@ export async function listComments(db: Db, itemId: number): Promise<CommentDto[]
 
 /**
  * Постранично по корневым веткам: страница — корни целиком со всеми
- * ответами (обход вниз уровнями, глубина ограничена MAX_COMMENT_DEPTH).
- * nextOffset — смещение следующей страницы веток, null — конец.
+ * ответами. Ветвь собирается одним recursive CTE (раньше — по запросу
+ * на каждый уровень глубины). nextOffset — смещение следующей страницы
+ * веток, null — конец.
  */
 export async function listCommentsPage(
   db: Db,
@@ -428,25 +437,27 @@ export async function listCommentsPage(
   const nextOffset = offset + roots.length < total ? offset + roots.length : null;
   if (!roots.length) return { items: [], nextOffset: null, total };
 
-  // Спускаемся по веткам уровнями: parentId проиндексирован, глубина ≤ лимита.
-  const ids = new Set(roots);
-  let frontier = roots;
-  while (frontier.length) {
-    const children = await db
-      .select({ id: comments.id })
-      .from(comments)
-      .where(and(eq(comments.itemId, itemId), inArray(comments.parentId, frontier)));
-    frontier = [];
-    for (const c of children) {
-      if (!ids.has(c.id)) {
-        ids.add(c.id);
-        frontier.push(c.id);
-      }
-    }
-  }
+  // Рекурсивный CTE: корни страницы + всё их поддерево одним запросом.
+  // PGlite/drizzle: raw SQL с параметрами, склейка id-листа безопасна
+  // (числа из только что выбранных строк).
+  const rootList = sql.join(roots.map((id) => sql`${id}`), sql`, `);
+  const branchRows = await db.execute(sql`
+    with recursive branch(id) as (
+      select id from ${comments} where id in (${rootList})
+      union all
+      select c.id
+      from ${comments} c
+      join branch b on c.parent_id = b.id
+      where c.item_id = ${itemId}
+    )
+    select id from branch
+  `);
+  const ids = (branchRows.rows as unknown as Array<{ id: number | string }>).map((r) =>
+    Number(r.id),
+  );
 
   const rows: CommentJoinRow[] = await commentFrom(db)
-    .where(and(eq(comments.itemId, itemId), inArray(comments.id, [...ids])))
+    .where(inArray(comments.id, ids))
     .orderBy(asc(comments.createdAt), asc(comments.id));
   return {
     items: rows.map((r) => mapComment(r.row, r.author)),

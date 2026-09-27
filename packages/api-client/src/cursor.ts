@@ -4,7 +4,7 @@
  * Кодек без зависимостей — btoa/atob есть и в Node, и в браузере.
  */
 import { z } from "zod";
-import { sortDirSchema, sortFieldSchema, type SortDir, type SortField } from "./catalog";
+import { type SortDir, type SortField, sortDirSchema, sortFieldSchema } from "./catalog";
 
 export const cursorSchema = z.object({
   s: sortFieldSchema,

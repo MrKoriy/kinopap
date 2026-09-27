@@ -2,19 +2,19 @@
  * Социальный слой: подписки на новые серии, дерево комментариев,
  * голосование. Всё персональное — за auth, чтение — публичное.
  */
-import type { FastifyInstance, FastifyRequest } from "fastify";
-import { z } from "zod";
+
 import {
+  type CommentDto,
   commentListQuerySchema,
   commentPostSchema,
   commentPutSchema,
   subscriptionPutSchema,
   votePutSchema,
-  type CommentDto,
 } from "@zal/api-client";
 import {
   addComment,
   countComments,
+  type Db,
   deleteSubscription,
   getComment,
   getCommentAuthorUserId,
@@ -29,8 +29,9 @@ import {
   softDeleteComment,
   updateComment,
   upsertSubscription,
-  type Db,
 } from "@zal/db";
+import type { FastifyInstance, FastifyRequest } from "fastify";
+import { z } from "zod";
 import type { Config } from "../config";
 import { badRequest, forbidden, notFound, parseOrThrow } from "../lib/http";
 import type { AccessPayload } from "../plugins/auth";

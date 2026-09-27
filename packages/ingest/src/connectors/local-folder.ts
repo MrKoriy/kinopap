@@ -4,7 +4,7 @@
  */
 import { readdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { probeMedia, type FfmpegConfig } from "../media/probe";
+import { type FfmpegConfig, probeMedia } from "../media/probe";
 import type {
   PulledSource,
   PullOptions,

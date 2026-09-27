@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { loginSchema, registerSchema } from "../src/auth";
 import {
+  itemSummarySchema,
   parseCatalogQuery,
   parseCsvInts,
   parseSort,
   parseYearRange,
-  itemSummarySchema,
 } from "../src/catalog";
-import { registerSchema, loginSchema } from "../src/auth";
 
 describe("parseSort", () => {
   it("defaults to updated desc", () => {

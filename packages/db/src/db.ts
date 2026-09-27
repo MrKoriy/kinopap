@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle as drizzleNodePg } from "drizzle-orm/node-postgres";
 import { migrate as migrateNodePg } from "drizzle-orm/node-postgres/migrator";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgDatabase } from "drizzle-orm/pg-core";
 import { Pool } from "pg";
 import * as schema from "./schema/index";
@@ -19,7 +19,13 @@ export function createDb(pool: Pool): NodePgDatabase<typeof schema> {
 }
 
 export function createPool(databaseUrl: string): Pool {
-  return new Pool({ connectionString: databaseUrl });
+  const pool = new Pool({ connectionString: databaseUrl });
+  // Без этого ошибка idle-клиента (рестарт PG, сетевой сброс) улетает в
+  // unhandled 'error'-ивент и роняет весь процесс.
+  pool.on("error", (err) => {
+    console.error("pg pool: idle client error", err.message);
+  });
+  return pool;
 }
 
 /** Каталог миграций drizzle-kit (лежит рядом с src). */

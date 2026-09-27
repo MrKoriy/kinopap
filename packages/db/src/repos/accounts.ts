@@ -2,10 +2,11 @@
  * Аккаунты: пользователи, инвайты, refresh-токены, профили.
  * Все записи — через drizzle, вход db общий (node-postgres / PGlite).
  */
-import { and, eq, isNull, or, sql } from "drizzle-orm";
+import { randomInt } from "node:crypto";
+import type { UserRole } from "@zal/api-client";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { invites, profiles, refreshTokens, users } from "../schema/index";
-import type { UserRole } from "@zal/api-client";
 
 export type UserRow = typeof users.$inferSelect;
 export type ProfileRow = typeof profiles.$inferSelect;
@@ -83,11 +84,16 @@ export async function findRefreshToken(db: Db, tokenHash: string) {
   return rows[0] ?? null;
 }
 
-export async function revokeRefreshToken(db: Db, id: number): Promise<void> {
-  await db
+/** Отзыв refresh-токена. false — уже был отозван (параллельный refresh). */
+export async function revokeRefreshToken(db: Db, id: number): Promise<boolean> {
+  const updated = await db
     .update(refreshTokens)
     .set({ revokedAt: new Date() })
-    .where(eq(refreshTokens.id, id));
+    // Guard от гонки: два параллельных refresh одним токеном раньше оба
+    // проходили проверку revokedAt и создавали две живые цепочки.
+    .where(and(eq(refreshTokens.id, id), isNull(refreshTokens.revokedAt)))
+    .returning({ id: refreshTokens.id });
+  return updated.length > 0;
 }
 
 export async function revokeAllUserTokens(db: Db, userId: number): Promise<void> {
@@ -97,14 +103,33 @@ export async function revokeAllUserTokens(db: Db, userId: number): Promise<void>
     .where(eq(refreshTokens.userId, userId));
 }
 
+/**
+ * Удаление протухших токенов: истёкшие/отозванные старше keepDays.
+ * Таблица раньше росла бесконечно — каждый логин это новая строка.
+ */
+export async function purgeStaleRefreshTokens(db: Db, keepDays = 7): Promise<number> {
+  const cutoff = new Date(Date.now() - keepDays * 24 * 60 * 60 * 1000);
+  const deleted = await db
+    .delete(refreshTokens)
+    .where(
+      or(
+        and(isNull(refreshTokens.revokedAt), sql`${refreshTokens.expiresAt} < now()`),
+        sql`${refreshTokens.revokedAt} < ${cutoff}`,
+      ),
+    )
+    .returning({ id: refreshTokens.id });
+  return deleted.length;
+}
+
 /* ---------- Инвайты ---------- */
 
 export function generateInviteCode(): string {
   // Буквы без похожих (O/0, I/1) — удобно кидать в чат.
+  // CSPRNG: инвайт — единственный вход в закрытый клуб, Math.random не годится.
   const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let code = "";
   for (let i = 0; i < 12; i++) {
-    code += alphabet[Math.floor(Math.random() * alphabet.length)];
+    code += alphabet[randomInt(alphabet.length)];
   }
   return code;
 }
@@ -131,7 +156,7 @@ export async function createInvite(
 
 /**
  * Атомарное списание инвайта: +1 использованию, если лимит и срок позволяют.
- * true — код принят, false — невалиден/исчерпан/протух.
+ * true — код принят, false — невалиден/исперпан/протух.
  */
 export async function consumeInvite(
   db: Db,
@@ -150,6 +175,11 @@ export async function consumeInvite(
     )
     .returning({ id: invites.id });
   return updated.length > 0;
+}
+
+/** Список инвайтов (админ-панель): свежие первыми. */
+export async function listInvites(db: Db): Promise<InviteRow[]> {
+  return db.select().from(invites).orderBy(desc(invites.id)).limit(100);
 }
 
 /* ---------- Профили ---------- */

@@ -1,0 +1,102 @@
+import Image from "next/image";
+
+/**
+ * Постеры: next/image (lazy/sizes/priority) для известных хостов,
+ * обычный <img> для остальных — свой storage за произвольным доменом
+ * не роняет рендер, если не попал в remotePatterns. Дополнительные
+ * домены задаются через NEXT_PUBLIC_EXTRA_IMAGE_HOSTS (через запятую).
+ */
+const EXTRA_HOSTS = (process.env.NEXT_PUBLIC_EXTRA_IMAGE_HOSTS ?? "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+const ALLOWED_HOSTS = new Set([
+  "image.tmdb.org",
+  "localhost:3001",
+  "127.0.0.1:3001",
+  "localhost:9000",
+  ...EXTRA_HOSTS,
+]);
+
+export function isOptimizableImageSrc(src: string): boolean {
+  try {
+    const u = new URL(src);
+    return (
+      (u.protocol === "https:" || u.protocol === "http:") &&
+      ALLOWED_HOSTS.has(u.host)
+    );
+  } catch {
+    return false;
+  }
+}
+
+export interface PosterImageProps {
+  src: string | null | undefined;
+  alt: string;
+  /** CSS-классы — что до <img>, что до next/image. */
+  className?: string;
+  /** sizes для next/image (например "(max-width: 640px) 50vw, 300px"). */
+  sizes?: string;
+  priority?: boolean;
+  /** fill=true требует position:relative у родителя. */
+  fill?: boolean;
+  width?: number;
+  height?: number;
+  /** Битый URL (404 на чужом CDN) — карточка покажет заглушку. */
+  onError?: () => void;
+}
+
+export function PosterImage({
+  src,
+  alt,
+  className,
+  sizes = "(max-width: 640px) 50vw, 16vw",
+  priority = false,
+  fill = true,
+  width,
+  height,
+  onError,
+}: PosterImageProps) {
+  if (!src) return null;
+  if (isOptimizableImageSrc(src)) {
+    if (fill) {
+      return (
+        <Image
+          src={src}
+          alt={alt}
+          fill
+          sizes={sizes}
+          priority={priority}
+          className={className}
+          onError={onError}
+        />
+      );
+    }
+    return (
+      <Image
+        src={src}
+        alt={alt}
+        width={width ?? 320}
+        height={height ?? 480}
+        sizes={sizes}
+        priority={priority}
+        className={className}
+        onError={onError}
+      />
+    );
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return (
+    <img
+      src={src}
+      alt={alt}
+      className={className}
+      width={width}
+      height={height}
+      loading={priority ? "eager" : "lazy"}
+      decoding="async"
+      onError={onError}
+    />
+  );
+}

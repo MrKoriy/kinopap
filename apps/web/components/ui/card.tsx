@@ -1,5 +1,5 @@
-import * as React from "react";
 import { cn } from "@zal/ui";
+import type * as React from "react";
 
 export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (

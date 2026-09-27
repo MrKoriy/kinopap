@@ -4,14 +4,15 @@
  * Один проход ffmpeg через -var_stream_map/agroup: видео-варианты
  * ссылаются на общую группу аудио, переключение дубляжа — на лету.
  */
-import { execFile } from "node:child_process";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-import { probeMedia, type FfmpegConfig } from "./probe";
-import { selectLadder, type Rung } from "./ladder";
-
-const execFileAsync = promisify(execFile);
+import { type Rung, selectLadder } from "./ladder";
+import {
+  DEFAULT_ENCODE_TIMEOUT_MS,
+  execWithTimeout,
+  type FfmpegConfig,
+  probeMedia,
+} from "./probe";
 
 export interface AudioRenditionInput {
   lang: string | null;
@@ -138,9 +139,13 @@ export async function transcodeToHls(
   const rungs = selectLadder(sourceHeight, opts.ladder);
   await mkdir(outDir, { recursive: true });
 
-  const args = ["-y", "-i", sourcePath];
-  for (const _ of rungs) args.push("-map", "0:v:0");
-  audios.forEach((_, i) => args.push("-map", `0:a:${i}`));
+  const args = ["-i", sourcePath];
+  for (const _ of rungs) {
+    args.push("-map", "0:v:0");
+  }
+  audios.forEach((_, i) => {
+    args.push("-map", `0:a:${i}`);
+  });
 
   args.push(
     "-c:v", "libx264",
@@ -148,7 +153,9 @@ export async function transcodeToHls(
     "-crf", String(opts.crf ?? 23),
     "-pix_fmt", "yuv420p",
   );
-  rungs.forEach((r, i) => args.push(`-filter:v:${i}`, `scale=-2:${r.height}`));
+  rungs.forEach((r, i) => {
+    args.push(`-filter:v:${i}`, `scale=-2:${r.height}`);
+  });
 
   if (audios.length) {
     const audioKbps = Math.max(...rungs.map((r) => r.audioBitrateKbps));
@@ -165,7 +172,20 @@ export async function transcodeToHls(
     path.join(outDir, "%v", "index.m3u8"),
   );
 
-  await execFileAsync(ffmpeg, args, { maxBuffer: 64 * 1024 * 1024 });
+  // Два часа фильма кодируются дольше часа: таймаут — от длительности,
+  // но не меньше базового (масштаб: 120 минут → ~4 часа потолка).
+  const timeoutMs = Math.max(
+    DEFAULT_ENCODE_TIMEOUT_MS,
+    opts.encodeTimeoutMs ?? 0,
+  );
+
+  // -nostats/-v warning: stderr без прогресс-строк — 64 МБ maxBuffer
+  // не переполняется на длинных кодированиях.
+  await execWithTimeout(
+    ffmpeg,
+    ["-y", "-nostats", "-v", "warning", ...args],
+    timeoutMs,
+  );
 
   const masterPlaylistPath = path.join(outDir, "master.m3u8");
 

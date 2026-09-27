@@ -1,7 +1,7 @@
-import * as React from "react";
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ItemDetail, ItemSummary, SpriteMetaDto } from "@zal/api-client";
+import type * as React from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // next/link тянет роутер Next — в компонентных тестах он не нужен.
 vi.mock("next/link", () => ({
@@ -12,9 +12,9 @@ vi.mock("next/link", () => ({
   ),
 }));
 
-import { PlayerControls } from "@/components/player/controls";
 import { ItemCard } from "@/components/item-card";
 import { ItemDetailView } from "@/components/item-detail";
+import { PlayerControls } from "@/components/player/controls";
 
 afterEach(cleanup);
 
@@ -90,9 +90,12 @@ describe("PlayerControls", () => {
     fireEvent.mouseMove(bar, { clientX: 50 });
     const preview = screen.getByTestId("scrub-preview");
     // 50% от 120с = 60с → тайл 5 (зажат по count=6): col=2, row=1.
+    // Тайл 160×90 растянут в превью 192×108 (×1.2): позиция и размер
+    // сетки обязаны масштабироваться одинаково — иначе превью съезжает.
     const tileDiv = preview.querySelector("div")!;
     expect(tileDiv.style.backgroundImage).toContain("sprite.jpg");
-    expect(tileDiv.style.backgroundPosition).toBe("-320px -90px");
+    expect(tileDiv.style.backgroundPosition).toBe("-384px -108px");
+    expect(tileDiv.style.backgroundSize).toBe("576px 216px");
   });
 
   it("меню аудиодорожек переключает дорожку", () => {
@@ -108,7 +111,9 @@ describe("PlayerControls", () => {
     fireEvent.click(screen.getByText("Русские"));
     expect(props.onSubtitle).toHaveBeenCalledWith(0);
 
+    // Выбор пункта закрывает меню — открываем снова, чтобы подстроить сдвиг.
     rerender(<PlayerControls {...props} activeSubtitle={0} shiftMs={200} />);
+    fireEvent.click(screen.getByTestId("menu-субтитры"));
     expect(screen.getByTestId("shift-value").textContent).toBe("0.2s");
     fireEvent.click(screen.getByTestId("shift-plus"));
     expect(props.onShift).toHaveBeenCalledWith(100);

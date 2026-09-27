@@ -1,14 +1,14 @@
-import type { FastifyInstance } from "fastify";
 import {
-  ingestRequestSchema,
   type IngestJobStatusDto,
+  ingestRequestSchema,
 } from "@zal/api-client";
 import {
   createIngestJob,
-  getIngestJob,
   type Db,
+  getIngestJob,
   type IngestJobRow,
 } from "@zal/db";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import type { IngestQueue } from "../ingest-queue";

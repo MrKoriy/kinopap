@@ -1,12 +1,12 @@
 "use client";
 
+import type { User } from "@zal/api-client";
 /**
  * Авторизация мобильного клиента: сессия в Keychain/Keystore,
  * состояние в контексте — как на вебе, только с асинхронным стартом.
  */
 import * as React from "react";
-import type { User } from "@zal/api-client";
-import { createMobileApi, restoreSession, type MobileApi } from "./api";
+import { createMobileApi, type MobileApi, restoreSession } from "./api";
 import { secureStorage } from "./secure-storage";
 
 interface AuthState {

@@ -1,15 +1,14 @@
 "use client";
 
-/** Карточка тайтла: постер, hover-оверлей с инфо и переходом к просмотру. */
-import * as React from "react";
-import Link from "next/link";
-import { motion } from "motion/react";
 import type { ItemSummary } from "@zal/api-client";
 import { cn } from "@zal/ui";
+import { Film } from "lucide-react";
+import Link from "next/link";
+/** Карточка тайтла: постер, hover-оверлей с инфо и переходом к просмотру. */
+import * as React from "react";
+import { PosterImage } from "@/components/poster-image";
 import { Badge } from "@/components/ui/badge";
 import { formatDuration } from "@/lib/format";
-
-import { Film } from "lucide-react";
 
 export function ItemCard({
   item,
@@ -31,15 +30,14 @@ export function ItemCard({
       )}
       data-testid="item-card"
     >
-      <div className="aspect-[2/3] w-full overflow-hidden bg-surface-2">
+      <div className="relative aspect-[2/3] w-full overflow-hidden bg-surface-2">
         {poster ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
+          <PosterImage
             src={poster}
             alt={item.title}
-            onError={() => setImgError(true)}
             className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
-            loading="lazy"
+            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 16vw"
+            onError={() => setImgError(true)}
           />
         ) : (
           <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-neutral-800 to-neutral-950 p-4 text-center">
@@ -60,11 +58,8 @@ export function ItemCard({
         </Badge>
       )}
 
-      <motion.div
-        initial={false}
-        whileHover={{ opacity: 1 }}
-        className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/70 to-transparent p-3 opacity-0 transition-opacity duration-300 group-hover:opacity-100"
-      >
+      {/* Оверлей — чистый CSS-hover: motion тут дублировал group-hover. */}
+      <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/70 to-transparent p-3 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
         <p className="text-sm font-semibold leading-tight text-white">{item.title}</p>
         <p className="mt-1 text-xs text-white/70">
           {[item.year, item.duration.average ? formatDuration(item.duration.average) : null]
@@ -77,7 +72,7 @@ export function ItemCard({
         <span className="mt-2 w-fit rounded-full bg-accent px-3 py-1 text-xs font-semibold text-white">
           Смотреть
         </span>
-      </motion.div>
+      </div>
     </Link>
   );
 }

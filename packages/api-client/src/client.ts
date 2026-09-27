@@ -2,60 +2,61 @@
  * Типизированный HTTP-клиент API «Зал».
  * Общий для web и mobile: пара fetch + базовый URL, ошибки — в ApiError.
  */
+
 import {
-  countriesResponseSchema,
-  genresResponseSchema,
-  itemDetailSchema,
-  itemPageSchema,
-  mediaLinksSchema,
-  typesResponseSchema,
-  type CatalogFilters,
-  type ItemDetail,
-  type ItemPage,
-  type MediaLinks,
-} from "./catalog";
-import {
+  type AuthResponse,
   authResponseSchema,
+  type LoginInput,
   loginSchema,
   logoutResponseSchema,
   meResponseSchema,
-  refreshResponseSchema,
-  registerSchema,
-  refreshSchema,
-  type AuthResponse,
-  type LoginInput,
   type RegisterInput,
+  refreshResponseSchema,
+  refreshSchema,
+  registerSchema,
   type Tokens,
   type User,
 } from "./auth";
 import {
-  ingestResponseSchema,
+  type CatalogFilters,
+  countriesResponseSchema,
+  genresResponseSchema,
+  type ItemDetail,
+  type ItemPage,
+  itemDetailSchema,
+  itemPageSchema,
+  type MediaLinks,
+  mediaLinksSchema,
+  typesResponseSchema,
+} from "./catalog";
+import type { ApiErrorBody, ItemType } from "./common";
+import { apiErrorSchema } from "./common";
+import {
+  type IngestRequest,
   ingestRequestSchema,
+  ingestResponseSchema,
+  type ProgressPut,
   progressListResponseSchema,
   progressPutSchema,
   progressResponseSchema,
-  type IngestRequest,
-  type ProgressPut,
 } from "./ingest";
 import {
+  type CommentPost,
+  type CommentPut,
   commentListResponseSchema,
   commentPostSchema,
   commentPutSchema,
   commentResponseSchema,
   itemSocialResponseSchema,
   newEpisodesResponseSchema,
+  type SubscriptionPut,
   subscriptionListResponseSchema,
   subscriptionPutSchema,
   subscriptionResponseSchema,
+  type VotePut,
   votePutSchema,
   voteResponseSchema,
-  type CommentPost,
-  type CommentPut,
-  type SubscriptionPut,
-  type VotePut,
 } from "./social";
-import type { ApiErrorBody, ItemType } from "./common";
-import { apiErrorSchema } from "./common";
 
 export class ApiError extends Error {
   constructor(
@@ -70,6 +71,8 @@ export class ApiError extends Error {
 export interface ApiClientOptions {
   baseUrl: string;
   fetch?: typeof fetch;
+  /** Веб: "include" — httpOnly-cookie с refresh-токеном ходит с запросами. */
+  credentials?: "include" | "same-origin" | "omit";
   /** Вызывается при 401 от защищённого запроса — шанс сделать refresh. */
   onUnauthorized?: () => Promise<void>;
 }
@@ -121,6 +124,8 @@ export function createApiClient(opts: ApiClientOptions) {
       query?: Record<string, unknown>;
       auth?: boolean;
       retryOn401?: boolean;
+      /** keepalive: запрос выживает выгрузку страницы (запись прогресса). */
+      keepalive?: boolean;
     } = {},
   ): Promise<T> {
     const headers: Record<string, string> = {};
@@ -131,6 +136,8 @@ export function createApiClient(opts: ApiClientOptions) {
       method: init.method ?? "GET",
       headers,
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+      keepalive: init.keepalive ?? false,
+      credentials: opts.credentials,
     });
 
     if (res.status === 401 && init.auth && init.retryOn401 !== false && opts.onUnauthorized) {
@@ -177,18 +184,24 @@ export function createApiClient(opts: ApiClientOptions) {
         body: input,
       });
     },
-    refresh: (input: { refreshToken: string }) => {
-      refreshSchema.parse(input);
+    /**
+     * Ротация refresh. Веб шлёт пустое тело — токен в httpOnly-cookie;
+     * мобила передаёт refreshToken (Keychain).
+     */
+    refresh: (input?: { refreshToken: string }) => {
+      if (input) refreshSchema.parse(input);
       return request("/v1/auth/refresh", refreshResponseSchema, {
         method: "POST",
         body: input,
       });
     },
-    logout: (input: { refreshToken: string }) =>
-      request("/v1/auth/logout", logoutResponseSchema, {
+    logout: (input?: { refreshToken: string }) => {
+      if (input) refreshSchema.parse(input);
+      return request("/v1/auth/logout", logoutResponseSchema, {
         method: "POST",
         body: input,
-      }),
+      });
+    },
     me: () => request("/v1/auth/me", meResponseSchema, { auth: true }),
 
     /* catalog */
@@ -233,6 +246,9 @@ export function createApiClient(opts: ApiClientOptions) {
         method: "PUT",
         body: input,
         auth: true,
+        // Прогресс пишется и из pagehide: браузер обрывает обычный fetch,
+        // keepalive (тело < 64КБ) доносит запись до API.
+        keepalive: true,
       });
     },
     listProgress: () =>

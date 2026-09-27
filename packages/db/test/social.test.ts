@@ -1,10 +1,7 @@
 /** Тесты социального слоя: подписки, лента новых серий, голоса, дерево комментариев. */
 import { describe, expect, it } from "vitest";
-import { createTestDb, seedFixtures } from "./helpers";
 import {
-  MAX_COMMENT_DEPTH,
   addComment,
-  listCommentsPage,
   countComments,
   createUser,
   deleteSubscription,
@@ -13,9 +10,11 @@ import {
   getVoteState,
   hashPassword,
   listComments,
+  listCommentsPage,
   listNewEpisodes,
-  media,
   listSubscriptions,
+  MAX_COMMENT_DEPTH,
+  media,
   removeVote,
   setVote,
   softDeleteComment,
@@ -23,6 +22,7 @@ import {
   upsertProgress,
   upsertSubscription,
 } from "../src/index";
+import { createTestDb, seedFixtures } from "./helpers";
 
 async function makeUser(db: Awaited<ReturnType<typeof createTestDb>>, email: string) {
   const user = await createUser(db, {

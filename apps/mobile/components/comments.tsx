@@ -1,5 +1,7 @@
 "use client";
 
+import type { CommentDto } from "@zal/api-client";
+import { tokens } from "@zal/ui";
 /**
  * Дерево комментариев: плоский список из API собирается в дерево на клиенте.
  * Ответы, правка и мягкое удаление — как на вебе.
@@ -12,8 +14,6 @@ import {
   TextInput,
   View,
 } from "react-native";
-import type { CommentDto } from "@zal/api-client";
-import { tokens } from "@zal/ui";
 import { useAuth } from "../lib/auth";
 import { buildCommentTree, type CommentNode } from "../lib/comment-tree";
 import { formatDate } from "../lib/format";

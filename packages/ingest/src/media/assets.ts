@@ -2,13 +2,26 @@
  * Ассеты плеера: тумбы (постер + периодические кадры), спрайт для
  * скраббинга и конвертация субтитров в WebVTT.
  */
-import { execFile } from "node:child_process";
 import { mkdir, readdir } from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
-import type { FfmpegConfig } from "./probe";
+import {
+  DEFAULT_ASSET_TIMEOUT_MS,
+  execWithTimeout,
+  type FfmpegConfig,
+} from "./probe";
 
-const execFileAsync = promisify(execFile);
+/** Все ассеты проходят с таймаутом: зависший ffmpeg не вешает воркер. */
+function runAsset(
+  cfg: FfmpegConfig,
+  args: string[],
+): Promise<{ stdout: string; stderr: string }> {
+  return execWithTimeout(
+    cfg.ffmpegPath ?? "ffmpeg",
+    ["-y", "-nostats", "-v", "warning", ...args],
+    cfg.assetTimeoutMs ?? DEFAULT_ASSET_TIMEOUT_MS,
+    32 * 1024 * 1024,
+  );
+}
 
 /**
  * fps=1/N не выдаёт кадров, если N больше длительности файла —
@@ -33,15 +46,14 @@ export async function generatePoster(
   outPath: string,
   cfg: FfmpegConfig & { seekSeconds?: number; width?: number } = {},
 ): Promise<void> {
-  await execFileAsync(cfg.ffmpegPath ?? "ffmpeg", [
-    "-y",
+  await runAsset(cfg, [
     "-ss", String(cfg.seekSeconds ?? 1),
     "-i", sourcePath,
     "-frames:v", "1",
     // out_range=full — mjpeg требует полного диапазона YUV.
     "-vf", `scale=w=${cfg.width ?? 640}:h=-2:out_range=full`,
     outPath,
-  ], { maxBuffer: 32 * 1024 * 1024 });
+  ]);
 }
 
 /** Тумбы: кадр каждые intervalSeconds в outDir/thumb_%03d.jpg. */
@@ -59,12 +71,11 @@ export async function generateThumbs(
     cfg.intervalSeconds ?? 5,
     cfg.durationSeconds ?? Number.MAX_SAFE_INTEGER,
   );
-  await execFileAsync(cfg.ffmpegPath ?? "ffmpeg", [
-    "-y",
+  await runAsset(cfg, [
     "-i", sourcePath,
     "-vf", `fps=1/${interval},scale=w=${cfg.width ?? 320}:h=-2:out_range=full`,
     path.join(outDir, "thumb_%03d.jpg"),
-  ], { maxBuffer: 32 * 1024 * 1024 });
+  ]);
   return (await readdir(outDir)).filter((f) => f.endsWith(".jpg")).sort().map((f) => path.join(outDir, f));
 }
 
@@ -93,13 +104,12 @@ export async function generateSprite(
   const columns = Math.ceil(Math.sqrt(count));
   const rows = Math.ceil(count / columns);
 
-  await execFileAsync(opts.ffmpegPath ?? "ffmpeg", [
-    "-y",
+  await runAsset(opts, [
     "-i", sourcePath,
     "-vf", `fps=1/${interval},scale=w=${tileWidth}:h=${tileHeight}:out_range=full,tile=${columns}x${rows}`,
     "-frames:v", "1",
     outPath,
-  ], { maxBuffer: 32 * 1024 * 1024 });
+  ]);
 
   return { intervalSeconds: interval, tileWidth, tileHeight, columns, rows, count };
 }
@@ -110,11 +120,7 @@ export async function convertSubtitlesToVtt(
   outputPath: string,
   cfg: FfmpegConfig = {},
 ): Promise<void> {
-  await execFileAsync(cfg.ffmpegPath ?? "ffmpeg", [
-    "-y",
-    "-i", inputPath,
-    outputPath,
-  ], { maxBuffer: 32 * 1024 * 1024 });
+  await runAsset(cfg, ["-i", inputPath, outputPath]);
 }
 
 /** Извлечь встроенный субтрек (по индексу) в WebVTT. */
@@ -124,10 +130,9 @@ export async function extractEmbeddedSubtitles(
   streamIndex: number,
   cfg: FfmpegConfig = {},
 ): Promise<void> {
-  await execFileAsync(cfg.ffmpegPath ?? "ffmpeg", [
-    "-y",
+  await runAsset(cfg, [
     "-i", sourcePath,
     "-map", `0:s:${streamIndex}`,
     outPath,
-  ], { maxBuffer: 32 * 1024 * 1024 });
+  ]);
 }

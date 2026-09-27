@@ -1,4 +1,5 @@
 import {
+  bigint,
   boolean,
   index,
   integer,
@@ -10,8 +11,8 @@ import {
   uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
-import { audioDubType } from "./enums";
 import { episodes, items } from "./catalog";
+import { audioDubType } from "./enums";
 
 /** Метаданные спрайта для скраббинга плеера. */
 export interface SpriteMeta {
@@ -44,11 +45,16 @@ export const media = pgTable(
     spriteMeta: jsonb("sprite_meta").$type<SpriteMeta | null>(),
     introStartSeconds: integer("intro_start_seconds"),
     introEndSeconds: integer("intro_end_seconds"),
+    /** Хэш источника: повторный ingest того же ref обновляет запись, не дублируя. */
+    sourceKey: varchar("source_key", { length: 64 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     index("media_item_idx").on(t.itemId),
     index("media_episode_idx").on(t.episodeId),
+    // getItem сортирует media по part_number — композит вместо сортировки.
+    index("media_item_part_idx").on(t.itemId, t.partNumber),
+    uniqueIndex("media_item_source_uq").on(t.itemId, t.sourceKey),
   ],
 );
 
@@ -66,7 +72,8 @@ export const mediaFiles = pgTable(
     height: integer("height").notNull(),
     codec: varchar("codec", { length: 16 }).notNull().default("h264"),
     bitrate: integer("bitrate"),
-    sizeBytes: integer("size_bytes"),
+    // bigint: 4K-ремуксы в 8-60 ГБ в integer (~2.1 ГБ) не влезают.
+    sizeBytes: bigint("size_bytes", { mode: "number" }),
     fileKey: text("file_key").notNull(),
     hlsKey: text("hls_key"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

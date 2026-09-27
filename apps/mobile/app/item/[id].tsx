@@ -1,5 +1,8 @@
 "use client";
 
+import type { Episode, ItemDetail, ItemSummary, MediaPart } from "@zal/api-client";
+import { tokens } from "@zal/ui";
+import { Link, useLocalSearchParams } from "expo-router";
 /** Карточка тайтла: инфо, голос/подписка, сезоны/эпизоды, комментарии. */
 import * as React from "react";
 import {
@@ -11,12 +14,9 @@ import {
   Text,
   View,
 } from "react-native";
-import { Link, useLocalSearchParams } from "expo-router";
-import type { Episode, ItemDetail, ItemSummary, MediaPart } from "@zal/api-client";
-import { tokens } from "@zal/ui";
 import { Comments } from "../../components/comments";
-import { ItemCard } from "../../components/item-card";
 import { ItemActions } from "../../components/item-actions";
+import { ItemCard } from "../../components/item-card";
 import { useTvFocus } from "../../components/tv-focus";
 import { useAuth } from "../../lib/auth";
 import { formatDuration } from "../../lib/format";

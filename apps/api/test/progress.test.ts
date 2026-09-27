@@ -1,9 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { progressResponseSchema, progressListResponseSchema } from "@zal/api-client";
+import { progressListResponseSchema, progressResponseSchema } from "@zal/api-client";
 import { users } from "@zal/db";
 import { eq } from "drizzle-orm";
-import { createTestApp } from "./setup";
+import { describe, expect, it } from "vitest";
 import { makeFixtures, makeOwnerWithInvite } from "./fixtures";
+import { createTestApp } from "./setup";
 
 async function registerUser(
   app: Awaited<ReturnType<typeof createTestApp>>,

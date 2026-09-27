@@ -19,6 +19,7 @@ import {
 } from "../src";
 
 const execFileAsync = promisify(execFile);
+
 import { makeTestMedia, makeTmpDir, TEST_FFMPEG, type TestMedia } from "./helpers";
 
 let media: TestMedia;

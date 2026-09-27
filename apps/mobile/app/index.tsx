@@ -1,5 +1,8 @@
 "use client";
 
+import type { ItemSummary } from "@zal/api-client";
+import { tokens } from "@zal/ui";
+import { Link, useRouter } from "expo-router";
 /**
  * Главная: горизонтальные ленты fresh/hot/popular из общего API,
  * входы в поиск и подписки, состояние авторизации.
@@ -14,9 +17,6 @@ import {
   Text,
   View,
 } from "react-native";
-import { Link, useRouter } from "expo-router";
-import type { ItemSummary } from "@zal/api-client";
-import { tokens } from "@zal/ui";
 import { ItemCard } from "../components/item-card";
 import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";

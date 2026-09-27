@@ -1,4 +1,3 @@
-import { pgEnum } from "drizzle-orm/pg-core";
 import {
   AUDIO_DUB_TYPES,
   GENRE_TYPES,
@@ -7,6 +6,7 @@ import {
   USER_ROLES,
   WATCH_STATUSES,
 } from "@zal/api-client";
+import { pgEnum } from "drizzle-orm/pg-core";
 
 // Значения enum'ов живут в @zal/api-client (контракт API) — единый источник правды.
 export const itemType = pgEnum("item_type", [...ITEM_TYPES]);

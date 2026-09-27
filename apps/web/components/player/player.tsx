@@ -1,19 +1,20 @@
 "use client";
 
+import type { MediaLinks, SpriteMetaDto } from "@zal/api-client";
+import type HlsJs from "hls.js";
 /**
  * Плеер «Зал»: hls.js + собственный UI. Аудиодорожки, субтитры со сдвигом,
  * резюме просмотра, пропуск интро, автоследующая серия, хоткеи, PiP.
+ * hls.js грузится динамически: браузеры с нативным HLS не тянут ~150КБ в чанк.
  */
 import * as React from "react";
-import Hls from "hls.js";
-import type { MediaLinks, SpriteMetaDto } from "@zal/api-client";
 import { useAuth } from "@/lib/auth";
 import {
   activeCues,
   isIntroVisible,
   isNearEnd,
   parseVtt,
-  type VttCue,
+  type SubtitleCue as VttCue,
 } from "@/lib/player-logic";
 import { PlayerControls } from "./controls";
 
@@ -41,10 +42,10 @@ const PROGRESS_INTERVAL_MS = 10_000;
 const MIN_REPORT_SECONDS = 5;
 
 export function Player({ links, title, next }: PlayerProps) {
-  const { api, tokens } = useAuth();
+  const { api, isAuthed } = useAuth();
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
-  const hlsRef = React.useRef<Hls | null>(null);
+  const hlsRef = React.useRef<HlsJs | null>(null);
   const resumeDone = React.useRef(false);
 
   const [playing, setPlaying] = React.useState(false);
@@ -70,6 +71,9 @@ export function Player({ links, title, next }: PlayerProps) {
   const sprites: SpriteMetaDto | null = links.sprites;
 
   /* ---------- Инициализация потока (HLS или прямой HTTP Range) ---------- */
+  const activeAudioRef = React.useRef(0);
+  activeAudioRef.current = activeAudio;
+
   React.useEffect(() => {
     const video = videoRef.current;
     if (!video || !streamUrl) return;
@@ -78,31 +82,66 @@ export function Player({ links, title, next }: PlayerProps) {
     setIsBuffering(true);
 
     const isHls = streamUrl.includes(".m3u8") || Boolean(activeFile?.urls.hls);
+    // MSE доступен → грузим hls.js динамически; нативный HLS (iOS Safari)
+    // играет напрямую, не скачивая ~150КБ библиотеки.
+    const canMse = typeof MediaSource !== "undefined";
 
-    if (isHls && Hls.isSupported()) {
-      const hls = new Hls({ enableWorker: true });
-      hlsRef.current = hls;
-      hls.loadSource(streamUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        setIsBuffering(false);
-      });
-      hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal) {
+    let cancelled = false;
+    let hls: HlsJs | null = null;
+
+    void (async () => {
+      if (isHls && canMse) {
+        const { default: Hls } = await import("hls.js");
+        if (cancelled) return;
+        hls = new Hls({
+          enableWorker: true,
+          // Буфер: вперед до 2 минут, позади минута — на хорошем канале
+          // hls.js должен напарываться вперёд, а не доигрывать по сегменту.
+          maxBufferLength: 30,
+          maxMaxBufferLength: 120,
+          backBufferLength: 60,
+          // Оптимистичная стартовая оценка канала (2.5 Мбит/с) — иначе ABR
+          // после старта держит 480p и повышает качество медленно.
+          abrEwmaDefaultEstimate: 2_500_000,
+        });
+        hlsRef.current = hls;
+        hls.loadSource(streamUrl);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          setIsBuffering(false);
+          // После смены качества дорожка сбрасывается на дефолтную —
+          // восстанавливаем выбранную пользователем.
+          if (hls && hls.audioTracks.length > 1 && activeAudioRef.current > 0) {
+            hls.audioTrack = activeAudioRef.current;
+          }
+        });
+        hls.on(Hls.Events.ERROR, (_e, data) => {
+          if (!data.fatal || !hls) return;
+          // Транзиентные сбои — норма для торрента-стрима: один блып не должен
+          // вешать плеер до перезагрузки страницы.
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad();
+            return;
+          }
+          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+            return;
+          }
           setIsBuffering(false);
           setError(`Ошибка воспроизведения HLS: ${data.details}`);
-        }
-      });
-      return () => {
-        hls.destroy();
-        hlsRef.current = null;
-      };
-    }
+        });
+        return;
+      }
 
-    // Safari или прямой HTTP Range-стрим (TorrServer / MP4)
-    video.src = streamUrl;
-    video.load();
+      // Safari или прямой HTTP Range-стрим (TorrServer / MP4)
+      video.src = streamUrl;
+      video.load();
+    })();
+
     return () => {
+      cancelled = true;
+      hls?.destroy();
+      hlsRef.current = null;
       video.removeAttribute("src");
     };
   }, [streamUrl, activeFile]);
@@ -201,7 +240,7 @@ export function Player({ links, title, next }: PlayerProps) {
   /* ---------- Резюме: стартуем с сохранённой позиции ---------- */
   React.useEffect(() => {
     const video = videoRef.current;
-    if (!video || !tokens || resumeDone.current) return;
+    if (!video || !isAuthed || resumeDone.current) return;
     resumeDone.current = true;
     void api
       .getProgress(links.mediaId)
@@ -216,19 +255,19 @@ export function Player({ links, title, next }: PlayerProps) {
         }
       })
       .catch(() => {});
-  }, [api, tokens, links.mediaId]);
+  }, [api, isAuthed, links.mediaId]);
 
   /* ---------- Прогресс: пишем периодически и на паузе ---------- */
   const reportProgress = React.useCallback(() => {
     const video = videoRef.current;
-    if (!video || !tokens || !video.duration) return;
+    if (!video || !isAuthed || !video.duration) return;
     void api
       .saveProgress(links.mediaId, {
         positionSeconds: video.currentTime,
         durationSeconds: video.duration,
       })
       .catch(() => {});
-  }, [api, tokens, links.mediaId]);
+  }, [api, isAuthed, links.mediaId]);
 
   React.useEffect(() => {
     if (!playing) return;
@@ -369,9 +408,11 @@ export function Player({ links, title, next }: PlayerProps) {
           togglePlay();
           break;
         case "arrowright":
+          e.preventDefault();
           seek((videoRef.current?.currentTime ?? 0) + 5);
           break;
         case "arrowleft":
+          e.preventDefault();
           seek((videoRef.current?.currentTime ?? 0) - 5);
           break;
         case "l":
@@ -423,6 +464,8 @@ export function Player({ links, title, next }: PlayerProps) {
   ]);
 
   /* ---------- Автоскрытие контролов ---------- */
+  // Раньше currentTime был в deps: таймаут пересоздавался на каждом
+  // timeupdate (~4 раза в секунду) и никогда не срабатывал.
   React.useEffect(() => {
     if (!playing) {
       setControlsVisible(true);
@@ -430,13 +473,44 @@ export function Player({ links, title, next }: PlayerProps) {
     }
     const id = window.setTimeout(() => setControlsVisible(false), 3000);
     return () => window.clearTimeout(id);
-  }, [playing, currentTime]);
+  }, [playing]);
 
   React.useEffect(() => {
     const onFs = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener("fullscreenchange", onFs);
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
+
+  /* ---------- Живое превью при перемотке (стримы без спрайта) ---------- */
+  // Для zero-storage стримов спрайта нет: второй <video> с SEEK по позиции
+  // курсора рисует реальный кадр (Range-запросы к TorrServer).
+  const previewVideoRef = React.useRef<HTMLVideoElement | null>(null);
+  const previewSrc =
+    sprites || !activeFile || activeFile.urls.hls ? null : activeFile.urls.http;
+
+  const handleScrubTime = React.useCallback((t: number | null) => {
+    const pv = previewVideoRef.current;
+    if (!pv || t == null || !Number.isFinite(t)) return;
+    // Сики с шагом от 0.8с — не спамим торрсервер рейндж-запросами.
+    if (Math.abs(pv.currentTime - t) > 0.8 && t > 0) {
+      try {
+        pv.currentTime = t;
+      } catch {
+        // Метаданные ещё не готовы — молча пропускаем этот тик.
+      }
+    }
+  }, []);
+
+  const scrubPreview = previewSrc ? (
+    <video
+      ref={previewVideoRef}
+      src={previewSrc}
+      muted
+      playsInline
+      preload="metadata"
+      className="h-full w-full object-cover"
+    />
+  ) : null;
 
   const activeCueList = activeCues(cues, currentTime, shiftMs);
   const introVisible = isIntroVisible(currentTime, links.intro);
@@ -454,6 +528,8 @@ export function Player({ links, title, next }: PlayerProps) {
         className="aspect-video w-full bg-black"
         onClick={togglePlay}
         playsInline
+        preload="auto"
+        aria-label={title}
         data-testid="player-video"
       />
 
@@ -477,6 +553,7 @@ export function Player({ links, title, next }: PlayerProps) {
       {/* Пропустить интро */}
       {introVisible && (
         <button
+          type="button"
           className="absolute bottom-28 right-6 rounded-full bg-white/90 px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-white"
           onClick={() => seek(links.intro!.endSeconds)}
           data-testid="skip-intro"
@@ -493,6 +570,7 @@ export function Player({ links, title, next }: PlayerProps) {
         >
           <p className="mb-2 text-sm text-muted">Следующая серия</p>
           <button
+            type="button"
             className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
             onClick={() => {
               reportProgress();
@@ -534,6 +612,7 @@ export function Player({ links, title, next }: PlayerProps) {
                     Открыть в VLC
                   </a>
                   <button
+                    type="button"
                     onClick={() => {
                       if (streamUrl) {
                         navigator.clipboard.writeText(streamUrl);
@@ -577,6 +656,8 @@ export function Player({ links, title, next }: PlayerProps) {
           onQuality={changeQuality}
           sprites={sprites}
           spriteUrl={sprites?.url ?? null}
+          scrubPreview={scrubPreview}
+          onScrubTime={handleScrubTime}
           isFullscreen={isFullscreen}
           onTogglePlay={togglePlay}
           onSeek={seek}

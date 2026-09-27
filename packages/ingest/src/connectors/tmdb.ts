@@ -43,7 +43,10 @@ export class TmdbEnricher implements MetadataEnricher {
       url.searchParams.set(isTv ? "first_air_date_year" : "year", String(query.year));
     }
 
-    const res = await (this.opts.fetch ?? fetch)(url);
+    // Без таймаута зависший TMDb фейлил уже опубликованную задачу.
+    const res = await (this.opts.fetch ?? fetch)(url, {
+      signal: AbortSignal.timeout(8000),
+    });
     if (!res.ok) throw new Error(`tmdb: HTTP ${res.status}`);
     const data = (await res.json()) as { results?: TmdbSearchResult[] };
 

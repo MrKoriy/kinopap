@@ -6,9 +6,10 @@
  * нативный фокус Android: `focusable` + onFocus/onBlur. На телефоне это ничего
  * не ломает — там фокус никого не касается, а тач работает как раньше.
  */
-import * as React from "react";
-import { StyleSheet, type StyleProp, type ViewStyle } from "react-native";
+
 import { tokens } from "@zal/ui";
+import * as React from "react";
+import { type StyleProp, StyleSheet, type ViewStyle } from "react-native";
 
 export interface TvFocusState {
   focused: boolean;

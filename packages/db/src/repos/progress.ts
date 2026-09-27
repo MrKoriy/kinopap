@@ -3,8 +3,9 @@
  * Профиль — на будущее (переключение профилей в фазе 4), сейчас
  * используется дефолтный профиль пользователя.
  */
-import { and, desc, eq, sql } from "drizzle-orm";
+
 import type { WatchStatus } from "@zal/api-client";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { items, media, profiles, users, watchProgress } from "../schema/index";
 
@@ -21,11 +22,23 @@ export async function getDefaultProfile(db: Db, userId: number) {
   if (existing[0]) return existing[0];
 
   const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-  const [row] = await db
+  const name = user[0]?.name ?? "Profile";
+  // onConflictDoNothing: два параллельных запроса (гонка unique по
+  // userId+name) не валятся 500-й — проигравший перечитывает строку.
+  const [created] = await db
     .insert(profiles)
-    .values({ userId, name: user[0]?.name ?? "Profile" })
+    .values({ userId, name })
+    .onConflictDoNothing({ target: [profiles.userId, profiles.name] })
     .returning();
-  return row!;
+  if (created) return created;
+
+  const retry = await db
+    .select()
+    .from(profiles)
+    .where(eq(profiles.userId, userId))
+    .orderBy(profiles.id)
+    .limit(1);
+  return retry[0]!;
 }
 
 export async function getProgress(
@@ -57,24 +70,11 @@ export async function upsertProgress(
   const ratio =
     input.durationSeconds > 0 ? input.positionSeconds / input.durationSeconds : 0;
   const status: WatchStatus = ratio >= 0.95 ? "watched" : "in_progress";
+  const now = new Date();
 
-  const existing = await getProgress(db, input.profileId, input.mediaId);
-  if (existing) {
-    const [row] = await db
-      .update(watchProgress)
-      .set({
-        positionSeconds: Math.round(input.positionSeconds),
-        durationSeconds: Math.round(input.durationSeconds),
-        status,
-        completedAt: status === "watched" ? new Date() : existing.completedAt,
-        updatedAt: new Date(),
-      })
-      .where(eq(watchProgress.id, existing.id))
-      .returning();
-    return row!;
-  }
-
-  const [row] = await db
+  // onConflictDoNothing: два устройства, пишущие позицию одновременно,
+  // раньше устраивали гонку SELECT→INSERT и unique-нарушение → 500.
+  const inserted = await db
     .insert(watchProgress)
     .values({
       profileId: input.profileId,
@@ -84,14 +84,33 @@ export async function upsertProgress(
       durationSeconds: Math.round(input.durationSeconds),
       status,
     })
+    .onConflictDoNothing({
+      target: [watchProgress.profileId, watchProgress.mediaId],
+    })
     .returning();
 
-  // Первый прогресс по media = состоявшийся просмотр (счётчик для «горячих»).
-  await db
-    .update(items)
-    .set({ views: sql`${items.views} + 1` })
-    .where(eq(items.id, input.itemId));
+  if (inserted[0]) {
+    // Первый прогресс по media = состоявшийся просмотр (счётчик для «горячих»).
+    await db
+      .update(items)
+      .set({ views: sql`${items.views} + 1` })
+      .where(eq(items.id, input.itemId));
+    return inserted[0];
+  }
 
+  const [row] = await db
+    .update(watchProgress)
+    .set({
+      positionSeconds: Math.round(input.positionSeconds),
+      durationSeconds: Math.round(input.durationSeconds),
+      status,
+      completedAt: status === "watched" ? now : undefined,
+      updatedAt: now,
+    })
+    .where(
+      and(eq(watchProgress.profileId, input.profileId), eq(watchProgress.mediaId, input.mediaId)),
+    )
+    .returning();
   return row!;
 }
 
