@@ -45,6 +45,7 @@ export default function WatchScreen() {
   const [current, setCurrent] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
   const [playing, setPlaying] = React.useState(false);
+  const [barWidth, setBarWidth] = React.useState(0);
 
   const resumeRef = React.useRef(0);
   const appliedResumeRef = React.useRef(false);
@@ -235,9 +236,10 @@ export default function WatchScreen() {
           <Text style={styles.time}>{formatTime(current)}</Text>
           <Pressable
             style={styles.seekbar}
+            onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
             onPress={(e) => {
-              if (!duration) return;
-              const ratio = Math.max(0, Math.min(1, e.nativeEvent.locationX / 320));
+              if (!duration || barWidth <= 0) return;
+              const ratio = Math.max(0, Math.min(1, e.nativeEvent.locationX / barWidth));
               player.currentTime = ratio * duration;
               setCurrent(player.currentTime);
             }}
