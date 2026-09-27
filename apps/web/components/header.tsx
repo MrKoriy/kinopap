@@ -7,9 +7,28 @@ import * as React from "react";
 import { useAuth } from "@/lib/auth";
 
 export function Header() {
-  const { user, logout } = useAuth();
+  const { user, api, logout } = useAuth();
   const router = useRouter();
   const [query, setQuery] = React.useState("");
+  const [unread, setUnread] = React.useState(0);
+
+  // Badge непросмотренных новинок по подпискам.
+  React.useEffect(() => {
+    if (!user) {
+      setUnread(0);
+      return;
+    }
+    let cancelled = false;
+    api.getNewEpisodes().then(
+      (res: { total: number }) => {
+        if (!cancelled) setUnread(res.total);
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [user, api]);
 
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur">
@@ -57,10 +76,18 @@ export function Header() {
           <div className="flex items-center gap-3">
             <Link
               href="/subscriptions"
-              className="text-sm text-muted transition hover:text-white"
+              className="relative text-sm text-muted transition hover:text-white"
               data-testid="subs-link"
             >
               Подписки
+              {unread > 0 && (
+                <span
+                  className="absolute -right-3 -top-2 rounded-full bg-accent px-1.5 text-xs font-semibold text-white"
+                  data-testid="subs-badge"
+                >
+                  {unread}
+                </span>
+              )}
             </Link>
             <span className="text-sm text-white" data-testid="header-user">
               {user.name ?? user.email}

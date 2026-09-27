@@ -2,7 +2,8 @@
 
 /**
  * Дерево комментариев: плоский список из API собирается в дерево на клиенте.
- * Ответы вкладываются до MAX_COMMENT_DEPTH, удалённые узлы остаются в ветке.
+ * Страницы — корневые ветки целиком (со всеми ответами), «показать ещё»
+ * догружает следующие. Удалённые узлы остаются в ветке.
  */
 import * as React from "react";
 import type { CommentDto } from "@zal/api-client";
@@ -27,14 +28,16 @@ export function buildCommentTree(flat: CommentDto[]): TreeNode[] {
   return roots;
 }
 
-interface ReplyFormProps {
+interface BodyFormProps {
   onSubmit: (body: string) => Promise<void>;
   onCancel: () => void;
   testId: string;
+  label: string;
+  initial?: string;
 }
 
-function ReplyForm({ onSubmit, onCancel, testId }: ReplyFormProps) {
-  const [body, setBody] = React.useState("");
+function BodyForm({ onSubmit, onCancel, testId, label, initial = "" }: BodyFormProps) {
+  const [body, setBody] = React.useState(initial);
   const [busy, setBusy] = React.useState(false);
 
   return (
@@ -59,7 +62,7 @@ function ReplyForm({ onSubmit, onCancel, testId }: ReplyFormProps) {
         rows={2}
         value={body}
         onChange={(e) => setBody(e.target.value)}
-        placeholder="Ваш ответ…"
+        placeholder="Ваш комментарий…"
         data-testid={`${testId}-input`}
       />
       <button
@@ -68,7 +71,7 @@ function ReplyForm({ onSubmit, onCancel, testId }: ReplyFormProps) {
         className="self-end rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-accent-hover disabled:opacity-50"
         data-testid={`${testId}-submit`}
       >
-        Ответить
+        {label}
       </button>
       <button
         type="button"
@@ -85,11 +88,13 @@ interface CommentNodeProps {
   node: TreeNode;
   currentUserId: number | null;
   onReply: (parentId: number, body: string) => Promise<void>;
+  onEdit: (id: number, body: string) => Promise<void>;
   onDelete: (id: number) => Promise<void>;
 }
 
-function CommentNode({ node, currentUserId, onReply, onDelete }: CommentNodeProps) {
+function CommentNode({ node, currentUserId, onReply, onEdit, onDelete }: CommentNodeProps) {
   const [replying, setReplying] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
   const { comment, children } = node;
   const own = currentUserId != null && comment.author.id === currentUserId;
 
@@ -104,17 +109,28 @@ function CommentNode({ node, currentUserId, onReply, onDelete }: CommentNodeProp
             {comment.author.name}
           </span>
           <span className="text-xs text-muted">{formatDate(comment.createdAt)}</span>
+          {comment.updatedAt !== comment.createdAt && (
+            <span className="text-xs text-muted">(изменён)</span>
+          )}
         </div>
         {comment.deleted ? (
           <p className="mt-1 text-sm italic text-muted" data-testid="comment-deleted">
             Комментарий удалён
           </p>
+        ) : editing ? (
+          <BodyForm
+            testId="edit-form"
+            label="Сохранить"
+            initial={comment.body}
+            onCancel={() => setEditing(false)}
+            onSubmit={(body) => onEdit(comment.id, body)}
+          />
         ) : (
           <p className="mt-1 whitespace-pre-wrap break-words text-sm text-white/90" data-testid="comment-body">
             {comment.body}
           </p>
         )}
-        {!comment.deleted && (
+        {!comment.deleted && !editing && (
           <div className="mt-2 flex gap-3 text-xs">
             <button
               className="text-muted transition hover:text-white"
@@ -123,6 +139,15 @@ function CommentNode({ node, currentUserId, onReply, onDelete }: CommentNodeProp
             >
               Ответить
             </button>
+            {own && (
+              <button
+                className="text-muted transition hover:text-white"
+                onClick={() => setEditing(true)}
+                data-testid="edit-comment"
+              >
+                Редактировать
+              </button>
+            )}
             {own && (
               <button
                 className="text-muted transition hover:text-red-400"
@@ -135,8 +160,9 @@ function CommentNode({ node, currentUserId, onReply, onDelete }: CommentNodeProp
           </div>
         )}
         {replying && (
-          <ReplyForm
+          <BodyForm
             testId="reply-form"
+            label="Ответить"
             onCancel={() => setReplying(false)}
             onSubmit={(body) => onReply(comment.id, body)}
           />
@@ -150,6 +176,7 @@ function CommentNode({ node, currentUserId, onReply, onDelete }: CommentNodeProp
               node={child}
               currentUserId={currentUserId}
               onReply={onReply}
+              onEdit={onEdit}
               onDelete={onDelete}
             />
           ))}
@@ -164,15 +191,19 @@ export function Comments({ itemId }: { itemId: number }) {
   const api = auth?.api ?? null;
   const user = auth?.user ?? null;
   const [flat, setFlat] = React.useState<CommentDto[]>([]);
+  const [nextOffset, setNextOffset] = React.useState<number | null>(null);
+  const [total, setTotal] = React.useState(0);
   const [loaded, setLoaded] = React.useState(false);
 
   React.useEffect(() => {
     if (!api) return;
     let cancelled = false;
     api.listComments(itemId).then(
-      (res) => {
+      (res: { items: CommentDto[]; nextOffset: number | null; total: number }) => {
         if (!cancelled) {
           setFlat(res.items);
+          setNextOffset(res.nextOffset);
+          setTotal(res.total);
           setLoaded(true);
         }
       },
@@ -190,8 +221,18 @@ export function Comments({ itemId }: { itemId: number }) {
       if (!api) return;
       const res = await api.postComment(itemId, { body, parentId });
       setFlat((prev) => [...prev, res.comment]);
+      if (parentId === null) setTotal((t) => t + 1);
     },
     [api, itemId],
+  );
+
+  const edit = React.useCallback(
+    async (id: number, body: string) => {
+      if (!api) return;
+      const res = await api.editComment(id, { body });
+      setFlat((prev) => prev.map((c) => (c.id === id ? res.comment : c)));
+    },
+    [api],
   );
 
   const remove = React.useCallback(
@@ -203,20 +244,35 @@ export function Comments({ itemId }: { itemId: number }) {
         prev.map((c) => (c.id === id ? { ...c, deleted: true, body: "" } : c)),
       );
     },
-    [api, itemId],
+    [api],
   );
+
+  const loadMore = React.useCallback(async () => {
+    if (!api || nextOffset == null) return;
+    const res = await api.listComments(itemId, { offset: nextOffset });
+    // Страхуемся от дублей при гонках.
+    setFlat((prev) => {
+      const seen = new Set(prev.map((c) => c.id));
+      return [...prev, ...res.items.filter((c) => !seen.has(c.id))];
+    });
+    setNextOffset(res.nextOffset);
+  }, [api, itemId, nextOffset]);
 
   const tree = buildCommentTree(flat);
 
   return (
     <section className="mt-12" data-testid="comments">
       <h2 className="mb-4 text-xl font-bold text-white">
-        Комментарии <span className="text-muted" data-testid="comments-count">({flat.filter((c) => !c.deleted).length})</span>
+        Комментарии{" "}
+        <span className="text-muted" data-testid="comments-total">
+          ({total} {total === 1 ? "ветка" : total < 5 ? "ветки" : "веток"})
+        </span>
       </h2>
 
       {user && api ? (
-        <ReplyForm
+        <BodyForm
           testId="comment-form"
+          label="Отправить"
           onCancel={() => {}}
           onSubmit={(body) => add(null, body)}
         />
@@ -242,10 +298,21 @@ export function Comments({ itemId }: { itemId: number }) {
             node={node}
             currentUserId={user?.id ?? null}
             onReply={add}
+            onEdit={edit}
             onDelete={remove}
           />
         ))}
       </ul>
+
+      {nextOffset != null && (
+        <button
+          className="mt-4 rounded-full border border-border bg-surface-2 px-4 py-1.5 text-sm text-muted transition hover:text-white"
+          onClick={() => void loadMore()}
+          data-testid="comments-more"
+        >
+          Показать ещё
+        </button>
+      )}
     </section>
   );
 }

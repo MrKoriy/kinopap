@@ -1,5 +1,13 @@
+import Link from "next/link";
 import { fetchSearch } from "@/lib/api";
 import { ItemCard } from "@/components/item-card";
+
+const FIELDS = [
+  { id: "", title: "Везде" },
+  { id: "title", title: "Название" },
+  { id: "director", title: "Режиссёр" },
+  { id: "cast", title: "Актёры" },
+] as const;
 
 export const revalidate = 0;
 
@@ -17,6 +25,23 @@ export default async function SearchPage({
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
+      <div className="mb-6 flex flex-wrap gap-2" data-testid="search-fields">
+        {FIELDS.map((f) => (
+          <Link
+            key={f.id}
+            href={`/search?q=${encodeURIComponent(query)}${f.id ? `&field=${f.id}` : ""}`}
+            className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+              (fieldParam ?? "") === f.id
+                ? "bg-accent text-white"
+                : "bg-surface-2 text-muted hover:text-white"
+            }`}
+            data-testid={`search-field-${f.id || "all"}`}
+          >
+            {f.title}
+          </Link>
+        ))}
+      </div>
+
       <h1 className="mb-6 text-2xl font-bold text-white" data-testid="search-title">
         {query ? (
           <>

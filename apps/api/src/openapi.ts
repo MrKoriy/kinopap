@@ -18,6 +18,7 @@ import {
   mediaLinksSchema,
   commentListResponseSchema,
   commentPostSchema,
+  commentPutSchema,
   commentResponseSchema,
   commentSchema,
   itemSocialResponseSchema,
@@ -189,8 +190,12 @@ export function buildOpenApiSpec(): Record<string, unknown> {
       },
       "/v1/items/{id}/comments": {
         get: {
-          summary: "Комментарии тайтла (плоский список, дерево на клиенте)",
-          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          summary: "Комментарии тайтла: страница веток целиком, дерево на клиенте",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "limit", in: "query", schema: { type: "integer", default: 20 }, description: "веток на страницу" },
+            { name: "offset", in: "query", schema: { type: "integer", default: 0 } },
+          ],
           responses: { 200: jsonBody("CommentListResponse"), 404: errorResponse },
         },
         post: {
@@ -207,6 +212,18 @@ export function buildOpenApiSpec(): Record<string, unknown> {
         },
       },
       "/v1/comments/{id}": {
+        put: {
+          summary: "Редактирование комментария (только автор)",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: jsonBody("CommentPut"),
+          responses: {
+            200: jsonBody("CommentResponse"),
+            401: errorResponse,
+            403: errorResponse,
+            404: errorResponse,
+          },
+        },
         delete: {
           summary: "Мягкое удаление комментария (автор или admin/owner)",
           security: [{ bearerAuth: [] }],
@@ -394,6 +411,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
         OkResponse: { type: "object", properties: { ok: { type: "boolean" } } },
         Comment: z.toJSONSchema(commentSchema),
         CommentPost: z.toJSONSchema(commentPostSchema),
+        CommentPut: z.toJSONSchema(commentPutSchema),
         CommentResponse: z.toJSONSchema(commentResponseSchema),
         CommentListResponse: z.toJSONSchema(commentListResponseSchema),
         VoteState: z.toJSONSchema(voteStateSchema),

@@ -70,7 +70,7 @@ export default function SubscriptionsPage() {
         <h2 className="mb-4 text-xl font-semibold text-white">Новые серии</h2>
         {loaded && episodes.length === 0 && (
           <p className="text-sm text-muted" data-testid="feed-empty">
-            Новых серий нет — всё просмотрено или подписок пока нет.
+            Нового нет — всё просмотрено или подписок пока нет.
           </p>
         )}
         <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
@@ -82,12 +82,18 @@ export default function SubscriptionsPage() {
                 data-testid="new-episode-row"
               >
                 <span className="text-sm font-semibold text-accent">
-                  S{ep.seasonNumber}E{ep.episodeNumber}
+                  {ep.kind === "episode"
+                    ? `S${ep.seasonNumber}E${ep.episodeNumber}`
+                    : `Часть ${ep.partNumber}`}
                 </span>
                 <span className="flex-1">
                   <span className="block text-sm text-white">
                     {ep.itemTitle}
-                    {ep.episodeTitle ? ` — ${ep.episodeTitle}` : ""}
+                    {ep.kind === "episode" && ep.episodeTitle
+                      ? ` — ${ep.episodeTitle}`
+                      : ep.title
+                        ? ` — ${ep.title}`
+                        : ""}
                   </span>
                   <span className="text-xs text-muted">{formatDate(ep.publishedAt)}</span>
                 </span>

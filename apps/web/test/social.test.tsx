@@ -10,10 +10,19 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/auth", () => ({
   useOptionalAuth: () => mocks.auth,
+  useAuth: () => {
+    if (!mocks.auth) throw new Error("useAuth must be used within AuthProvider");
+    return mocks.auth;
+  },
+}));
+
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: vi.fn() }),
 }));
 
 import { Comments, buildCommentTree } from "@/components/comments";
 import { ItemActions } from "@/components/item-actions";
+import { Header } from "@/components/header";
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -32,6 +41,7 @@ function makeComment(over: Partial<CommentDto> = {}): CommentDto {
     deleted: false,
     author: { id: 7, name: "fan" },
     createdAt: "2026-09-01T12:00:00.000Z",
+    updatedAt: "2026-09-01T12:00:00.000Z",
     ...over,
   };
 }
@@ -47,14 +57,17 @@ function makeSocial(over: Partial<ItemSocialDto> = {}): ItemSocialDto {
 
 function makeApi(over: Record<string, unknown> = {}) {
   return {
-    listComments: vi.fn().mockResolvedValue({ items: [] }),
+    listComments: vi.fn().mockResolvedValue({ items: [], nextOffset: null, total: 0 }),
     postComment: vi.fn(),
+    editComment: vi.fn(),
     deleteComment: vi.fn().mockResolvedValue({ ok: true }),
     getItemSocial: vi.fn().mockResolvedValue({ social: makeSocial() }),
     setVote: vi.fn(),
     clearVote: vi.fn(),
     subscribe: vi.fn(),
     unsubscribe: vi.fn(),
+    getNewEpisodes: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+    listSubscriptions: vi.fn().mockResolvedValue({ items: [] }),
     ...over,
   } as Record<string, ReturnType<typeof vi.fn>>;
 }
@@ -78,6 +91,8 @@ describe("Comments", () => {
           makeComment({ id: 1, body: "Корень" }),
           makeComment({ id: 2, parentId: 1, depth: 1, body: "Ответ", author: { id: 8, name: "other" } }),
         ],
+        nextOffset: null,
+        total: 1,
       }),
     });
     mocks.auth = { user, api };
@@ -89,6 +104,57 @@ describe("Comments", () => {
     // Ответ вложен в узел корня (второй ul внутри первого li).
     const items = screen.getAllByTestId("comment-item");
     expect(items[0]!.contains(items[1]!)).toBe(true);
+  });
+
+  it("редактирование меняет текст на месте", async () => {
+    const api = makeApi({
+      listComments: vi.fn().mockResolvedValue({
+        items: [makeComment({ id: 1, body: "черновик" })],
+        nextOffset: null,
+        total: 1,
+      }),
+      editComment: vi.fn().mockResolvedValue({
+        comment: makeComment({ id: 1, body: "готово" }),
+      }),
+    });
+    mocks.auth = { user, api };
+    render(<Comments itemId={10} />);
+
+    await waitFor(() => expect(screen.getByTestId("edit-comment")).toBeDefined());
+    fireEvent.click(screen.getByTestId("edit-comment"));
+    fireEvent.change(screen.getByTestId("edit-form-input"), {
+      target: { value: "готово" },
+    });
+    fireEvent.click(screen.getByTestId("edit-form-submit"));
+
+    await waitFor(() => expect(screen.getByText("готово")).toBeDefined());
+    expect(api.editComment).toHaveBeenCalledWith(1, { body: "готово" });
+  });
+
+  it("догружает ветки по кнопке «показать ещё»", async () => {
+    const api = makeApi({
+      listComments: vi
+        .fn()
+        .mockResolvedValueOnce({
+          items: [makeComment({ id: 1, body: "ветка 1" })],
+          nextOffset: 1,
+          total: 2,
+        })
+        .mockResolvedValueOnce({
+          items: [makeComment({ id: 2, body: "ветка 2" })],
+          nextOffset: null,
+          total: 2,
+        }),
+    });
+    mocks.auth = { user, api };
+    render(<Comments itemId={10} />);
+
+    await waitFor(() => expect(screen.getByText("ветка 1")).toBeDefined());
+    fireEvent.click(screen.getByTestId("comments-more"));
+    await waitFor(() => expect(screen.getByText("ветка 2")).toBeDefined());
+    expect(api.listComments).toHaveBeenLastCalledWith(10, { offset: 1 });
+    // Конец списка: кнопка исчезает.
+    await waitFor(() => expect(screen.queryByTestId("comments-more")).toBeNull());
   });
 
   it("новый корневой комментарий появляется сразу после отправки", async () => {
@@ -245,5 +311,22 @@ describe("ItemActions", () => {
     mocks.auth = { user: null, api: makeApi() };
     render(<ItemActions itemId={10} />);
     expect(screen.getByTestId("social-login-hint")).toBeDefined();
+  });
+});
+
+describe("Header", () => {
+  it("badge показывает число непросмотренных новинок", async () => {
+    const api = makeApi({
+      getNewEpisodes: vi.fn().mockResolvedValue({ items: [], total: 3 }),
+    });
+    mocks.auth = { user, api };
+    render(<Header />);
+    await waitFor(() => expect(screen.getByTestId("subs-badge").textContent).toBe("3"));
+  });
+
+  it("без входа badge не показывается", () => {
+    mocks.auth = { user: null, api: makeApi() };
+    render(<Header />);
+    expect(screen.queryByTestId("subs-badge")).toBeNull();
   });
 });
