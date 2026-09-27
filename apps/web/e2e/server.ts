@@ -31,7 +31,12 @@ import { loadConfig } from "../../api/src/config";
 
 const execFileAsync = promisify(execFile);
 const PORT = 3001;
-const PUBLIC_BASE = `http://localhost:${PORT}/media`;
+// Публичная база для медиа: браузеру хватает localhost, а клиенту на телефоне
+// или в эмуляторе Android нужен адрес хоста — 10.0.2.2 для эмулятора, IP
+// машины для живого устройства → ZAL_E2E_PUBLIC_BASE=http://10.0.2.2:3001/media.
+const PUBLIC_BASE =
+  process.env.ZAL_E2E_PUBLIC_BASE?.replace(/\/$/, "") ??
+  `http://localhost:${PORT}/media`;
 
 export const E2E_USER = { email: "e2e@zal.dev", password: "e2e-password-123" };
 
@@ -144,8 +149,11 @@ async function main(): Promise<void> {
     return reply.send(createReadStream(abs));
   });
 
-  await app.listen({ port: PORT, host: "127.0.0.1" });
+  // 127.0.0.1 хватает и браузеру, и эмулятору (10.0.2.2 — это loopback хоста);
+  // для живого устройства на LAN нужен ZAL_E2E_HOST=0.0.0.0.
+  await app.listen({ port: PORT, host: process.env.ZAL_E2E_HOST ?? "127.0.0.1" });
   console.log(`e2e server ready on :${PORT} (item=${result.itemId}, media=${result.mediaId})`);
+  console.log(`media base: ${PUBLIC_BASE}`);
 
   // Самопроверка: все файлы плеера реально отдаются. Не готов — не пускать тесты.
   const probeKeys = [
