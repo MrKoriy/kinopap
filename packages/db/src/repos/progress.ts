@@ -3,10 +3,10 @@
  * Профиль — на будущее (переключение профилей в фазе 4), сейчас
  * используется дефолтный профиль пользователя.
  */
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import type { WatchStatus } from "@zal/api-client";
 import type { Db } from "../db";
-import { media, profiles, users, watchProgress } from "../schema/index";
+import { items, media, profiles, users, watchProgress } from "../schema/index";
 
 export type ProgressRow = typeof watchProgress.$inferSelect;
 
@@ -85,6 +85,13 @@ export async function upsertProgress(
       status,
     })
     .returning();
+
+  // Первый прогресс по media = состоявшийся просмотр (счётчик для «горячих»).
+  await db
+    .update(items)
+    .set({ views: sql`${items.views} + 1` })
+    .where(eq(items.id, input.itemId));
+
   return row!;
 }
 

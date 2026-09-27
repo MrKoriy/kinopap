@@ -31,6 +31,14 @@ export interface PublishItemDraft {
   quality?: number | null;
   langs?: number;
   hasAc3?: boolean;
+  /**
+   * Постеры-фолбэк (абсолютные URL), например сгенерированный ингестом
+   * poster.jpg. Пишутся только если у тайтла постеров ещё нет — явные
+   * метаданные (обогащение) их не перебивают.
+   */
+  posterSmall?: string | null;
+  posterMedium?: string | null;
+  posterBig?: string | null;
 }
 
 export interface PublishFile {
@@ -101,7 +109,12 @@ export async function upsertItem(
   draft: PublishItemDraft,
 ): Promise<number> {
   const existing = await db
-    .select({ id: items.id })
+    .select({
+      id: items.id,
+      posterSmall: items.posterSmall,
+      posterMedium: items.posterMedium,
+      posterBig: items.posterBig,
+    })
     .from(items)
     .where(
       and(
@@ -111,7 +124,22 @@ export async function upsertItem(
       ),
     )
     .limit(1);
-  if (existing[0]) return existing[0].id;
+  const found = existing[0];
+  if (found) {
+    // Постеры ингеста — только фолбэк: пустые поля заполняем, чужие не трогаем.
+    const empty = !found.posterSmall && !found.posterMedium && !found.posterBig;
+    if (empty && draft.posterMedium) {
+      await db
+        .update(items)
+        .set({
+          posterSmall: draft.posterSmall ?? draft.posterMedium,
+          posterMedium: draft.posterMedium,
+          posterBig: draft.posterBig ?? draft.posterMedium,
+        })
+        .where(eq(items.id, found.id));
+    }
+    return found.id;
+  }
 
   const [row] = await db
     .insert(items)
@@ -126,6 +154,9 @@ export async function upsertItem(
       quality: draft.quality ?? null,
       langs: draft.langs ?? 1,
       hasAc3: draft.hasAc3 ?? false,
+      posterSmall: draft.posterSmall ?? draft.posterMedium ?? null,
+      posterMedium: draft.posterMedium ?? draft.posterSmall ?? null,
+      posterBig: draft.posterBig ?? draft.posterMedium ?? null,
     })
     .returning({ id: items.id });
   return row!.id;

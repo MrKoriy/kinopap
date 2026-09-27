@@ -164,6 +164,11 @@ export async function runIngest(
         quality: Math.max(...rungs.map((r) => r.height), video.height),
         langs: info.audio.length || 1,
         hasAc3: info.audio.some((a) => a.codec === "ac3"),
+        // Фолбэк-постеры: сгенерированный кадр, чтобы карточка не была пустой.
+        // Обогащение (TMDb) перекроет их, если найдёт настоящие артворки.
+        posterSmall: deps.storage.url(`${baseKey}/poster.jpg`),
+        posterMedium: deps.storage.url(`${baseKey}/poster.jpg`),
+        posterBig: deps.storage.url(`${baseKey}/poster.jpg`),
       },
       media: {
         title: request.item.title,

@@ -42,6 +42,13 @@ test("каталог → плеер → прогресс → резюме", asyn
   await expect(page.getByTestId("catalog-grid")).toBeVisible();
   await expect(page.getByTestId("item-card").first()).toBeVisible();
 
+  // Постер ингеста: карточка грузит настоящую картинку, а не заглушку.
+  const poster = page.locator('[data-testid="item-card"] img').first();
+  await expect(poster).toBeVisible();
+  await expect
+    .poll(async () => poster.evaluate((el) => (el as HTMLImageElement).naturalWidth))
+    .toBeGreaterThan(0);
+
   // Страница тайтла.
   await page.getByTestId("item-card").first().click();
   await expect(page.getByTestId("item-title")).toHaveText("Тестовый фильм");
