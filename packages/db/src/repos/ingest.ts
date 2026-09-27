@@ -53,7 +53,7 @@ export async function reconcileStaleIngestJobs(
     .update(ingestJobs)
     .set({
       status: "failed",
-      error: sql`coalesce(${ingestJobs.error}, '') || 'reconciled: stuck ' || ${ingestJobs.status} | worker restart'`,
+      error: sql`coalesce(${ingestJobs.error}, '') || 'reconciled: stuck ' || ${ingestJobs.status} || ' | worker restart'`,
       updatedAt: new Date(),
     })
     .where(
