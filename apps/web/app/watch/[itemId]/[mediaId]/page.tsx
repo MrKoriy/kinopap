@@ -63,21 +63,21 @@ export default async function WatchPage({
         <section className="mt-6 rounded-[var(--radius-card)] border border-border bg-surface p-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
-              <h3 className="text-sm font-semibold text-white">Просмотр в любимом плеере</h3>
-              <p className="text-xs text-muted">
-                Торрент-потоки без перекодирования (4K HDR, Dolby Atmos, оригинальный битрейт)
+              <h3 className="text-sm font-semibold text-white">Просмотр во внешнем плеере</h3>
+              <p className="mt-0.5 text-xs text-muted">
+                Если в браузере нет звука (кодек AC3/Dolby) или хотите 4K HDR без перекодирования — откройте поток в IINA или VLC:
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <a
                 href={`iina://weblink?url=${encodeURIComponent(links.files[0].urls.http)}`}
-                className="rounded-full bg-accent px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-accent-hover"
+                className="rounded-full bg-accent px-4 py-2 text-xs font-semibold text-white transition hover:bg-accent-hover"
               >
                 Открыть в IINA (Mac)
               </a>
               <a
                 href={`vlc://${links.files[0].urls.http}`}
-                className="rounded-full border border-border bg-surface-elevated px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10"
+                className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
               >
                 Открыть в VLC
               </a>
@@ -86,7 +86,7 @@ export default async function WatchPage({
                   `#EXTM3U\n#EXTINF:-1,${item.title}\n${links.files[0].urls.http}`,
                 )}`}
                 download={`${item.title}.m3u`}
-                className="rounded-full border border-border bg-surface-elevated px-4 py-1.5 text-xs font-semibold text-white/90 transition hover:bg-white/10"
+                className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-xs font-semibold text-white/90 transition hover:bg-white/10"
               >
                 Скачать M3U
               </a>

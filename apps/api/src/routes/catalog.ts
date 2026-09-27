@@ -62,7 +62,7 @@ export async function catalogRoutes(
       limit: q.limit,
     });
 
-    // If local catalog doesn't have it, discover on-the-fly from Rutor
+    // If local catalog doesn't have it, discover on-the-fly from Rutor + TMDb
     if (result.items.length === 0 && q.q.trim().length >= 2) {
       try {
         const queryTerm = q.q.trim();
@@ -70,9 +70,51 @@ export async function catalogRoutes(
         if (releases.length > 0) {
           const topRel = releases[0];
           const m = topRel.title.match(/^([^/\[(]+)(?:\/\s*([^/\[(]+))?\s*(?:\[[^\]]+\])?\s*(?:\((\d{4})\))?/);
-          const title = m ? m[1].trim() : queryTerm;
-          const originalTitle = m && m[2] ? m[2].trim() : null;
-          const year = m && m[3] ? parseInt(m[3], 10) : topRel.year ?? null;
+          let title = m ? m[1].trim() : queryTerm;
+          let originalTitle = m && m[2] ? m[2].trim() : null;
+          let year = m && m[3] ? parseInt(m[3], 10) : topRel.year ?? null;
+          let plot = `Релиз: ${topRel.title}`;
+          let rating = 8.0;
+          let posterSmall: string | null = null;
+          let posterMedium: string | null = null;
+          let posterBig: string | null = null;
+
+          // Enrich with official TMDb poster, plot and rating
+          try {
+            const tmdbUrl = new URL("https://api.themoviedb.org/3/search/multi");
+            tmdbUrl.searchParams.set("api_key", "844dba0bfd8f3a4f3799f6130ef9e335");
+            tmdbUrl.searchParams.set("language", "ru-RU");
+            tmdbUrl.searchParams.set("query", title);
+            const tmdbRes = await fetch(tmdbUrl, { signal: AbortSignal.timeout(3500) });
+            if (tmdbRes.ok) {
+              const tmdbData = (await tmdbRes.json()) as { results?: Array<Record<string, unknown>> };
+              const hit = tmdbData.results?.[0];
+              if (hit) {
+                if (hit.title || hit.name) title = String(hit.title || hit.name);
+                if (hit.original_title || hit.original_name) {
+                  originalTitle = String(hit.original_title || hit.original_name);
+                }
+                const dateStr = String(hit.release_date || hit.first_air_date || "");
+                if (dateStr.length >= 4) {
+                  const parsedYear = parseInt(dateStr.slice(0, 4), 10);
+                  if (!isNaN(parsedYear)) year = parsedYear;
+                }
+                if (hit.overview) plot = String(hit.overview);
+                if (typeof hit.vote_average === "number" && hit.vote_average > 0) {
+                  rating = Math.round(hit.vote_average * 10) / 10;
+                }
+                if (hit.poster_path) {
+                  const p = String(hit.poster_path);
+                  posterSmall = `https://image.tmdb.org/t/p/w185${p}`;
+                  posterMedium = `https://image.tmdb.org/t/p/w500${p}`;
+                  posterBig = `https://image.tmdb.org/t/p/original${p}`;
+                }
+              }
+            }
+          } catch {
+            // Keep parsed fallback
+          }
+
           const isSerial = /s\d+|сезон|серии/i.test(topRel.title);
 
           const [inserted] = await db
@@ -82,9 +124,12 @@ export async function catalogRoutes(
               title,
               originalTitle,
               year,
-              plot: `Релиз: ${topRel.title}`,
-              rating: 8.0,
+              plot,
+              rating,
               quality: topRel.quality.includes("2160") ? 2160 : 1080,
+              posterSmall,
+              posterMedium,
+              posterBig,
             })
             .returning({ id: items.id });
 
@@ -138,8 +183,23 @@ export async function catalogRoutes(
   app.get("/items/:id/media-links", async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const { mid } = parseOrThrow(mediaLinksQuerySchema, request.query ?? {});
-    const links = await mediaLinks(db, id, mid, config.mediaBaseUrl);
-    if (!links) throw notFound("Media not found for this item");
+    let links = await mediaLinks(db, id, mid, config.mediaBaseUrl);
+    if (!links) {
+      const [insertedMedia] = await db
+        .insert(media)
+        .values({ itemId: id, partNumber: 1, title: "Основной" })
+        .returning({ id: media.id });
+      links = {
+        mediaId: insertedMedia?.id ?? mid,
+        itemId: id,
+        files: [],
+        audios: [],
+        subtitles: [],
+        posterUrl: null,
+        sprites: null,
+        intro: null,
+      };
+    }
 
     // Zero-storage dynamic resolution: if no pre-encoded files in DB, resolve from stream sources
     if (links.files.length === 0) {

@@ -9,6 +9,8 @@ import { cn } from "@zal/ui";
 import { Badge } from "@/components/ui/badge";
 import { formatDuration } from "@/lib/format";
 
+import { Film } from "lucide-react";
+
 export function ItemCard({
   item,
   className,
@@ -16,7 +18,8 @@ export function ItemCard({
   item: ItemSummary;
   className?: string;
 }) {
-  const poster = item.posters.medium ?? item.posters.small ?? item.posters.big;
+  const [imgError, setImgError] = React.useState(false);
+  const poster = !imgError ? (item.posters.medium ?? item.posters.small ?? item.posters.big) : null;
   const rating = item.rating > 0 ? item.rating : item.imdb.rating;
 
   return (
@@ -34,12 +37,19 @@ export function ItemCard({
           <img
             src={poster}
             alt={item.title}
+            onError={() => setImgError(true)}
             className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
             loading="lazy"
           />
         ) : (
-          <div className="flex h-full items-center justify-center px-3 text-center text-sm text-muted">
-            {item.title}
+          <div className="flex h-full flex-col items-center justify-center bg-gradient-to-br from-neutral-800 to-neutral-950 p-4 text-center">
+            <Film className="mb-2 h-8 w-8 text-white/30" />
+            <span className="line-clamp-2 text-sm font-semibold text-white/90">
+              {item.title}
+            </span>
+            {item.year && (
+              <span className="mt-1 text-xs text-white/50">{item.year}</span>
+            )}
           </div>
         )}
       </div>

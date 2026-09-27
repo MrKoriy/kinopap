@@ -77,7 +77,7 @@ export class TorrServerConnector {
     }
   }
 
-  async configureMemoryBuffer(cacheSizeBytes = 128 * 1024 * 1024): Promise<boolean> {
+  async configureMemoryBuffer(cacheSizeBytes = 200 * 1024 * 1024): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl}/settings`, {
         method: "POST",
@@ -88,7 +88,8 @@ export class TorrServerConnector {
             CacheSize: cacheSizeBytes,
             UseDisk: false,
             ReaderReadAHead: 95,
-            PreloadCache: 50,
+            PreloadCache: 10,
+            ConnectionsLimit: 250,
           },
         }),
         signal: AbortSignal.timeout(3000),

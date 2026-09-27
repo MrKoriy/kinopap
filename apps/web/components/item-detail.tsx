@@ -12,15 +12,22 @@ import { Comments } from "@/components/comments";
 import { ItemActions } from "@/components/item-actions";
 import { formatDuration } from "@/lib/format";
 
+import { Play, Film, X } from "lucide-react";
+
 export function ItemDetailView({ item }: { item: ItemDetail }) {
   const [activeSeason, setActiveSeason] = React.useState(0);
+  const [showTrailer, setShowTrailer] = React.useState(false);
 
   const firstMovieMedia = item.media?.[0]?.id ?? null;
   const firstEpisodeMedia = item.seasons?.[0]?.episodes.find((e) => e.mediaId)?.mediaId ?? null;
-  const playMediaId = firstMovieMedia ?? firstEpisodeMedia;
+  const playMediaId = firstMovieMedia ?? firstEpisodeMedia ?? item.media?.[0]?.id ?? item.id ?? 1;
 
   const poster = item.posters.big ?? item.posters.medium;
   const rating = item.rating > 0 ? item.rating : item.imdb.rating;
+
+  const trailerEmbedUrl = item.trailer?.url
+    ? item.trailer.url.replace("watch?v=", "embed/")
+    : `https://www.youtube-nocookie.com/embed?listType=search&list=${encodeURIComponent(item.title + " трейлер русский")}&autoplay=1`;
 
   return (
     <div>
@@ -54,22 +61,67 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
               </Badge>
             ) : null}
           </div>
-          <div className="mt-4 flex gap-3">
-            {playMediaId && (
-              <Link
-                href={`/watch/${item.id}/${playMediaId}`}
-                className={buttonVariants()}
-                data-testid="watch-button"
-              >
-                ▶ Смотреть
-              </Link>
-            )}
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link
+              href={`/watch/${item.id}/${playMediaId}`}
+              className={buttonVariants()}
+              data-testid="watch-button"
+            >
+              <Play className="mr-2 h-4 w-4 fill-current" />
+              Смотреть
+            </Link>
+
+            <button
+              type="button"
+              onClick={() => setShowTrailer(true)}
+              className="inline-flex items-center rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
+              data-testid="trailer-button"
+            >
+              <Film className="mr-2 h-4 w-4" />
+              Трейлер
+            </button>
+
             <div className="self-center">
               <ItemActions itemId={item.id} />
             </div>
           </div>
         </div>
       </div>
+
+      {/* Модальное окно предпросмотра трейлера */}
+      {showTrailer && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
+        >
+          <div className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <div className="flex items-center gap-2 text-sm font-medium text-white">
+                <Film className="h-4 w-4 text-accent" />
+                <span>Трейлер: {item.title}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowTrailer(false)}
+                className="rounded-lg p-1 text-white/70 hover:bg-white/10 hover:text-white"
+                aria-label="Закрыть трейлер"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="aspect-video w-full bg-black">
+              <iframe
+                src={trailerEmbedUrl}
+                title={`Трейлер ${item.title}`}
+                className="h-full w-full border-0"
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                allowFullScreen
+              />
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Описание */}
       {item.plot && (

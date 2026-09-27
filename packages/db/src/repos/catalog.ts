@@ -464,7 +464,7 @@ export async function shortcutItems(
   f: { type?: ItemType; limit: number; cursor?: string | null },
 ): Promise<ItemPage> {
   const sort: SortSpec = {
-    field: kind === "fresh" ? "created" : kind === "hot" ? "views" : "rating",
+    field: kind === "fresh" ? "year" : kind === "hot" ? "views" : "rating",
     dir: "desc",
   };
   return listItems(db, {

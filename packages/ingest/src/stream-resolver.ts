@@ -151,8 +151,34 @@ export class StreamResolver {
       }
     }
 
-    // Filter releases with seeds and map them into media streams
-    let viableReleases = releases.filter((r) => r.seeds > 0 || r.peers > 0).slice(0, 8);
+    // Filter out non-video releases (books, mp3s, etc.)
+    const videoReleases = releases.filter((r) => {
+      const lower = r.title.toLowerCase();
+      if (/mp3|flac|fb2|epub|pdf|аудиокнига/i.test(lower)) return false;
+      return true;
+    });
+
+    // Score releases for optimal web streaming performance:
+    // Prefer healthy seeders and moderate size (1.5GB - 8GB) over gigantic 70GB remuxes
+    const scoredReleases = videoReleases.map((r) => {
+      let score = (r.seeds ?? 0) * 10 + (r.peers ?? 0);
+      const gb = (r.sizeBytes ?? 0) / (1024 * 1024 * 1024);
+      if (gb >= 1.5 && gb <= 6.0) {
+        score += 500; // Optimal 1080p web stream size
+      } else if (gb > 6.0 && gb <= 12.0) {
+        score += 250;
+      } else if (gb > 35.0) {
+        score -= 200; // Gigantic remuxes buffer very slowly over browser
+      }
+      if (/web-dl|webrip|bdrip/i.test(r.title)) {
+        score += 150;
+      }
+      return { rel: r, score };
+    });
+
+    scoredReleases.sort((a, b) => b.score - a.score);
+
+    let viableReleases = scoredReleases.map((s) => s.rel).slice(0, 8);
     if (viableReleases.length === 0 && releases.length > 0) {
       viableReleases = releases.slice(0, 5);
     }
