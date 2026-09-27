@@ -71,10 +71,12 @@ function MenuItem({
   active,
   onClick,
   children,
+  testId,
 }: {
   active: boolean;
   onClick(): void;
   children: React.ReactNode;
+  testId?: string;
 }) {
   return (
     <button
@@ -84,6 +86,8 @@ function MenuItem({
       onClick={() => {
         onClick();
       }}
+      data-active={active}
+      data-testid={testId}
     >
       {children}
     </button>
@@ -254,6 +258,7 @@ export function PlayerControls(props: PlayerControlsProps) {
               key={t.index}
               active={t.index === activeAudio}
               onClick={() => props.onAudio(t.index)}
+              testId={`audio-option-${t.index}`}
             >
               {t.label}
             </MenuItem>

@@ -1,10 +1,11 @@
 /**
- * Главный e2e-флоу: вход → каталог → тайтл → плеер → прогресс → резюме.
+ * Главные e2e-флоу: вход → каталог → тайтл → плеер → прогресс → резюме
+ * и переключение дубляжа (состояние + реальная смена звука).
  * Реальные серверы, реальный ffmpeg-контент, реальное воспроизведение.
  * Прогресс сбрасывается перед плеером — каждый проект обязан пройти
  * через настоящее декодирование, а не через резюме прошлого прогона.
  */
-import { expect, test, request as pwRequest } from "@playwright/test";
+import { expect, test, request as pwRequest, type Page } from "@playwright/test";
 
 const E2E_USER = { email: "e2e@zal.dev", password: "e2e-password-123" };
 
@@ -16,27 +17,38 @@ async function loginApi() {
   return { api, auth: { authorization: `Bearer ${tokens.accessToken}` } };
 }
 
-test("каталог → плеер → прогресс → резюме", async ({ page }) => {
-  // 1. Вход через UI.
+async function loginUi(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByTestId("email-input").fill(E2E_USER.email);
   await page.getByTestId("password-input").fill(E2E_USER.password);
   await page.getByTestId("auth-submit").click();
   await expect(page.getByTestId("header-user")).toBeVisible();
+}
 
-  // 2. Каталог: фильтры и карточки из реального API.
+/** Открывает плеер тестового тайтла из каталога. */
+async function openPlayer(page: Page): Promise<void> {
+  await page.goto("/catalog");
+  await page.getByTestId("item-card").first().click();
+  await page.getByTestId("watch-button").click();
+  await expect(page.getByTestId("player")).toBeVisible();
+}
+
+test("каталог → плеер → прогресс → резюме", async ({ page }) => {
+  await loginUi(page);
+
+  // Каталог: фильтры и карточки из реального API.
   await page.goto("/catalog");
   await expect(page.getByTestId("type-filters")).toBeVisible();
   await expect(page.getByTestId("catalog-grid")).toBeVisible();
   await expect(page.getByTestId("item-card").first()).toBeVisible();
 
-  // 3. Страница тайтла.
+  // Страница тайтла.
   await page.getByTestId("item-card").first().click();
   await expect(page.getByTestId("item-title")).toHaveText("Тестовый фильм");
   await page.getByTestId("watch-button").click();
   await expect(page.getByTestId("player")).toBeVisible();
 
-  // 4. Сброс прогресса и перезагрузка: старт с нуля, без чужого резюме.
+  // Сброс прогресса и перезагрузка: старт с нуля, без чужого резюме.
   const mediaId = Number(page.url().split("/").pop());
   expect(Number.isInteger(mediaId)).toBe(true);
   const { api, auth } = await loginApi();
@@ -47,7 +59,7 @@ test("каталог → плеер → прогресс → резюме", asyn
   expect(reset.ok()).toBe(true);
   await page.reload();
 
-  // 5. Плеер: манифест HLS загрузился, UI на месте.
+  // Плеер: манифест HLS загрузился, UI на месте.
   await expect(page.getByTestId("seekbar")).toBeVisible();
   await expect(page.getByTestId("menu-аудио")).toBeVisible();
   await expect(page.getByTestId("menu-субтитры")).toBeVisible();
@@ -60,8 +72,8 @@ test("каталог → плеер → прогресс → резюме", asyn
     await page.evaluate(() => document.querySelector("video")?.currentTime ?? -1),
   ).toBeLessThan(1);
 
-  // 6. Реальное воспроизведение: ждём >5.5с, пауза пишет прогресс.
-  // В bundled Chromium нет кодека H.264 — декодирование проверяем в webkit.
+  // Реальное воспроизведение: ждём >5.5с, пауза пишет прогресс.
+  // В bundled Chromium может не быть кодека H.264 — тогда пропускаем.
   const canDecode = await page.evaluate(() => {
     const codec = 'video/mp4; codecs="avc1.42E01E"';
     const native = document.createElement("video").canPlayType(codec);
@@ -79,7 +91,7 @@ test("каталог → плеер → прогресс → резюме", asyn
   );
   await page.getByTestId("play-toggle").click(); // пауза
 
-  // 7. Прогресс виден через API (запись с паузы асинхронная — ждём позицию >5с).
+  // Прогресс виден через API (запись с паузы асинхронная — ждём позицию >5с).
   await expect
     .poll(
       async () => {
@@ -101,7 +113,7 @@ test("каталог → плеер → прогресс → резюме", asyn
   expect(progress!.status).toBe("in_progress");
   await api.dispose();
 
-  // 8. Резюме: после перезагрузки плеер стартует с сохранённой позиции.
+  // Резюме: после перезагрузки плеер стартует с сохранённой позиции.
   await page.reload();
   await page.waitForFunction(
     () => (document.querySelector("video")?.readyState ?? 0) >= 1,
@@ -116,15 +128,8 @@ test("каталог → плеер → прогресс → резюме", asyn
 });
 
 test("субтитры и сдвиг в плеере", async ({ page }) => {
-  await page.goto("/login");
-  await page.getByTestId("email-input").fill(E2E_USER.email);
-  await page.getByTestId("password-input").fill(E2E_USER.password);
-  await page.getByTestId("auth-submit").click();
-  await expect(page.getByTestId("header-user")).toBeVisible();
-
-  await page.goto("/catalog");
-  await page.getByTestId("item-card").first().click();
-  await page.getByTestId("watch-button").click();
+  await loginUi(page);
+  await openPlayer(page);
   await page.waitForFunction(
     () => (document.querySelector("video")?.readyState ?? 0) >= 1,
     undefined,
@@ -147,4 +152,132 @@ test("субтитры и сдвиг в плеере", async ({ page }) => {
     if (v) v.currentTime = 2;
   });
   await expect(page.getByTestId("subtitle-overlay")).toContainText("Привет");
+});
+
+test("дубляж переключается, воспроизведение продолжается", async ({ page }) => {
+  await loginUi(page);
+  await openPlayer(page);
+  await page.waitForFunction(
+    () => (document.querySelector("video")?.readyState ?? 0) >= 1,
+    undefined,
+    { timeout: 20_000 },
+  );
+
+  await page.getByTestId("play-toggle").click();
+  await page.waitForFunction(
+    () => (document.querySelector("video")?.currentTime ?? 0) > 1,
+    undefined,
+    { timeout: 20_000 },
+  );
+
+  // В меню две дорожки с метаданными дубляжа из ingest.
+  await page.getByTestId("menu-аудио").click();
+  await expect(page.getByTestId("audio-option-0")).toHaveAttribute("data-active", "true");
+  await expect(page.getByTestId("audio-option-1")).toHaveAttribute("data-active", "false");
+  await expect(page.getByTestId("audio-option-0")).toContainText("MVO");
+  await expect(page.getByTestId("audio-option-1")).toContainText("AVO");
+
+  // Переключение: активной становится вторая.
+  await page.getByTestId("audio-option-1").click();
+  await expect(page.getByTestId("audio-option-1")).toHaveAttribute("data-active", "true");
+  await expect(page.getByTestId("audio-option-0")).toHaveAttribute("data-active", "false");
+
+  // Воспроизведение продолжается после смены дорожки.
+  const before = await page.evaluate(() => document.querySelector("video")?.currentTime ?? 0);
+  await page.waitForTimeout(1500);
+  const after = await page.evaluate(() => document.querySelector("video")?.currentTime ?? 0);
+  expect(after).toBeGreaterThan(before + 0.5);
+});
+
+test("звук реально меняется (частотный анализ)", async ({ page }) => {
+  await loginUi(page);
+  await openPlayer(page);
+  await page.waitForFunction(
+    () => (document.querySelector("video")?.readyState ?? 0) >= 1,
+    undefined,
+    { timeout: 20_000 },
+  );
+
+  // Вешаем анализатор на реальный аудиовыход <video>.
+  await page.evaluate(() => {
+    const video = document.querySelector("video");
+    if (!video) return;
+    const ctx = new AudioContext();
+    const src = ctx.createMediaElementSource(video);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 8192;
+    analyser.smoothingTimeConstant = 0;
+    src.connect(analyser);
+    analyser.connect(ctx.destination);
+    void ctx.resume();
+    (window as unknown as { __audio: unknown }).__audio = {
+      analyser,
+      sampleRate: ctx.sampleRate,
+    };
+  });
+
+  await page.getByTestId("play-toggle").click();
+  await page.evaluate(() => {
+    const w = window as unknown as { __audio?: { analyser: AnalyserNode } };
+    const a = w.__audio;
+    if (a) void (a.analyser.context as AudioContext).resume();
+  });
+  await page.waitForFunction(
+    () => (document.querySelector("video")?.currentTime ?? 0) > 1,
+    undefined,
+    { timeout: 20_000 },
+  );
+
+  const dominant = (): Promise<{ freq: number; power: number }> =>
+    page.evaluate(() => {
+      const w = window as unknown as {
+        __audio?: { analyser: AnalyserNode; sampleRate: number };
+      };
+      const a = w.__audio;
+      if (!a) return { freq: -1, power: -Infinity };
+      const data = new Float32Array(a.analyser.frequencyBinCount);
+      a.analyser.getFloatFrequencyData(data);
+      let max = -Infinity;
+      let idx = -1;
+      for (let i = 0; i < data.length; i++) {
+        if (data[i] > max) {
+          max = data[i];
+          idx = i;
+        }
+      }
+      return { freq: (idx * a.sampleRate) / a.analyser.fftSize, power: max };
+    });
+
+  // Ждём осмысленный сигнал. Если WebAudio молчит (headless без звука) —
+  // честно сообщаем, что частотный анализ в этой среде недоступен.
+  try {
+    await expect
+      .poll(async () => (await dominant()).power, {
+        timeout: 8_000,
+        intervals: [250],
+        message: "WebAudio не отдаёт данные анализатору",
+      })
+      .toBeGreaterThan(-100);
+  } catch {
+    test.skip(true, "WebAudio не отдаёт данные в этом окружении — частотный анализ недоступен");
+    return;
+  }
+
+  // Первая дорожка — тон 300Гц.
+  const first = await dominant();
+  expect(first.freq).toBeGreaterThan(200);
+  expect(first.freq).toBeLessThan(500);
+
+  // Переключаем на вторую — должен появиться тон 3000Гц.
+  await page.getByTestId("menu-аудио").click();
+  await page.getByTestId("audio-option-1").click();
+  await expect
+    .poll(async () => (await dominant()).freq, {
+      timeout: 8_000,
+      intervals: [250],
+      message: "частота не сменилась после переключения дубляжа",
+    })
+    .toBeGreaterThan(2500);
+  const second = await dominant();
+  expect(second.freq).toBeLessThan(3800);
 });

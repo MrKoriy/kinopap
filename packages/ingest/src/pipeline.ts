@@ -20,7 +20,7 @@ import {
   generateThumbs,
 } from "./media/assets";
 import { probeMedia, type FfmpegConfig } from "./media/probe";
-import { transcodeToHls } from "./media/transcode";
+import { transcodeToHls, type AudioRenditionInput } from "./media/transcode";
 import { slugify, type MediaStorage } from "./storage";
 import type { MetadataEnricher, SourceAudioInfo, SourceConnector } from "./types";
 
@@ -36,7 +36,10 @@ export interface IngestPipelineResult {
   itemId: number;
   mediaId: number;
   baseKey: string;
+  /** Мастер-плейлист с audio groups. */
+  masterKey: string;
   rungKeys: string[];
+  audioKeys: string[];
 }
 
 /** Тип озвучки из тегов дорожки; одиночка — оригинал. */
@@ -79,11 +82,19 @@ export async function runIngest(
       throw new Error("ingest: no video stream or zero duration");
     }
 
-    // 1. Видео: HLS-лестница (без апскейла).
-    const rungs = await transcodeToHls(pulled.filePath, path.join(workDir, "hls"), video.height, {
-      ...cfg,
-      ladder: request.ladders,
-    });
+    // 1. Multi-audio HLS: видео-лестница + рендitions дубляжей + мастер
+    //    с audio groups (без апскейла).
+    const audioInputs: AudioRenditionInput[] = info.audio.map((a) => ({
+      lang: a.lang,
+      title: a.title,
+    }));
+    const { rungs, audioRenditions } = await transcodeToHls(
+      pulled.filePath,
+      path.join(workDir, "hls"),
+      video.height,
+      audioInputs,
+      { ...cfg, ladder: request.ladders },
+    );
 
     // 2. Ассеты плеера: постер, тумбы, спрайт для скраббинга.
     const posterPath = path.join(workDir, "poster.jpg");
@@ -177,7 +188,8 @@ export async function runIngest(
         codec: "h264",
         bitrate: r.videoBitrateKbps * 1000,
         fileKey: `${baseKey}/${r.dirName}/index.m3u8`,
-        hlsKey: `${baseKey}/${r.dirName}/index.m3u8`,
+        // HLS у всех рунгов один — мастер с audio groups и ABR.
+        hlsKey: `${baseKey}/master.m3u8`,
       })),
       audios: info.audio.map((a, i) => ({
         trackIndex: i + 1,
@@ -186,6 +198,9 @@ export async function runIngest(
         lang: a.lang ?? "und",
         dubType: inferDubType(info.audio, i),
         authorTitle: a.title ?? null,
+        fileKey: audioRenditions[i]
+          ? `${baseKey}/${audioRenditions[i]!.dirName}/index.m3u8`
+          : null,
       })),
       subtitles: vttFiles.map((v) => ({
         lang: v.lang,
@@ -210,7 +225,9 @@ export async function runIngest(
       itemId,
       mediaId,
       baseKey,
+      masterKey: `${baseKey}/master.m3u8`,
       rungKeys: rungs.map((r) => `${baseKey}/${r.dirName}/index.m3u8`),
+      audioKeys: audioRenditions.map((a) => `${baseKey}/${a.dirName}/index.m3u8`),
     };
   } finally {
     await rm(workDir, { recursive: true, force: true });

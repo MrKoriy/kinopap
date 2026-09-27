@@ -251,9 +251,19 @@ export function Player({ links, title, next }: PlayerProps) {
     setPlaybackRate(r);
   }, []);
 
+  /** Реальное переключение дубляжа: hls.js либо нативные audioTracks (Safari). */
   const changeAudio = React.useCallback((index: number) => {
     const hls = hlsRef.current;
-    if (hls && hls.audioTracks.length > 1) hls.audioTrack = index;
+    const video = videoRef.current as (HTMLVideoElement & {
+      audioTracks?: { length: number; [i: number]: { enabled: boolean } };
+    }) | null;
+    if (hls && hls.audioTracks.length > 1) {
+      hls.audioTrack = index;
+    } else if (video?.audioTracks && video.audioTracks.length > 1) {
+      for (let i = 0; i < video.audioTracks.length; i++) {
+        video.audioTracks[i]!.enabled = i === index;
+      }
+    }
     setActiveAudio(index);
   }, []);
 

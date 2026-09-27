@@ -33,7 +33,18 @@ interface RawStream {
   height?: number;
   channels?: number;
   r_frame_rate?: string;
-  tags?: { language?: string; title?: string };
+  tags?: {
+    language?: string;
+    title?: string;
+    /** mp4 имя дорожки живёт в name/handler_name, а не в title. */
+    name?: string;
+    handler_name?: string;
+  };
+}
+
+/** Имя дорожки из тегов: title (mkv), name/handler_name (mp4). */
+function streamTitle(tags: RawStream["tags"]): string | null {
+  return tags?.title ?? tags?.name ?? tags?.handler_name ?? null;
 }
 
 /** ffprobe → типизированная карточка медиафайла. */
@@ -70,13 +81,13 @@ export async function probeMedia(
         codec,
         channels: s.channels ?? 0,
         lang: s.tags?.language ?? null,
-        title: s.tags?.title ?? null,
+        title: streamTitle(s.tags),
       });
     } else if (s.codec_type === "subtitle") {
       subtitles.push({
         codec,
         lang: s.tags?.language ?? null,
-        title: s.tags?.title ?? null,
+        title: streamTitle(s.tags),
       });
     }
   }

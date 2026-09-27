@@ -2,8 +2,10 @@
  * Smoke-тесты на РЕАЛЬНОМ ffmpeg: лестница качеств, тумбы, спрайт
  * и WebVTT действительно создаются на тестовом медиафайле.
  */
+import { execFile } from "node:child_process";
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   convertSubtitlesToVtt,
@@ -14,6 +16,8 @@ import {
   selectLadder,
   transcodeToHls,
 } from "../src";
+
+const execFileAsync = promisify(execFile);
 import { makeTestMedia, makeTmpDir, TEST_FFMPEG, type TestMedia } from "./helpers";
 
 let media: TestMedia;
@@ -46,7 +50,13 @@ describe("selectLadder", () => {
 describe("transcodeToHls (реальный ffmpeg)", () => {
   it("создаёт лестницу 480p+720p с сегментами и верными кодеками", async () => {
     const outDir = await makeTmpDir("zal-hls-");
-    const rungs = await transcodeToHls(media.videoPath, outDir, 720, TEST_FFMPEG);
+    const { rungs } = await transcodeToHls(
+      media.videoPath,
+      outDir,
+      720,
+      [{ lang: "rus", title: "MVO" }],
+      TEST_FFMPEG,
+    );
 
     expect(rungs.map((r) => r.quality)).toEqual(["480p", "720p"]);
     for (const rung of rungs) {
@@ -55,15 +65,108 @@ describe("transcodeToHls (реальный ffmpeg)", () => {
       for (const seg of rung.segmentPaths) await stat(seg);
 
       // Реальные размеры и кодеки выхода — из ffprobe по сегменту.
+      // Видео-варианты без аудио: звук живёт в аудио-рендitions.
       const probed = await probeMedia(rung.segmentPaths[0]!);
       expect(probed.video[0]?.height).toBe(rung.height);
       expect(probed.video[0]?.codec).toBe("h264");
-      expect(probed.audio[0]?.codec).toBe("aac");
+      expect(probed.audio).toHaveLength(0);
 
       const playlist = await readFile(rung.playlistPath, "utf8");
       expect(playlist).toContain("#EXTM3U");
       expect(playlist).toContain(".ts");
     }
+  });
+});
+
+/* ---------- Multi-audio HLS: аудио-группы и реальные различия дорожек ---------- */
+
+/** Декод плейлиста в моно-PCM (s16le, 48кГц). */
+async function decodePcm(playlistPath: string): Promise<Int16Array> {
+  const { stdout } = await execFileAsync(
+    "ffmpeg",
+    ["-v", "error", "-i", playlistPath, "-f", "s16le", "-ac", "1", "-ar", "48000", "pipe:1"],
+    { encoding: "buffer", maxBuffer: 64 * 1024 * 1024 },
+  );
+  const buf = stdout as unknown as Buffer;
+  return new Int16Array(buf.buffer, buf.byteOffset, Math.floor(buf.byteLength / 2));
+}
+
+/** Мощность сигнала на частоте (алгоритм Гёрцеля). */
+function goertzelPower(samples: Int16Array, freq: number, sampleRate: number): number {
+  const n = Math.min(samples.length, sampleRate); // 1 секунды достаточно
+  const coeff = 2 * Math.cos((2 * Math.PI * freq) / sampleRate);
+  let s1 = 0;
+  let s2 = 0;
+  for (let i = 0; i < n; i++) {
+    const s0 = samples[i]! + coeff * s1 - s2;
+    s2 = s1;
+    s1 = s0;
+  }
+  return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+}
+
+describe("multi-audio HLS (реальный ffmpeg)", () => {
+  it("мастер-плейлист с audio group и двумя рендitions дубляжа", async () => {
+    const outDir = await makeTmpDir("zal-ma-");
+    const { masterPlaylistPath, rungs, audioRenditions } = await transcodeToHls(
+      media.dualPath,
+      outDir,
+      720,
+      [
+        { lang: "rus", title: "MVO Dublyazh" },
+        { lang: "eng", title: "AVO Original" },
+      ],
+      TEST_FFMPEG,
+    );
+
+    const master = await readFile(masterPlaylistPath, "utf8");
+
+    // Две аудио-рендitions в одной группе, с языками и DEFAULT у первой.
+    expect(master.match(/TYPE=AUDIO/g)).toHaveLength(2);
+    expect(master).toContain('GROUP-ID="group_aud"');
+    expect(master).toContain('LANGUAGE="rus"');
+    expect(master).toContain('LANGUAGE="eng"');
+    expect(master).toContain("DEFAULT=YES");
+    expect(master).toContain("DEFAULT=NO");
+
+    // Все видео-варианты ссылаются на аудио-группу.
+    const streamInfs = master.match(/#EXT-X-STREAM-INF.*/g) ?? [];
+    expect(streamInfs).toHaveLength(rungs.length);
+    for (const line of streamInfs) {
+      expect(line).toContain('AUDIO="group_aud"');
+      expect(line).toContain("avc1");
+      expect(line).toContain("mp4a.40.2");
+    }
+
+    // URI из мастера реально существуют.
+    for (const r of audioRenditions) await stat(r.playlistPath);
+    const uris = [...master.matchAll(/URI="([^"]+)"/g)].map((m) => m[1]!);
+    expect(uris).toHaveLength(2);
+    for (const uri of uris) await stat(path.join(outDir, uri));
+  });
+
+  it("дорожки действительно различаются: 300Гц против 3000Гц", async () => {
+    const outDir = await makeTmpDir("zal-ma2-");
+    const { audioRenditions } = await transcodeToHls(
+      media.dualPath,
+      outDir,
+      720,
+      [
+        { lang: "rus", title: "MVO Dublyazh" },
+        { lang: "eng", title: "AVO Original" },
+      ],
+      TEST_FFMPEG,
+    );
+    expect(audioRenditions).toHaveLength(2);
+
+    const [a, b] = await Promise.all([
+      decodePcm(audioRenditions[0]!.playlistPath),
+      decodePcm(audioRenditions[1]!.playlistPath),
+    ]);
+    const sr = 48000;
+    // Мощность на своей частоте должна доминировать в каждой дорожке.
+    expect(goertzelPower(a, 300, sr)).toBeGreaterThan(goertzelPower(a, 3000, sr) * 10);
+    expect(goertzelPower(b, 3000, sr)).toBeGreaterThan(goertzelPower(b, 300, sr) * 10);
   });
 });
 

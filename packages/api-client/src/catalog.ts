@@ -265,6 +265,8 @@ export const audioTrackSchema = z.object({
     title: z.string().nullable(),
     shortTitle: z.string().nullable(),
   }),
+  /** Плейлист аудио-рендitions из HLS-мастера (null для старых записей). */
+  url: z.string().nullable(),
 });
 export const subtitleSchema = z.object({
   id: z.number().int(),

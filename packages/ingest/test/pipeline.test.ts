@@ -106,13 +106,14 @@ describe("runIngest (полный пайплайн)", () => {
     expect(files.map((f) => f.quality)).toEqual(["480p", "720p"]);
     expect(files.every((f) => f.codec === "h264")).toBe(true);
 
-    // Аудиодорожки из ffprobe.
+    // Аудиодорожки из ffprobe, с ключом рендitions в HLS-мастере.
     const audios = await db
       .select()
       .from(audioTracks)
       .where(eq(audioTracks.mediaId, result.mediaId));
     expect(audios).toHaveLength(1);
     expect(audios[0]).toMatchObject({ codec: "aac", lang: "und", dubType: "original" });
+    expect(audios[0]!.fileKey).toContain("audio-0-und");
 
     // Субтитры: внешний + встроенный → WebVTT.
     const subs = await db
@@ -124,10 +125,14 @@ describe("runIngest (полный пайплайн)", () => {
     expect(subs.find((s) => s.embed)?.lang).toBe("rus");
 
     // Файлы реально лежат в хранилище по ключам из БД.
+    // HLS у всех рунгов один — мастер с audio groups.
+    expect(new Set(files.map((f) => f.hlsKey)).size).toBe(1);
+    expect(files[0]!.hlsKey).toContain("master.m3u8");
     for (const f of files) {
       await stat(deps.storage.resolveDir(f.fileKey));
       await stat(deps.storage.resolveDir(f.hlsKey!));
     }
+    for (const a of audios) await stat(deps.storage.resolveDir(a.fileKey!));
     await stat(deps.storage.resolveDir(m.posterKey!));
     await stat(deps.storage.resolveDir(m.spriteKey!));
     for (const s of subs) {
@@ -141,6 +146,36 @@ describe("runIngest (полный пайплайн)", () => {
     });
     expect(again.itemId).toBe(result.itemId);
     expect(again.mediaId).not.toBe(result.mediaId);
+  });
+
+  it("дубляжи укладываются в мастер как отдельные аудио-рендitions", async () => {
+    const src = await makeTestMedia();
+    const db = await createTestDb();
+    const deps = makeDeps(db, src.dir, await makeTmpDir("zal-store-"));
+
+    const result = await runIngest(deps, {
+      source: { type: "local", ref: "dual.mp4" },
+      item: { type: "movie", title: "Два голоса", year: 2026 },
+      ladders: ["480p"],
+    });
+
+    const audios = await db
+      .select()
+      .from(audioTracks)
+      .where(eq(audioTracks.mediaId, result.mediaId))
+      .orderBy(audioTracks.trackIndex);
+    expect(audios.map((a) => [a.dubType, a.lang])).toEqual([
+      ["mvo", "rus"],
+      ["avo", "eng"],
+    ]);
+    expect(audios.map((a) => a.fileKey)).toEqual([
+      `${result.baseKey}/audio-0-rus/index.m3u8`,
+      `${result.baseKey}/audio-1-eng/index.m3u8`,
+    ]);
+
+    // Мастер и обе рендitions реально лежат в хранилище.
+    await stat(deps.storage.resolveDir(result.masterKey));
+    for (const key of result.audioKeys) await stat(deps.storage.resolveDir(key));
   });
 
   it("эпизод сериала публикуется с сезоном и эпизодом", async () => {

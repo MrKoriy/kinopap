@@ -75,12 +75,20 @@ export function makeWorkerDeps(cfg: WorkerDepsConfig): WorkerDeps {
       const info = await probeMedia(src, cfg.ffmpeg);
       const height = info.video[0]?.height ?? 720;
       const baseKey = `jobs/transcode-${Date.now()}`;
-      const rungs = await transcodeToHls(src, storage.resolveDir(baseKey), height, {
-        ...cfg.ffmpeg,
-        ladder: job.ladders,
-      });
+      // Multi-audio HLS: видео-лестница + рендitions дубляжей + мастер.
+      const { rungs, audioRenditions } = await transcodeToHls(
+        src,
+        storage.resolveDir(baseKey),
+        height,
+        info.audio.map((a) => ({ lang: a.lang, title: a.title })),
+        { ...cfg.ffmpeg, ladder: job.ladders },
+      );
       return {
-        keys: rungs.map((r) => `${baseKey}/${r.dirName}/index.m3u8`),
+        keys: [
+          `${baseKey}/master.m3u8`,
+          ...rungs.map((r) => `${baseKey}/${r.dirName}/index.m3u8`),
+          ...audioRenditions.map((a) => `${baseKey}/${a.dirName}/index.m3u8`),
+        ],
       };
     },
   };

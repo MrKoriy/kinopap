@@ -552,6 +552,7 @@ export async function mediaLinks(
       lang: a.lang,
       type: a.dubType,
       author: { title: a.authorTitle, shortTitle: a.authorShortTitle },
+      url: mediaUrl(baseUrl, a.fileKey),
     })),
     subtitles: subs.map((s) => ({
       id: s.id,

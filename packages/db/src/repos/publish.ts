@@ -53,6 +53,8 @@ export interface PublishAudio {
   dubType: AudioDubType;
   authorTitle?: string | null;
   authorShortTitle?: string | null;
+  /** Ключ плейлиста аудио-рендitions в HLS-мастере. */
+  fileKey?: string | null;
 }
 
 export interface PublishSubtitle {
@@ -218,6 +220,7 @@ export async function publishIngest(
         dubType: a.dubType,
         authorTitle: a.authorTitle ?? null,
         authorShortTitle: a.authorShortTitle ?? null,
+        fileKey: a.fileKey ?? null,
       })),
     );
   }

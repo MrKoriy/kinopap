@@ -49,12 +49,20 @@ const MIME: Record<string, string> = {
 
 async function makeSampleMedia(dir: string): Promise<string> {
   const videoPath = path.join(dir, "sample.mp4");
+  // Два дубляжа с разными тонами (300Гц / 3000Гц): переключение дорожки
+  // можно доказать частотным анализом реального аудиовыхода.
   await execFileAsync("ffmpeg", [
     "-y",
     "-f", "lavfi", "-i", "testsrc2=duration=12:size=1280x720:rate=24",
-    "-f", "lavfi", "-i", "sine=frequency=440:duration=12",
+    "-f", "lavfi", "-i", "sine=frequency=300:duration=12",
+    "-f", "lavfi", "-i", "sine=frequency=3000:duration=12",
+    "-map", "0:v", "-map", "1:a", "-map", "2:a",
     "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
     "-c:a", "aac",
+    "-metadata:s:a:0", "language=rus",
+    "-metadata:s:a:0", "title=MVO Dublyazh",
+    "-metadata:s:a:1", "language=eng",
+    "-metadata:s:a:1", "title=AVO Original",
     videoPath,
   ]);
   await writeFile(
@@ -139,7 +147,9 @@ async function main(): Promise<void> {
 
   // Самопроверка: все файлы плеера реально отдаются. Не готов — не пускать тесты.
   const probeKeys = [
+    result.masterKey,
     ...result.rungKeys,
+    ...result.audioKeys,
     `${result.baseKey}/subs/external_0.vtt`,
     `${result.baseKey}/poster.jpg`,
     `${result.baseKey}/sprite.jpg`,

@@ -36,6 +36,8 @@ export interface TestMedia {
   subPath: string;
   /** mp4 со встроенным субтреком (mov_text, rus). */
   embeddedPath: string;
+  /** mp4 с двумя аудиодорожками-дубляжами: 300Гц (MVO, rus) и 3000Гц (AVO, eng). */
+  dualPath: string;
 }
 
 export async function makeTestMedia(): Promise<TestMedia> {
@@ -67,7 +69,23 @@ export async function makeTestMedia(): Promise<TestMedia> {
     embeddedPath,
   ]);
 
-  return { dir, videoPath, subPath, embeddedPath };
+  const dualPath = path.join(dir, "dual.mp4");
+  await execFileAsync("ffmpeg", [
+    "-y",
+    "-f", "lavfi", "-i", "testsrc2=duration=2:size=1280x720:rate=15",
+    "-f", "lavfi", "-i", "sine=frequency=300:duration=2",
+    "-f", "lavfi", "-i", "sine=frequency=3000:duration=2",
+    "-map", "0:v", "-map", "1:a", "-map", "2:a",
+    "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac",
+    "-metadata:s:a:0", "language=rus",
+    "-metadata:s:a:0", "title=MVO Dublyazh",
+    "-metadata:s:a:1", "language=eng",
+    "-metadata:s:a:1", "title=AVO Original",
+    dualPath,
+  ]);
+
+  return { dir, videoPath, subPath, embeddedPath, dualPath };
 }
 
 export type TestDb = PgliteDatabase<typeof schema>;
