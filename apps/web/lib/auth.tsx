@@ -12,7 +12,9 @@ import {
   type User,
 } from "@zal/api-client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "http://localhost:3001");
 const TOKENS_KEY = "zal.tokens";
 
 export function loadTokens(): Tokens | null {

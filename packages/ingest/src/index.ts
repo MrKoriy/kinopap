@@ -7,4 +7,8 @@ export * from "./media/assets";
 export * from "./connectors/local-folder";
 export * from "./connectors/url-source";
 export * from "./connectors/tmdb";
+export * from "./connectors/torrserver";
+export * from "./connectors/rutor";
+export * from "./connectors/anilibria";
+export * from "./stream-resolver";
 export * from "./pipeline";

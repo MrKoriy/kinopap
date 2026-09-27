@@ -9,15 +9,18 @@ import {
 } from "@zal/api-client";
 import {
   getItem,
+  items,
   listCountries,
   listGenres,
   listItems,
+  media,
   mediaLinks,
   searchItems,
   shortcutItems,
   similarItems,
   type Db,
 } from "@zal/db";
+import { StreamResolver } from "@zal/ingest";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
 
@@ -52,12 +55,60 @@ export async function catalogRoutes(
 
   app.get("/items/search", async (request) => {
     const q = parseOrThrow(searchRawQuerySchema, request.query ?? {});
-    return searchItems(db, {
+    let result = await searchItems(db, {
       q: q.q,
       type: q.type,
       field: q.field,
       limit: q.limit,
     });
+
+    // If local catalog doesn't have it, discover on-the-fly from Rutor
+    if (result.items.length === 0 && q.q.trim().length >= 2) {
+      try {
+        const queryTerm = q.q.trim();
+        const releases = await streamResolver.rutor.search(queryTerm);
+        if (releases.length > 0) {
+          const topRel = releases[0];
+          const m = topRel.title.match(/^([^/\[(]+)(?:\/\s*([^/\[(]+))?\s*(?:\[[^\]]+\])?\s*(?:\((\d{4})\))?/);
+          const title = m ? m[1].trim() : queryTerm;
+          const originalTitle = m && m[2] ? m[2].trim() : null;
+          const year = m && m[3] ? parseInt(m[3], 10) : topRel.year ?? null;
+          const isSerial = /s\d+|сезон|серии/i.test(topRel.title);
+
+          const [inserted] = await db
+            .insert(items)
+            .values({
+              type: isSerial ? "serial" : "movie",
+              title,
+              originalTitle,
+              year,
+              plot: `Релиз: ${topRel.title}`,
+              rating: 8.0,
+              quality: topRel.quality.includes("2160") ? 2160 : 1080,
+            })
+            .returning({ id: items.id });
+
+          if (inserted) {
+            await db.insert(media).values({
+              itemId: inserted.id,
+              title,
+              runtime: 7200,
+            });
+
+            result = await searchItems(db, {
+              q: title,
+              type: q.type,
+              field: q.field,
+              limit: q.limit,
+            });
+          }
+        }
+      } catch {
+        // Fallback to empty result
+      }
+    }
+
+    return result;
   });
 
   for (const kind of ["fresh", "hot", "popular"] as const) {
@@ -78,12 +129,42 @@ export async function catalogRoutes(
     return item;
   });
 
+  const streamResolver = new StreamResolver({
+    torrServerBaseUrl: config.torrServerUrl,
+    torrServerPublicUrl: config.torrServerPublicUrl,
+  });
+
   /** Ссылки на видео/аудио/субтитры для media (их /items/media-links). */
   app.get("/items/:id/media-links", async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const { mid } = parseOrThrow(mediaLinksQuerySchema, request.query ?? {});
     const links = await mediaLinks(db, id, mid, config.mediaBaseUrl);
     if (!links) throw notFound("Media not found for this item");
+
+    // Zero-storage dynamic resolution: if no pre-encoded files in DB, resolve from stream sources
+    if (links.files.length === 0) {
+      const item = await getItem(db, id);
+      if (item) {
+        const resolved = await streamResolver.resolve({
+          itemId: id,
+          mediaId: mid,
+          title: item.title,
+          originalTitle: item.originalTitle,
+          year: item.year,
+          type: item.type,
+        });
+        if (resolved.files.length > 0) {
+          links.files = resolved.files;
+          if (resolved.audios.length > 0) {
+            links.audios = resolved.audios;
+          }
+          if (resolved.intro && !links.intro) {
+            links.intro = resolved.intro;
+          }
+        }
+      }
+    }
+
     return links;
   });
 

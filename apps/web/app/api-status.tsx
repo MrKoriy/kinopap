@@ -3,7 +3,9 @@
 import { useEffect, useState } from "react";
 import { createApiClient } from "@zal/api-client";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+const API_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  (typeof window !== "undefined" ? window.location.origin : "http://localhost:3001");
 
 /** Живой индикатор связи с API. */
 export function ApiStatus() {

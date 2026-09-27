@@ -24,8 +24,8 @@ export const PERSON_ROLES = [
   "voice",
 ] as const;
 
-/** Типы озвучки: MVO/UVO/DVO/AVO + оригинал — как в их media API. */
-export const AUDIO_DUB_TYPES = ["mvo", "uvo", "dvo", "avo", "original"] as const;
+/** Типы озвучки: MVO/UVO/DVO/AVO + оригинал + дубляж. */
+export const AUDIO_DUB_TYPES = ["mvo", "uvo", "dvo", "avo", "original", "dub"] as const;
 
 export const WATCH_STATUSES = ["unwatched", "in_progress", "watched"] as const;
 

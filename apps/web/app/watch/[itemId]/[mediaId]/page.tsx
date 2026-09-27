@@ -57,6 +57,43 @@ export default async function WatchPage({
         title={item.title}
         next={nextEpisode(item, links.mediaId)}
       />
+
+      {/* Панель быстрого запуска во внешнем плеере */}
+      {links.files[0]?.urls.http && (
+        <section className="mt-6 rounded-[var(--radius-card)] border border-border bg-surface p-4">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-white">Просмотр в любимом плеере</h3>
+              <p className="text-xs text-muted">
+                Торрент-потоки без перекодирования (4K HDR, Dolby Atmos, оригинальный битрейт)
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <a
+                href={`iina://weblink?url=${encodeURIComponent(links.files[0].urls.http)}`}
+                className="rounded-full bg-accent px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-accent-hover"
+              >
+                Открыть в IINA (Mac)
+              </a>
+              <a
+                href={`vlc://${links.files[0].urls.http}`}
+                className="rounded-full border border-border bg-surface-elevated px-4 py-1.5 text-xs font-semibold text-white transition hover:bg-white/10"
+              >
+                Открыть в VLC
+              </a>
+              <a
+                href={`data:text/plain;charset=utf-8,${encodeURIComponent(
+                  `#EXTM3U\n#EXTINF:-1,${item.title}\n${links.files[0].urls.http}`,
+                )}`}
+                download={`${item.title}.m3u`}
+                className="rounded-full border border-border bg-surface-elevated px-4 py-1.5 text-xs font-semibold text-white/90 transition hover:bg-white/10"
+              >
+                Скачать M3U
+              </a>
+            </div>
+          </div>
+        </section>
+      )}
     </main>
   );
 }

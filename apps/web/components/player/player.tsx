@@ -61,35 +61,51 @@ export function Player({ links, title, next }: PlayerProps) {
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const [controlsVisible, setControlsVisible] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
+  const [isBuffering, setIsBuffering] = React.useState(false);
+  const [copied, setCopied] = React.useState(false);
+  const [activeFileIndex, setActiveFileIndex] = React.useState(0);
 
-  const bestFile = links.files[0];
-  const streamUrl = bestFile?.urls.hls ?? bestFile?.urls.http ?? null;
+  const activeFile = links.files[activeFileIndex] ?? links.files[0];
+  const streamUrl = activeFile?.urls.hls ?? activeFile?.urls.http ?? null;
   const sprites: SpriteMetaDto | null = links.sprites;
 
-  /* ---------- Инициализация HLS ---------- */
+  /* ---------- Инициализация потока (HLS или прямой HTTP Range) ---------- */
   React.useEffect(() => {
     const video = videoRef.current;
     if (!video || !streamUrl) return;
 
-    if (Hls.isSupported()) {
+    setError(null);
+    setIsBuffering(true);
+
+    const isHls = streamUrl.includes(".m3u8") || Boolean(activeFile?.urls.hls);
+
+    if (isHls && Hls.isSupported()) {
       const hls = new Hls({ enableWorker: true });
       hlsRef.current = hls;
       hls.loadSource(streamUrl);
       hls.attachMedia(video);
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        setIsBuffering(false);
+      });
       hls.on(Hls.Events.ERROR, (_e, data) => {
-        if (data.fatal) setError(`Ошибка воспроизведения: ${data.details}`);
+        if (data.fatal) {
+          setIsBuffering(false);
+          setError(`Ошибка воспроизведения HLS: ${data.details}`);
+        }
       });
       return () => {
         hls.destroy();
         hlsRef.current = null;
       };
     }
-    // Safari и прочие с нативным HLS.
+
+    // Safari или прямой HTTP Range-стрим (TorrServer / MP4)
     video.src = streamUrl;
+    video.load();
     return () => {
       video.removeAttribute("src");
     };
-  }, [streamUrl]);
+  }, [streamUrl, activeFile]);
 
   /* ---------- Субтитры: загрузка WebVTT ---------- */
   React.useEffect(() => {
@@ -132,9 +148,29 @@ export function Player({ links, title, next }: PlayerProps) {
     if (!video) return;
 
     const onTime = () => setCurrentTime(video.currentTime);
-    const onMeta = () => setDuration(video.duration || 0);
+    const onMeta = () => {
+      setDuration(video.duration || 0);
+      setIsBuffering(false);
+    };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
+    const onPlaying = () => {
+      setIsBuffering(false);
+      setError(null);
+    };
+    const onWaiting = () => setIsBuffering(true);
+    const onCanPlay = () => setIsBuffering(false);
+    const onError = () => {
+      setIsBuffering(false);
+      const err = video.error;
+      if (err?.code === 4) {
+        setError(
+          "Браузер не поддерживает кодек этого видеофайла (MKV / AC3 аудио). Рекомендуем открыть поток в VLC или IINA через кнопку ниже.",
+        );
+      } else if (err) {
+        setError(`Ошибка воспроизведения видео (код ${err.code}): ${err.message || "сбой загрузки"}`);
+      }
+    };
     const onVolume = () => {
       setVolume(video.volume);
       setMuted(video.muted);
@@ -144,12 +180,20 @@ export function Player({ links, title, next }: PlayerProps) {
     video.addEventListener("loadedmetadata", onMeta);
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
+    video.addEventListener("playing", onPlaying);
+    video.addEventListener("waiting", onWaiting);
+    video.addEventListener("canplay", onCanPlay);
+    video.addEventListener("error", onError);
     video.addEventListener("volumechange", onVolume);
     return () => {
       video.removeEventListener("timeupdate", onTime);
       video.removeEventListener("loadedmetadata", onMeta);
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("waiting", onWaiting);
+      video.removeEventListener("canplay", onCanPlay);
+      video.removeEventListener("error", onError);
       video.removeEventListener("volumechange", onVolume);
     };
   }, []);
@@ -274,6 +318,22 @@ export function Player({ links, title, next }: PlayerProps) {
     },
     [subtitles],
   );
+
+  const changeQuality = React.useCallback((index: number) => {
+    const video = videoRef.current;
+    const prevTime = video?.currentTime ?? 0;
+    const wasPlaying = video ? !video.paused : false;
+    setActiveFileIndex(index);
+
+    const onLoaded = () => {
+      if (video && prevTime > 0) {
+        video.currentTime = prevTime;
+        if (wasPlaying) void video.play().catch(() => {});
+      }
+      video?.removeEventListener("loadedmetadata", onLoaded);
+    };
+    video?.addEventListener("loadedmetadata", onLoaded);
+  }, []);
 
   const togglePip = React.useCallback(async () => {
     const video = videoRef.current;
@@ -444,9 +504,51 @@ export function Player({ links, title, next }: PlayerProps) {
         </div>
       )}
 
+      {/* Индикатор буферизации */}
+      {isBuffering && !error && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 text-white">
+          <div className="mb-3 h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+          <p className="text-sm font-medium text-white/90">Буферизация потока / поиск пиров в сети...</p>
+        </div>
+      )}
+
+      {/* Ошибка воспроизведения с кнопками внешних плееров */}
       {error && (
-        <div className="absolute inset-0 flex items-center justify-center bg-black/80 text-white">
-          {error}
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 p-6 text-center text-white">
+          <div className="max-w-md">
+            <h3 className="mb-2 text-base font-semibold text-white">Воспроизведение в браузере ограничено</h3>
+            <p className="mb-5 text-sm text-muted">{error}</p>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {streamUrl && (
+                <>
+                  <a
+                    href={`iina://weblink?url=${encodeURIComponent(streamUrl)}`}
+                    className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover"
+                  >
+                    Открыть в IINA (Mac)
+                  </a>
+                  <a
+                    href={`vlc://${streamUrl}`}
+                    className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
+                  >
+                    Открыть в VLC
+                  </a>
+                  <button
+                    onClick={() => {
+                      if (streamUrl) {
+                        navigator.clipboard.writeText(streamUrl);
+                        setCopied(true);
+                        setTimeout(() => setCopied(false), 2000);
+                      }
+                    }}
+                    className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-white/80 transition hover:bg-white/10"
+                  >
+                    {copied ? "Ссылка скопирована" : "Скопировать поток"}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
         </div>
       )}
 
@@ -467,6 +569,12 @@ export function Player({ links, title, next }: PlayerProps) {
           activeAudio={activeAudio}
           subtitles={subtitles.map((s) => ({ index: s.index, label: s.label }))}
           activeSubtitle={activeSubtitle}
+          qualities={links.files.map((f, i) => ({
+            index: i,
+            label: f.quality,
+          }))}
+          activeQuality={activeFileIndex}
+          onQuality={changeQuality}
           sprites={sprites}
           spriteUrl={sprites?.url ?? null}
           isFullscreen={isFullscreen}

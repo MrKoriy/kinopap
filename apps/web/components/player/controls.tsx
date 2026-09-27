@@ -24,6 +24,9 @@ export interface PlayerControlsProps {
   activeAudio: number;
   subtitles: TrackOption[];
   activeSubtitle: number | null;
+  qualities?: TrackOption[];
+  activeQuality?: number;
+  onQuality?(index: number): void;
   sprites: SpriteMetaDto | null;
   spriteUrl: string | null;
   isFullscreen: boolean;
@@ -245,6 +248,22 @@ export function PlayerControls(props: PlayerControlsProps) {
             </MenuItem>
           ))}
         </Menu>
+
+        {/* Качество / Источник */}
+        {props.qualities && props.qualities.length > 0 && (
+          <Menu label="Качество">
+            {props.qualities.map((q) => (
+              <MenuItem
+                key={q.index}
+                active={q.index === (props.activeQuality ?? 0)}
+                onClick={() => props.onQuality?.(q.index)}
+                testId={`quality-option-${q.index}`}
+              >
+                {q.label}
+              </MenuItem>
+            ))}
+          </Menu>
+        )}
 
         {/* Аудиодорожки */}
         <Menu label="Аудио">

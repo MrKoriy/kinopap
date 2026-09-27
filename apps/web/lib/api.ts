@@ -13,7 +13,9 @@ import {
 } from "@zal/api-client";
 
 export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001";
+  typeof window !== "undefined"
+    ? (process.env.NEXT_PUBLIC_API_URL ?? "")
+    : (process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:3001");
 
 export type ShortcutKind = "fresh" | "hot" | "popular";
 
