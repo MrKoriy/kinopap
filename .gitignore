@@ -17,3 +17,7 @@ apps/mobile/dist-e2e
 # Нативные проекты генерируются prebuild'ом (CNG) — не в git.
 apps/mobile/ios/
 apps/mobile/android/
+bin/
+data/
+.nosync
+*.log
