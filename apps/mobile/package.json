@@ -24,9 +24,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.63.0",
-    "@react-native-tvos/config-tv": "^0.1.6",
     "@types/react": "^19.3.0",
-    "react-native-tvos": "0.85.3-3",
     "tsx": "^4.23.15",
     "typescript": "^5.9.0",
     "vitest": "^5.0.2"
