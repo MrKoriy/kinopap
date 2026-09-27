@@ -14,6 +14,7 @@ import {
 import type { ItemSummary } from "@zal/api-client";
 import { tokens } from "@zal/ui";
 import { ItemCard } from "../components/item-card";
+import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";
 
 type SearchField = "title" | "director" | "cast";
@@ -32,6 +33,7 @@ export default function SearchScreen() {
   const [results, setResults] = React.useState<ItemSummary[]>([]);
   const [searched, setSearched] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const focusSubmit = useTvFocus();
 
   const runSearch = React.useCallback(async () => {
     const q = query.trim();
@@ -66,9 +68,11 @@ export default function SearchScreen() {
         />
         <Pressable
           testID="search-submit"
-          style={styles.button}
+          style={[styles.button, focusSubmit.ring]}
           onPress={() => void runSearch()}
           accessibilityRole="button"
+          hasTVPreferredFocus
+          {...focusSubmit.props}
         >
           <Text style={styles.buttonText}>Найти</Text>
         </Pressable>
@@ -76,15 +80,12 @@ export default function SearchScreen() {
 
       <View style={styles.fieldsRow}>
         {FIELDS.map((f) => (
-          <Pressable
+          <FieldChip
             key={f.id}
-            style={[styles.fieldChip, field === f.id && styles.fieldChipActive]}
-            onPress={() => setField(f.id)}
-            accessibilityRole="button"
-            accessibilityState={{ selected: field === f.id }}
-          >
-            <Text style={styles.fieldText}>{f.title}</Text>
-          </Pressable>
+            title={f.title}
+            active={field === f.id}
+            onSelect={() => setField(f.id)}
+          />
         ))}
       </View>
 
@@ -99,14 +100,38 @@ export default function SearchScreen() {
         data={results}
         numColumns={3}
         keyExtractor={(item) => String(item.id)}
-        renderItem={({ item }) => (
+        renderItem={({ item, index }) => (
           <View style={styles.cell}>
-            <ItemCard item={item} width={104} />
+            <ItemCard item={item} width={104} preferredFocus={index === 0} />
           </View>
         )}
         contentContainerStyle={styles.list}
       />
     </View>
+  );
+}
+
+/** Чип выбора поля поиска — отдельный компонент ради фокуса пульта. */
+function FieldChip({
+  title,
+  active,
+  onSelect,
+}: {
+  title: string;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const focus = useTvFocus();
+  return (
+    <Pressable
+      style={[styles.fieldChip, active && styles.fieldChipActive, focus.ring]}
+      onPress={onSelect}
+      accessibilityRole="button"
+      aria-selected={active}
+      {...focus.props}
+    >
+      <Text style={styles.fieldText}>{title}</Text>
+    </Pressable>
   );
 }
 

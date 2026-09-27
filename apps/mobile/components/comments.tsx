@@ -17,6 +17,7 @@ import { tokens } from "@zal/ui";
 import { useAuth } from "../lib/auth";
 import { buildCommentTree, type CommentNode } from "../lib/comment-tree";
 import { formatDate } from "../lib/format";
+import { useTvFocus } from "./tv-focus";
 
 interface BodyFormProps {
   label: string;
@@ -29,6 +30,8 @@ interface BodyFormProps {
 function BodyForm({ label, testId, initial = "", onSubmit, onCancel }: BodyFormProps) {
   const [body, setBody] = React.useState(initial);
   const [busy, setBusy] = React.useState(false);
+  const focusSubmit = useTvFocus();
+  const focusCancel = useTvFocus();
 
   return (
     <View style={styles.form} testID={testId}>
@@ -44,8 +47,9 @@ function BodyForm({ label, testId, initial = "", onSubmit, onCancel }: BodyFormP
       <View style={styles.formButtons}>
         <Pressable
           testID={`${testId}-submit`}
-          style={[styles.smallButton, (!body.trim() || busy) && styles.buttonOff]}
+          style={[styles.smallButton, (!body.trim() || busy) && styles.buttonOff, focusSubmit.ring]}
           disabled={!body.trim() || busy}
+          {...focusSubmit.props}
           onPress={async () => {
             setBusy(true);
             try {
@@ -59,7 +63,7 @@ function BodyForm({ label, testId, initial = "", onSubmit, onCancel }: BodyFormP
         >
           <Text style={styles.smallButtonText}>{label}</Text>
         </Pressable>
-        <Pressable onPress={onCancel}>
+        <Pressable onPress={onCancel} style={focusCancel.ring} {...focusCancel.props}>
           <Text style={styles.mutedText}>Отмена</Text>
         </Pressable>
       </View>
@@ -78,6 +82,9 @@ interface CommentRowProps {
 function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentRowProps) {
   const [replying, setReplying] = React.useState(false);
   const [editing, setEditing] = React.useState(false);
+  const focusReply = useTvFocus();
+  const focusEdit = useTvFocus();
+  const focusDelete = useTvFocus();
   const { comment, children } = node;
   const own = currentUserId != null && comment.author.id === currentUserId;
 
@@ -108,11 +115,19 @@ function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentR
 
         {!comment.deleted && !editing && (
           <View style={styles.actionsRow}>
-            <Pressable onPress={() => setReplying((v) => !v)}>
+            <Pressable
+              onPress={() => setReplying((v) => !v)}
+              style={focusReply.ring}
+              {...focusReply.props}
+            >
               <Text style={styles.actionText}>Ответить</Text>
             </Pressable>
             {own && (
-              <Pressable onPress={() => setEditing(true)}>
+              <Pressable
+                onPress={() => setEditing(true)}
+                style={focusEdit.ring}
+                {...focusEdit.props}
+              >
                 <Text style={styles.actionText}>Изменить</Text>
               </Pressable>
             )}
@@ -120,6 +135,8 @@ function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentR
               <Pressable
                 testID="delete-comment"
                 onPress={() => void onDelete(comment.id)}
+                style={focusDelete.ring}
+                {...focusDelete.props}
               >
                 <Text style={[styles.actionText, styles.deleteText]}>Удалить</Text>
               </Pressable>
@@ -153,6 +170,7 @@ function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentR
 
 export function Comments({ itemId }: { itemId: number }) {
   const { user, api } = useAuth();
+  const focusMore = useTvFocus();
   const [flat, setFlat] = React.useState<CommentDto[]>([]);
   const [nextOffset, setNextOffset] = React.useState<number | null>(null);
   const [total, setTotal] = React.useState(0);
@@ -241,7 +259,11 @@ export function Comments({ itemId }: { itemId: number }) {
       ))}
 
       {nextOffset != null && (
-        <Pressable style={styles.moreButton} onPress={() => void loadMore()}>
+        <Pressable
+          style={[styles.moreButton, focusMore.ring]}
+          onPress={() => void loadMore()}
+          {...focusMore.props}
+        >
           <Text style={styles.actionText}>Показать ещё</Text>
         </Pressable>
       )}

@@ -9,9 +9,13 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import type { ItemSocialDto } from "@zal/api-client";
 import { tokens } from "@zal/ui";
 import { useAuth } from "../lib/auth";
+import { useTvFocus } from "./tv-focus";
 
 export function ItemActions({ itemId }: { itemId: number }) {
   const { user, api } = useAuth();
+  const focusUp = useTvFocus();
+  const focusDown = useTvFocus();
+  const focusSub = useTvFocus();
   const [social, setSocial] = React.useState<ItemSocialDto | null>(null);
   const [subscribed, setSubscribed] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -101,9 +105,11 @@ export function ItemActions({ itemId }: { itemId: number }) {
         <Pressable
           testID="vote-up"
           onPress={() => void vote(true)}
-          style={[styles.voteButton, myVote === true && styles.voteActive]}
+          style={[styles.voteButton, myVote === true && styles.voteActive, focusUp.ring]}
           accessibilityRole="button"
           accessibilityLabel="Голос за"
+          hasTVPreferredFocus
+          {...focusUp.props}
         >
           <Text style={styles.voteGlyph}>▲</Text>
         </Pressable>
@@ -113,9 +119,10 @@ export function ItemActions({ itemId }: { itemId: number }) {
         <Pressable
           testID="vote-down"
           onPress={() => void vote(false)}
-          style={[styles.voteButton, myVote === false && styles.voteActiveDown]}
+          style={[styles.voteButton, myVote === false && styles.voteActiveDown, focusDown.ring]}
           accessibilityRole="button"
           accessibilityLabel="Голос против"
+          {...focusDown.props}
         >
           <Text style={styles.voteGlyph}>▼</Text>
         </Pressable>
@@ -127,8 +134,9 @@ export function ItemActions({ itemId }: { itemId: number }) {
       <Pressable
         testID="subscribe-button"
         onPress={() => void toggleSubscription()}
-        style={[styles.subButton, subscribed && styles.subButtonActive]}
+        style={[styles.subButton, subscribed && styles.subButtonActive, focusSub.ring]}
         accessibilityRole="button"
+        {...focusSub.props}
       >
         <Text style={styles.subText}>
           {subscribed ? "Вы подписаны ✓" : "Подписаться на новые серии"}

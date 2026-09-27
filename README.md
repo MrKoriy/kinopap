@@ -128,6 +128,43 @@ xcrun simctl launch booted dev.zal.mobile
 плеер, который реально проигрывает наш HLS — в логах API видны запросы
 `master-audio-0-rus.m3u8` и `seg_000*.ts`.
 
+### Android TV (APK)
+
+Тот же клиент плюс телевизионная обвязка: категория `LEANBACK_LAUNCHER`
+(приложение видно в лончере TV), баннер 320×180, снятая обязательность
+тачскрина и навигация пультом — кольцо фокуса на всех элементах и
+`hasTVPreferredFocus` на главном действии экрана. Живёт это в конфиг-плагине
+`apps/mobile/plugins/with-android-tv.js`, так что `android/` руками не правится.
+
+```bash
+cd apps/mobile
+# 10.0.2.2 — это хост из эмулятора; для живой приставки — IP машины с API
+ZAL_ALLOW_CLEARTEXT=1 EXPO_PUBLIC_API_URL=http://10.0.2.2:3001 \
+  npx expo prebuild --platform android
+cd android && ./gradlew :app:assembleRelease
+# → app/build/outputs/apk/release/app-release.apk
+```
+
+`ZAL_ALLOW_CLEARTEXT=1` добавляет `usesCleartextTraffic` — нужен, когда API
+домашний и по http. На приставку ставится обычным `adb install -r
+app-release.apk` (или скинуть APK на устройство), в лончере появится плитка
+«Зал». Свежесобранный APK лежит в `apps/mobile/dist/zal-tv-0.0.1.apk`.
+
+Проверено на Android TV 36 (arm64, эмулятор `tv_1080p`): приложение
+запускается из лончера, D-pad ходит по лентам, Enter открывает тайтл, Enter
+на «Смотреть» — плеер, который реально играет HLS (в логах API
+`master-audio-0-rus.m3u8` и все сегменты `seg_*.ts`).
+
+```bash
+# разово: TV-система и AVD
+sdkmanager "system-images;android-36;android-tv;arm64-v8a"
+ANDROID_HOME=... apps/mobile/e2e/tv-smoke.sh   # эмулятор + установка + пульт + скриншоты
+```
+
+Харнесс для такого прогона поднимают с двумя переменными: `ZAL_E2E_PUBLIC_BASE`
+(адрес, по которому клиент видит медиа) и `ZAL_E2E_HOST=0.0.0.0` — если клиент
+не эмулятор, а живая приставка в сети.
+
 ## E2E
 
 Playwright против реального ffmpeg-контента (`apps/web/e2e/server.ts`: PGlite +
@@ -167,3 +204,5 @@ hls.js-ветки, у сборки WebKit — AVFoundation): тест сам с�
 6. ✅ Полировка: края социалки (edit/пагинация/badge/новые части), статистика
    просмотров, фолбэк-постеры из ингеста, персональные мастера дубляжей для
    мобилы, e2e-обвязка мобильного веба, доки
+7. ✅ Android TV: APK с leanback-лончером, баннером, D-pad-навигацией и
+   кнопкой «Смотреть» на карточке (её не было для полнометражек)

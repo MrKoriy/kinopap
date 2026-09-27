@@ -16,12 +16,14 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { VideoView, useVideoPlayer, type VideoSource } from "expo-video";
 import type { ItemDetail, MediaLinks } from "@zal/api-client";
 import { tokens } from "@zal/ui";
+import { useTvFocus } from "../../../components/tv-focus";
 import { useAuth } from "../../../lib/auth";
 import { formatTime } from "../../../lib/format";
 import { cueAt, parseVtt, type SubtitleCue } from "../../../lib/subtitles";
@@ -51,6 +53,24 @@ export default function WatchScreen() {
   const [duration, setDuration] = React.useState(0);
   const [playing, setPlaying] = React.useState(false);
   const [barWidth, setBarWidth] = React.useState(0);
+  // На TV (ландшафт 16:9) видео в полную ширину заняло бы весь экран и
+  // вытолкнуло контролы за фолд — ограничиваем высоту долей экрана.
+  const { width: winWidth, height: winHeight } = useWindowDimensions();
+  const videoHeight = Math.min((winWidth * 9) / 16, winHeight * 0.72);
+  // Фокус для пульта: у плеера нет тача, всё ходит по focusable-контролам.
+  const focusPlay = useTvFocus();
+  const focusSeekBar = useTvFocus();
+  const focusControls = [
+    useTvFocus(),
+    useTvFocus(),
+    useTvFocus(),
+    useTvFocus(),
+  ];
+  const focusSkipIntro = useTvFocus();
+  const focusNext = useTvFocus();
+  const focusSubOff = useTvFocus();
+  const focusShiftBack = useTvFocus();
+  const focusShiftFwd = useTvFocus();
 
   const resumeRef = React.useRef(0);
   const appliedResumeRef = React.useRef(false);
@@ -251,7 +271,7 @@ export default function WatchScreen() {
 
   return (
     <View testID="player-screen" style={styles.container}>
-      <View style={styles.videoWrap}>
+      <View style={[styles.videoWrap, { height: videoHeight }]}>
         <VideoView
           ref={videoRef}
           player={player}
@@ -279,7 +299,8 @@ export default function WatchScreen() {
           </Text>
           <Pressable
             testID="player-seekbar"
-            style={styles.seekbar}
+            style={[styles.seekbar, focusSeekBar.ring]}
+            {...focusSeekBar.props}
             onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
             onPress={(e) => {
               if (!duration || barWidth <= 0) return;
@@ -302,26 +323,46 @@ export default function WatchScreen() {
         </View>
 
         <View style={styles.buttonRow}>
-          <Pressable style={styles.controlButton} onPress={() => seekBy(-10)}>
+          <Pressable
+            style={[styles.controlButton, focusControls[0]!.ring]}
+            onPress={() => seekBy(-10)}
+            accessibilityRole="button"
+            {...focusControls[0]!.props}
+          >
             <Text style={styles.controlText}>−10с</Text>
           </Pressable>
           <Pressable
             testID="player-play"
-            style={styles.playButton}
+            style={[styles.playButton, focusPlay.ring]}
             onPress={() => (player.playing ? player.pause() : player.play())}
             accessibilityRole="button"
+            hasTVPreferredFocus
+            {...focusPlay.props}
           >
             <Text style={styles.playText}>{playing ? "Пауза" : "Играть"}</Text>
           </Pressable>
-          <Pressable style={styles.controlButton} onPress={() => seekBy(10)}>
+          <Pressable
+            style={[styles.controlButton, focusControls[1]!.ring]}
+            onPress={() => seekBy(10)}
+            accessibilityRole="button"
+            {...focusControls[1]!.props}
+          >
             <Text style={styles.controlText}>+10с</Text>
           </Pressable>
-          <Pressable testID="player-speed" style={styles.controlButton} onPress={changeSpeed}>
+          <Pressable
+            testID="player-speed"
+            style={[styles.controlButton, focusControls[2]!.ring]}
+            onPress={changeSpeed}
+            accessibilityRole="button"
+            {...focusControls[2]!.props}
+          >
             <Text style={styles.controlText}>{SPEEDS[speedIdx]}×</Text>
           </Pressable>
           <Pressable
-            style={styles.controlButton}
+            style={[styles.controlButton, focusControls[3]!.ring]}
             onPress={() => void videoRef.current?.enterFullscreen()}
+            accessibilityRole="button"
+            {...focusControls[3]!.props}
           >
             <Text style={styles.controlText}>На весь</Text>
           </Pressable>
@@ -330,12 +371,13 @@ export default function WatchScreen() {
         {inIntro && intro && (
           <Pressable
             testID="player-skip-intro"
-            style={styles.introButton}
+            style={[styles.introButton, focusSkipIntro.ring]}
             onPress={() => {
               player.currentTime = intro.endSeconds;
               setCurrent(intro.endSeconds);
             }}
             accessibilityRole="button"
+            {...focusSkipIntro.props}
           >
             <Text style={styles.playText}>Пропустить интро</Text>
           </Pressable>
@@ -344,9 +386,10 @@ export default function WatchScreen() {
         {nextMedia && (
           <Pressable
             testID="player-next"
-            style={styles.nextButton}
+            style={[styles.nextButton, focusNext.ring]}
             onPress={() => router.push(`/watch/${itemIdNum}/${nextMedia}`)}
             accessibilityRole="button"
+            {...focusNext.props}
           >
             <Text style={styles.controlText}>Следующая серия →</Text>
           </Pressable>
@@ -357,29 +400,21 @@ export default function WatchScreen() {
             <Text style={styles.sectionTitle}>Субтитры</Text>
             <View style={styles.buttonRow}>
               {links.subtitles.map((s, i) => (
-                <Pressable
+                <TrackChip
                   key={s.id}
                   testID={`player-subtitle-${i}`}
-                  style={[
-                    styles.controlButton,
-                    i === activeSub && styles.controlActive,
-                    !s.url && styles.controlOff,
-                  ]}
+                  label={s.title ?? s.lang.toUpperCase()}
+                  active={i === activeSub}
                   disabled={!s.url}
                   onPress={() => void selectSubtitle(i)}
-                  accessibilityRole="button"
-                  aria-selected={i === activeSub}
-                >
-                  <Text style={styles.controlText}>
-                    {s.title ?? s.lang.toUpperCase()}
-                  </Text>
-                </Pressable>
+                />
               ))}
               {activeSub != null && (
                 <Pressable
-                  style={styles.controlButton}
+                  style={[styles.controlButton, focusSubOff.ring]}
                   onPress={() => void selectSubtitle(activeSub)}
                   accessibilityRole="button"
+                  {...focusSubOff.props}
                 >
                   <Text style={styles.controlText}>Выкл</Text>
                 </Pressable>
@@ -388,9 +423,10 @@ export default function WatchScreen() {
             {activeSub != null && (
               <View style={styles.buttonRow}>
                 <Pressable
-                  style={styles.controlButton}
+                  style={[styles.controlButton, focusShiftBack.ring]}
                   onPress={() => setShiftMs((v) => v - 100)}
                   accessibilityRole="button"
+                  {...focusShiftBack.props}
                 >
                   <Text style={styles.controlText}>−0.1с</Text>
                 </Pressable>
@@ -399,9 +435,10 @@ export default function WatchScreen() {
                   {(shiftMs / 1000).toFixed(1)}с
                 </Text>
                 <Pressable
-                  style={styles.controlButton}
+                  style={[styles.controlButton, focusShiftFwd.ring]}
                   onPress={() => setShiftMs((v) => v + 100)}
                   accessibilityRole="button"
+                  {...focusShiftFwd.props}
                 >
                   <Text style={styles.controlText}>+0.1с</Text>
                 </Pressable>
@@ -414,32 +451,60 @@ export default function WatchScreen() {
           <View style={styles.dubSection}>
             <Text style={styles.sectionTitle}>Дубляж</Text>
             <View style={styles.buttonRow}>
-              {links.audios.map((a, i) => {
-                const label =
-                  a.author.shortTitle ?? a.author.title ?? `${a.type} (${a.lang})`;
-                return (
-                  <Pressable
-                    key={a.id}
-                    testID={`player-audio-${i}`}
-                    style={[
-                      styles.controlButton,
-                      i === activeAudio && styles.controlActive,
-                      !a.masterUrl && styles.controlOff,
-                    ]}
-                    disabled={!a.masterUrl}
-                    onPress={() => changeAudio(i)}
-                    accessibilityRole="button"
-                    aria-selected={i === activeAudio}
-                  >
-                    <Text style={styles.controlText}>{label}</Text>
-                  </Pressable>
-                );
-              })}
+              {links.audios.map((a, i) => (
+                <TrackChip
+                  key={a.id}
+                  testID={`player-audio-${i}`}
+                  label={
+                    a.author.shortTitle ??
+                    a.author.title ??
+                    `${a.type} (${a.lang})`
+                  }
+                  active={i === activeAudio}
+                  disabled={!a.masterUrl}
+                  onPress={() => changeAudio(i)}
+                />
+              ))}
             </View>
           </View>
         )}
       </ScrollView>
     </View>
+  );
+}
+
+/** Чип дорожки (дубляж/субтитры) — отдельный компонент ради фокуса пульта. */
+function TrackChip({
+  testID,
+  label,
+  active,
+  disabled,
+  onPress,
+}: {
+  testID: string;
+  label: string;
+  active: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}) {
+  const focus = useTvFocus();
+  return (
+    <Pressable
+      testID={testID}
+      style={[
+        styles.controlButton,
+        active && styles.controlActive,
+        disabled && styles.controlOff,
+        focus.ring,
+      ]}
+      disabled={disabled}
+      onPress={onPress}
+      accessibilityRole="button"
+      aria-selected={active}
+      {...focus.props}
+    >
+      <Text style={styles.controlText}>{label}</Text>
+    </Pressable>
   );
 }
 
@@ -456,7 +521,7 @@ const styles = StyleSheet.create({
   },
   videoWrap: {
     width: "100%",
-    aspectRatio: 16 / 9,
+    alignSelf: "center",
     backgroundColor: "#000",
   },
   video: {

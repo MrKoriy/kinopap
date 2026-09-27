@@ -6,18 +6,31 @@ import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { Link } from "expo-router";
 import type { ItemSummary } from "@zal/api-client";
 import { tokens } from "@zal/ui";
+import { useTvFocus } from "./tv-focus";
 
-export function ItemCard({ item, width = 140 }: { item: ItemSummary; width?: number }) {
+export function ItemCard({
+  item,
+  width = 140,
+  preferredFocus = false,
+}: {
+  item: ItemSummary;
+  width?: number;
+  /** TV: первый элемент ленты забирает фокус при входе на экран. */
+  preferredFocus?: boolean;
+}) {
   const poster = item.posters.medium ?? item.posters.small ?? item.posters.big;
   const rating = item.rating > 0 ? item.rating : item.imdb.rating;
+  const focus = useTvFocus();
 
   return (
     <Link href={`/item/${item.id}`} asChild>
       <Pressable
         testID="item-card"
         // expo-router Link asChild требует один плоский style, не массив.
-        style={StyleSheet.flatten([styles.card, { width }])}
+        style={StyleSheet.flatten([styles.card, { width }, focus.ring])}
         accessibilityRole="button"
+        hasTVPreferredFocus={preferredFocus}
+        {...focus.props}
       >
         {poster ? (
           <Image source={{ uri: poster }} style={styles.poster} resizeMode="cover" />

@@ -12,11 +12,12 @@ import {
   View,
 } from "react-native";
 import { Link, useLocalSearchParams } from "expo-router";
-import type { ItemDetail, ItemSummary } from "@zal/api-client";
+import type { Episode, ItemDetail, ItemSummary, MediaPart } from "@zal/api-client";
 import { tokens } from "@zal/ui";
 import { Comments } from "../../components/comments";
 import { ItemCard } from "../../components/item-card";
 import { ItemActions } from "../../components/item-actions";
+import { useTvFocus } from "../../components/tv-focus";
 import { useAuth } from "../../lib/auth";
 import { formatDuration } from "../../lib/format";
 
@@ -24,6 +25,7 @@ export default function ItemScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const itemId = Number(id);
   const { api } = useAuth();
+  const focusWatch = useTvFocus();
   const [item, setItem] = React.useState<ItemDetail | null>(null);
   const [missing, setMissing] = React.useState(false);
 
@@ -92,6 +94,23 @@ export default function ItemScreen() {
 
       {item.plot && <Text style={styles.plot}>{item.plot}</Text>}
 
+      {/* Фильм из одной части: без этой кнопки фильм было не запустить.
+          У сериала и многочастевого фильма пуск — ниже, в списке. */}
+      {item.media && item.media.length === 1 && (
+        <Link href={`/watch/${item.id}/${item.media[0]!.id}`} asChild>
+          <Pressable
+            testID="watch-button"
+            // См. item-card: Link asChild ждёт плоский style.
+            style={StyleSheet.flatten([styles.watchButton, focusWatch.ring])}
+            accessibilityRole="button"
+            hasTVPreferredFocus
+            {...focusWatch.props}
+          >
+            <Text style={styles.watchText}>Смотреть</Text>
+          </Pressable>
+        </Link>
+      )}
+
       <Similar itemId={item.id} />
 
       {/* Сериалы: сезоны и эпизоды */}
@@ -103,30 +122,7 @@ export default function ItemScreen() {
                 {season.title ?? `Сезон ${season.number}`}
               </Text>
               {season.episodes.map((ep) => (
-                <Link
-                  key={ep.id}
-                  href={
-                    ep.mediaId
-                      ? `/watch/${item.id}/${ep.mediaId}`
-                      : { pathname: "/item/[id]", params: { id: item.id } }
-                  }
-                  asChild
-                >
-                  <Pressable
-                    // См. item-card: Link asChild ждёт плоский style.
-                    style={StyleSheet.flatten([styles.epRow, !ep.mediaId && styles.epOff])}
-                    disabled={!ep.mediaId}
-                    accessibilityRole="button"
-                  >
-                    <Text style={styles.epNumber}>{ep.number}</Text>
-                    <Text style={styles.epTitle} numberOfLines={1}>
-                      {ep.title ?? `Серия ${ep.number}`}
-                    </Text>
-                    {ep.runtime > 0 && (
-                      <Text style={styles.muted}>{formatDuration(ep.runtime)}</Text>
-                    )}
-                  </Pressable>
-                </Link>
+                <EpisodeRow key={ep.id} itemId={item.id} ep={ep} />
               ))}
             </View>
           ))}
@@ -137,20 +133,62 @@ export default function ItemScreen() {
       {item.media && item.media.length > 1 && (
         <View style={styles.section}>
           {item.media.map((part) => (
-            <Link key={part.id} href={`/watch/${item.id}/${part.id}`} asChild>
-              <Pressable style={styles.epRow} accessibilityRole="button">
-                <Text style={styles.epNumber}>{part.partNumber}</Text>
-                <Text style={styles.epTitle} numberOfLines={1}>
-                  {part.title ?? `Часть ${part.partNumber}`}
-                </Text>
-              </Pressable>
-            </Link>
+            <PartRow key={part.id} itemId={item.id} part={part} />
           ))}
         </View>
       )}
 
       <Comments itemId={item.id} />
     </ScrollView>
+  );
+}
+
+/** Строка эпизода: Link asChild требует плоский style, фокус — для пульта. */
+function EpisodeRow({ itemId, ep }: { itemId: number; ep: Episode }) {
+  const focus = useTvFocus();
+  return (
+    <Link
+      href={
+        ep.mediaId
+          ? `/watch/${itemId}/${ep.mediaId}`
+          : { pathname: "/item/[id]", params: { id: itemId } }
+      }
+      asChild
+    >
+      <Pressable
+        style={StyleSheet.flatten([styles.epRow, !ep.mediaId && styles.epOff, focus.ring])}
+        disabled={!ep.mediaId}
+        accessibilityRole="button"
+        {...focus.props}
+      >
+        <Text style={styles.epNumber}>{ep.number}</Text>
+        <Text style={styles.epTitle} numberOfLines={1}>
+          {ep.title ?? `Серия ${ep.number}`}
+        </Text>
+        {ep.runtime > 0 && (
+          <Text style={styles.muted}>{formatDuration(ep.runtime)}</Text>
+        )}
+      </Pressable>
+    </Link>
+  );
+}
+
+/** Часть многочастевого фильма. */
+function PartRow({ itemId, part }: { itemId: number; part: MediaPart }) {
+  const focus = useTvFocus();
+  return (
+    <Link href={`/watch/${itemId}/${part.id}`} asChild>
+      <Pressable
+        style={StyleSheet.flatten([styles.epRow, focus.ring])}
+        accessibilityRole="button"
+        {...focus.props}
+      >
+        <Text style={styles.epNumber}>{part.partNumber}</Text>
+        <Text style={styles.epTitle} numberOfLines={1}>
+          {part.title ?? `Часть ${part.partNumber}`}
+        </Text>
+      </Pressable>
+    </Link>
   );
 }
 
@@ -253,6 +291,18 @@ const styles = StyleSheet.create({
     fontSize: tokens.fontSize.md,
     fontWeight: "700",
     marginBottom: tokens.space.xs,
+  },
+  watchButton: {
+    marginTop: tokens.space.md,
+    backgroundColor: tokens.color.accent,
+    borderRadius: tokens.radius.full,
+    alignItems: "center",
+    paddingVertical: tokens.space.md,
+  },
+  watchText: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.md,
+    fontWeight: "700",
   },
   epRow: {
     flexDirection: "row",

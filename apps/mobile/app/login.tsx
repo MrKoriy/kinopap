@@ -12,10 +12,13 @@ import {
 } from "react-native";
 import { useRouter } from "expo-router";
 import { tokens } from "@zal/ui";
+import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";
 
 export default function LoginScreen() {
   const { login, register } = useAuth();
+  const focusSubmit = useTvFocus();
+  const focusToggle = useTvFocus();
   const router = useRouter();
   const [mode, setMode] = React.useState<"login" | "register">("login");
   const [email, setEmail] = React.useState("");
@@ -93,10 +96,12 @@ export default function LoginScreen() {
 
       <Pressable
         testID="auth-submit"
-        style={[styles.submit, busy && styles.submitOff]}
+        style={[styles.submit, busy && styles.submitOff, focusSubmit.ring]}
         disabled={busy}
         onPress={() => void submit()}
         accessibilityRole="button"
+        hasTVPreferredFocus
+        {...focusSubmit.props}
       >
         {busy ? (
           <ActivityIndicator color={tokens.color.text} />
@@ -109,7 +114,9 @@ export default function LoginScreen() {
 
       <Pressable
         onPress={() => setMode((m) => (m === "login" ? "register" : "login"))}
+        style={focusToggle.ring}
         accessibilityRole="button"
+        {...focusToggle.props}
       >
         <Text style={styles.toggle}>
           {mode === "login"

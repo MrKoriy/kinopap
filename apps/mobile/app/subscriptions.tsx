@@ -10,9 +10,10 @@ import {
   Text,
   View,
 } from "react-native";
-import { Link } from "expo-router";
+import { Link, type Href } from "expo-router";
 import type { NewEpisodeDto, SubscriptionDto } from "@zal/api-client";
 import { tokens } from "@zal/ui";
+import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";
 import { feedLabel, feedTitle } from "../lib/feed";
 import { formatDate } from "../lib/format";
@@ -22,6 +23,7 @@ export default function SubscriptionsScreen() {
   const [subs, setSubs] = React.useState<SubscriptionDto[]>([]);
   const [episodes, setEpisodes] = React.useState<NewEpisodeDto[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const focusLogin = useTvFocus();
 
   React.useEffect(() => {
     if (!user) {
@@ -63,7 +65,11 @@ export default function SubscriptionsScreen() {
       <View style={styles.center}>
         <Text style={styles.muted}>Войдите, чтобы видеть подписки.</Text>
         <Link href="/login" asChild>
-          <Pressable style={styles.loginButton}>
+          <Pressable
+            style={StyleSheet.flatten([styles.loginButton, focusLogin.ring])}
+            hasTVPreferredFocus
+            {...focusLogin.props}
+          >
             <Text style={styles.loginText}>Войти</Text>
           </Pressable>
         </Link>
@@ -88,17 +94,7 @@ export default function SubscriptionsScreen() {
         )
       }
       renderItem={({ item }) => (
-        <Link href={`/watch/${item.itemId}/${item.mediaId}`} asChild>
-          <Pressable testID="new-episode-row" style={styles.epRow} accessibilityRole="button">
-            <Text style={styles.epLabel}>{feedLabel(item)}</Text>
-            <View style={styles.epText}>
-              <Text style={styles.epTitle} numberOfLines={1}>
-                {feedTitle(item)}
-              </Text>
-              <Text style={styles.muted}>{formatDate(item.publishedAt)}</Text>
-            </View>
-          </Pressable>
-        </Link>
+        <FeedRow item={item} />
       )}
       ListFooterComponent={
         <View style={styles.footer}>
@@ -107,27 +103,75 @@ export default function SubscriptionsScreen() {
             <Text style={styles.muted}>Подписок пока нет.</Text>
           )}
           {subs.map((s) => (
-            <View key={s.itemId} style={styles.subRow} testID="subs-item">
-              <Link href={`/item/${s.itemId}`} asChild>
-                <Pressable style={styles.subTitle} accessibilityRole="button">
-                  <Text style={styles.epTitle}>
-                    {s.item.title}
-                    {s.item.year ? ` (${s.item.year})` : ""}
-                  </Text>
-                </Pressable>
-              </Link>
-              <Pressable
-                testID="unsub-button"
-                onPress={() => void unsubscribe(s.itemId)}
-                accessibilityRole="button"
-              >
-                <Text style={styles.unsubText}>Отписаться</Text>
-              </Pressable>
-            </View>
+            <SubRow
+              key={s.itemId}
+              title={`${s.item.title}${s.item.year ? ` (${s.item.year})` : ""}`}
+              itemHref={`/item/${s.itemId}`}
+              onUnsubscribe={() => void unsubscribe(s.itemId)}
+            />
           ))}
         </View>
       }
     />
+  );
+}
+
+/** Строка ленты «новое»: фокус пульта + плоский style для Link asChild. */
+function FeedRow({ item }: { item: NewEpisodeDto }) {
+  const focus = useTvFocus();
+  return (
+    <Link href={`/watch/${item.itemId}/${item.mediaId}`} asChild>
+      <Pressable
+        testID="new-episode-row"
+        style={StyleSheet.flatten([styles.epRow, focus.ring])}
+        accessibilityRole="button"
+        {...focus.props}
+      >
+        <Text style={styles.epLabel}>{feedLabel(item)}</Text>
+        <View style={styles.epText}>
+          <Text style={styles.epTitle} numberOfLines={1}>
+            {feedTitle(item)}
+          </Text>
+          <Text style={styles.muted}>{formatDate(item.publishedAt)}</Text>
+        </View>
+      </Pressable>
+    </Link>
+  );
+}
+
+/** Строка подписки: переход в тайтл и отписка. */
+function SubRow({
+  title,
+  itemHref,
+  onUnsubscribe,
+}: {
+  title: string;
+  itemHref: Href;
+  onUnsubscribe: () => void;
+}) {
+  const focusTitle = useTvFocus();
+  const focusUnsub = useTvFocus();
+  return (
+    <View style={styles.subRow} testID="subs-item">
+      <Link href={itemHref} asChild>
+        <Pressable
+          style={StyleSheet.flatten([styles.subTitle, focusTitle.ring])}
+          accessibilityRole="button"
+          {...focusTitle.props}
+        >
+          <Text style={styles.epTitle}>{title}</Text>
+        </Pressable>
+      </Link>
+      <Pressable
+        testID="unsub-button"
+        onPress={onUnsubscribe}
+        style={focusUnsub.ring}
+        accessibilityRole="button"
+        {...focusUnsub.props}
+      >
+        <Text style={styles.unsubText}>Отписаться</Text>
+      </Pressable>
+    </View>
   );
 }
 

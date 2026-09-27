@@ -18,6 +18,7 @@ import { Link, useRouter } from "expo-router";
 import type { ItemSummary } from "@zal/api-client";
 import { tokens } from "@zal/ui";
 import { ItemCard } from "../components/item-card";
+import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";
 
 type ShortcutKind = "fresh" | "hot" | "popular";
@@ -43,6 +44,7 @@ export default function HomeScreen() {
     Record<ShortcutKind, ItemSummary[]>
   >({ fresh: [], hot: [], popular: [] });
   const [loading, setLoading] = React.useState(true);
+  const focusNav = [useTvFocus(), useTvFocus(), useTvFocus(), useTvFocus()];
 
   React.useEffect(() => {
     let cancelled = false;
@@ -72,17 +74,20 @@ export default function HomeScreen() {
       <View style={styles.topRow}>
         <Pressable
           testID="search-link"
-          style={styles.navButton}
+          style={[styles.navButton, focusNav[0]!.ring]}
           onPress={() => router.push("/search")}
           accessibilityRole="button"
+          hasTVPreferredFocus
+          {...focusNav[0]!.props}
         >
           <Text style={styles.navText}>Поиск</Text>
         </Pressable>
         <Pressable
           testID="subs-link"
-          style={styles.navButton}
+          style={[styles.navButton, focusNav[1]!.ring]}
           onPress={() => router.push("/subscriptions")}
           accessibilityRole="button"
+          {...focusNav[1]!.props}
         >
           <Text style={styles.navText}>Подписки</Text>
         </Pressable>
@@ -90,8 +95,10 @@ export default function HomeScreen() {
           <Link href="/login" asChild>
             <Pressable
               testID="login-link"
-              style={styles.loginButton}
+              // См. item-card: Link asChild требует плоский style, не массив.
+              style={StyleSheet.flatten([styles.loginButton, focusNav[2]!.ring])}
               accessibilityRole="button"
+              {...focusNav[2]!.props}
             >
               <Text style={styles.loginText}>Войти</Text>
             </Pressable>
@@ -100,9 +107,10 @@ export default function HomeScreen() {
         {user && (
           <Pressable
             testID="logout-button"
-            style={styles.navButton}
+            style={[styles.navButton, focusNav[3]!.ring]}
             onPress={() => void logout()}
             accessibilityRole="button"
+            {...focusNav[3]!.props}
           >
             <Text style={styles.navText}>Выйти ({user.name})</Text>
           </Pressable>
@@ -118,7 +126,12 @@ export default function HomeScreen() {
             horizontal
             data={sections[section.kind]}
             keyExtractor={(item) => String(item.id)}
-            renderItem={({ item }) => <ItemCard item={item} />}
+            renderItem={({ item, index }) => (
+              <ItemCard
+                item={item}
+                preferredFocus={section.kind === "fresh" && index === 0}
+              />
+            )}
             showsHorizontalScrollIndicator={false}
           />
         </View>

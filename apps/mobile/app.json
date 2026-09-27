@@ -4,11 +4,11 @@
     "slug": "zal",
     "scheme": "zal",
     "version": "0.0.1",
-    "orientation": "portrait",
+    "orientation": "default",
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "backgroundColor": "#0b0b0f",
-    "plugins": ["expo-router"],
+    "plugins": ["expo-router", "./plugins/with-android-tv"],
     "ios": { "bundleIdentifier": "dev.zal.mobile", "supportsTablet": true },
     "android": { "package": "dev.zal.mobile" },
     "web": {
