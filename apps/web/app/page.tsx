@@ -1,49 +1,47 @@
-import { ApiStatus } from "./api-status";
+import { Suspense } from "react";
+import { fetchShortcut, type ShortcutKind } from "@/lib/api";
+import { HeroCarousel } from "@/components/hero-carousel";
+import { ItemRail } from "@/components/item-rail";
+import { HeroSkeleton, RailSkeleton } from "@/components/skeletons";
 
-const FEATURES = [
-  {
-    title: "Каталог как в kino.pub — только чище",
-    text: "Фильтры по типу, жанрам, странам, году, актёрам и режиссёрам. Cursor-пагинация, мгновенный поиск.",
-  },
-  {
-    title: "Плеер — главная фича",
-    text: "HLS-лестница качеств, переключение аудиодорожек, субтитры со сдвигом, резюме с любого устройства.",
-  },
-  {
-    title: "Сериалы и подписки",
-    text: "Сезоны и эпизоды, подписка на новые серии, отметки просмотренного, продолжение просмотра.",
-  },
-  {
-    title: "Закрытый клуб",
-    text: "Регистрация по инвайтам, JWT-сессии с ротацией, профили внутри аккаунта.",
-  },
-];
+export const revalidate = 30;
 
+/** Hero-карусель: верхняя полоса свежего. */
+async function Hero() {
+  const fresh = await fetchShortcut("fresh", 5);
+  return <HeroCarousel items={fresh.items} />;
+}
+
+/** Лента секции; стримится по мере готовности — со скелетоном до ответа. */
+async function Rail({
+  kind,
+  title,
+  href,
+}: {
+  kind: ShortcutKind;
+  title: string;
+  href: string;
+}) {
+  const page = await fetchShortcut(kind, 12);
+  return <ItemRail title={title} items={page.items} href={href} />;
+}
+
+/** Главная: hero-карусель + ленты fresh/hot/popular. */
 export default function HomePage() {
   return (
-    <main className="container">
-      <section className="hero">
-        <h1>
-          Зал<span>.</span>
-        </h1>
-        <p>
-          Кино для своих: каталог, плеер и всё остальное — быстрее, красивее и
-          удобнее, чем где-либо. Фаза 1 готова: API, схема данных и авторизация
-          уже работают.
-        </p>
-        <p style={{ marginTop: "1.5rem" }}>
-          <ApiStatus />
-        </p>
-      </section>
-
-      <section className="grid">
-        {FEATURES.map((f) => (
-          <article key={f.title} className="card">
-            <h3>{f.title}</h3>
-            <p>{f.text}</p>
-          </article>
-        ))}
-      </section>
+    <main className="mx-auto max-w-7xl px-4 py-8">
+      <Suspense fallback={<HeroSkeleton />}>
+        <Hero />
+      </Suspense>
+      <Suspense fallback={<RailSkeleton />}>
+        <Rail kind="fresh" title="Свежее" href="/catalog?sort=updated-" />
+      </Suspense>
+      <Suspense fallback={<RailSkeleton />}>
+        <Rail kind="hot" title="В тренде" href="/catalog?sort=views-" />
+      </Suspense>
+      <Suspense fallback={<RailSkeleton />}>
+        <Rail kind="popular" title="Популярное" href="/catalog?sort=rating-" />
+      </Suspense>
     </main>
   );
 }

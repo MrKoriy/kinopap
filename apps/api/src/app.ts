@@ -8,6 +8,7 @@ import { authRoutes } from "./routes/auth";
 import { catalogRoutes } from "./routes/catalog";
 import { docsRoutes } from "./routes/docs";
 import { ingestRoutes } from "./routes/ingest";
+import { progressRoutes } from "./routes/progress";
 
 export interface BuildAppOptions {
   db: Db;
@@ -29,7 +30,10 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   app.addHook("onRequest", async (request, reply) => {
     reply.header("access-control-allow-origin", opts.config.corsOrigin);
     reply.header("access-control-allow-headers", "authorization, content-type");
-    reply.header("access-control-allow-methods", "GET, POST, OPTIONS");
+    reply.header(
+      "access-control-allow-methods",
+      "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+    );
     if (request.method === "OPTIONS") {
       reply.code(204).send();
     }
@@ -59,6 +63,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
         config: opts.config,
         queue: opts.queue ?? noopIngestQueue,
       });
+      await progressRoutes(scope, { db: opts.db, config: opts.config });
     },
     { prefix: "/v1" },
   );

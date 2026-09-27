@@ -291,6 +291,13 @@ export const spriteMetaSchema = z.object({
 });
 export type SpriteMetaDto = z.infer<typeof spriteMetaSchema>;
 
+/** Маркер интро: кнопка «пропустить интро» в этом диапазоне. */
+export const introMarkerSchema = z.object({
+  startSeconds: z.number(),
+  endSeconds: z.number(),
+});
+export type IntroMarker = z.infer<typeof introMarkerSchema>;
+
 export const mediaLinksSchema = z.object({
   mediaId: z.number().int(),
   itemId: z.number().int(),
@@ -299,6 +306,7 @@ export const mediaLinksSchema = z.object({
   subtitles: z.array(subtitleSchema),
   posterUrl: z.string().nullable(),
   sprites: spriteMetaSchema.nullable(),
+  intro: introMarkerSchema.nullable(),
 });
 export type MediaLinks = z.infer<typeof mediaLinksSchema>;
 

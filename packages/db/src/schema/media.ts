@@ -42,6 +42,8 @@ export const media = pgTable(
     posterKey: text("poster_key"),
     spriteKey: text("sprite_key"),
     spriteMeta: jsonb("sprite_meta").$type<SpriteMeta | null>(),
+    introStartSeconds: integer("intro_start_seconds"),
+    introEndSeconds: integer("intro_end_seconds"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [

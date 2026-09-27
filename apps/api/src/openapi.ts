@@ -10,6 +10,8 @@ import {
   genreSchema,
   ingestJobStatusSchema,
   ingestRequestSchema,
+  progressPutSchema,
+  progressSchema,
   itemDetailSchema,
   itemPageSchema,
   itemSummarySchema,
@@ -184,6 +186,28 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           responses: { 200: jsonBody("IngestResponse"), 404: errorResponse },
         },
       },
+      "/v1/progress": {
+        get: {
+          summary: "Лента «продолжить просмотр»",
+          security: [{ bearerAuth: [] }],
+          responses: { 200: jsonBody("ProgressListResponse"), 401: errorResponse },
+        },
+      },
+      "/v1/progress/{mediaId}": {
+        get: {
+          summary: "Прогресс по media (резюме)",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "mediaId", in: "path", required: true, schema: { type: "integer" } }],
+          responses: { 200: jsonBody("ProgressResponse"), 401: errorResponse },
+        },
+        put: {
+          summary: "Сохранить позицию просмотра",
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: "mediaId", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: jsonBody("ProgressPut"),
+          responses: { 200: jsonBody("ProgressResponse"), 404: errorResponse },
+        },
+      },
     },
     components: {
       securitySchemes: {
@@ -240,6 +264,28 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           type: "object",
           properties: {
             countries: { type: "array", items: { $ref: "#/components/schemas/Country" } },
+          },
+        },
+        Progress: z.toJSONSchema(progressSchema),
+        ProgressPut: z.toJSONSchema(progressPutSchema),
+        ProgressResponse: {
+          type: "object",
+          properties: {
+            progress: {
+              oneOf: [
+                { $ref: "#/components/schemas/Progress" },
+                { type: "null" },
+              ],
+            },
+          },
+        },
+        ProgressListResponse: {
+          type: "object",
+          properties: {
+            items: {
+              type: "array",
+              items: { $ref: "#/components/schemas/Progress" },
+            },
           },
         },
         IngestRequest: z.toJSONSchema(ingestRequestSchema),

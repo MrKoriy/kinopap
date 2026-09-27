@@ -4,5 +4,6 @@ export * from "./repos/catalog";
 export * from "./repos/accounts";
 export * from "./repos/publish";
 export * from "./repos/ingest";
+export * from "./repos/progress";
 export * from "./password";
 export * from "./seed";

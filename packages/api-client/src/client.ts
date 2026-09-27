@@ -31,7 +31,11 @@ import {
 import {
   ingestResponseSchema,
   ingestRequestSchema,
+  progressListResponseSchema,
+  progressPutSchema,
+  progressResponseSchema,
   type IngestRequest,
+  type ProgressPut,
 } from "./ingest";
 import type { ApiErrorBody, ItemType } from "./common";
 import { apiErrorSchema } from "./common";
@@ -202,6 +206,20 @@ export function createApiClient(opts: ApiClientOptions) {
     },
     getIngestJob: (id: number) =>
       request(`/v1/ingest/${id}`, ingestResponseSchema, { auth: true }),
+
+    /* progress */
+    getProgress: (mediaId: number) =>
+      request(`/v1/progress/${mediaId}`, progressResponseSchema, { auth: true }),
+    saveProgress: (mediaId: number, input: ProgressPut) => {
+      progressPutSchema.parse(input);
+      return request(`/v1/progress/${mediaId}`, progressResponseSchema, {
+        method: "PUT",
+        body: input,
+        auth: true,
+      });
+    },
+    listProgress: () =>
+      request("/v1/progress", progressListResponseSchema, { auth: true }),
 
     /* meta */
     listTypes: () => request("/v1/types", typesResponseSchema),

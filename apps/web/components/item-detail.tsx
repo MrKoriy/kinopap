@@ -1,0 +1,171 @@
+"use client";
+
+/**
+ * Страница тайтла: инфо, рейтинги, кнопка «Смотреть», сезоны и эпизоды.
+ */
+import * as React from "react";
+import Link from "next/link";
+import type { ItemDetail } from "@zal/api-client";
+import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
+import { formatDuration } from "@/lib/format";
+
+export function ItemDetailView({ item }: { item: ItemDetail }) {
+  const [activeSeason, setActiveSeason] = React.useState(0);
+
+  const firstMovieMedia = item.media?.[0]?.id ?? null;
+  const firstEpisodeMedia = item.seasons?.[0]?.episodes.find((e) => e.mediaId)?.mediaId ?? null;
+  const playMediaId = firstMovieMedia ?? firstEpisodeMedia;
+
+  const poster = item.posters.big ?? item.posters.medium;
+  const rating = item.rating > 0 ? item.rating : item.imdb.rating;
+
+  return (
+    <div>
+      {/* Шапка */}
+      <div className="relative mb-8 min-h-[380px] overflow-hidden rounded-[var(--radius-card)] bg-surface-2">
+        {poster && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={poster} alt="" className="h-[380px] w-full object-cover object-top" />
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/60 to-transparent" />
+        <div className="absolute bottom-6 left-6 right-6">
+          <h1 className="text-3xl font-bold text-white sm:text-4xl" data-testid="item-title">
+            {item.title}
+          </h1>
+          {item.originalTitle && (
+            <p className="mt-1 text-sm text-white/60">{item.originalTitle}</p>
+          )}
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            {rating !== null && rating > 0 && (
+              <Badge className="bg-accent text-white">★ {rating.toFixed(1)}</Badge>
+            )}
+            {item.year && <Badge className="bg-white/10 text-white">{item.year}</Badge>}
+            {item.genres.map((g) => (
+              <Badge key={g.id} className="bg-white/10 text-white">
+                {g.title}
+              </Badge>
+            ))}
+            {item.duration.average ? (
+              <Badge className="bg-white/10 text-white">
+                {formatDuration(item.duration.average)}
+              </Badge>
+            ) : null}
+          </div>
+          <div className="mt-4 flex gap-3">
+            {playMediaId && (
+              <Link
+                href={`/watch/${item.id}/${playMediaId}`}
+                className={buttonVariants()}
+                data-testid="watch-button"
+              >
+                ▶ Смотреть
+              </Link>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Описание */}
+      {item.plot && (
+        <p className="mb-8 max-w-3xl leading-relaxed text-muted" data-testid="item-plot">
+          {item.plot}
+        </p>
+      )}
+
+      {/* Создатели */}
+      <div className="mb-8 grid gap-4 sm:grid-cols-2">
+        {item.director.length > 0 && (
+          <div>
+            <h3 className="mb-1 text-sm font-semibold text-white">Режиссёр</h3>
+            <p className="text-sm text-muted">{item.director.join(", ")}</p>
+          </div>
+        )}
+        {item.cast.length > 0 && (
+          <div>
+            <h3 className="mb-1 text-sm font-semibold text-white">В ролях</h3>
+            <p className="text-sm text-muted">{item.cast.join(", ")}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Сезоны и эпизоды */}
+      {item.seasons && item.seasons.length > 0 && (
+        <div data-testid="seasons">
+          <div className="mb-4 flex gap-2">
+            {item.seasons.map((s, i) => (
+              <button
+                key={s.id}
+                className={`rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                  i === activeSeason
+                    ? "bg-accent text-white"
+                    : "bg-surface-2 text-muted hover:text-white"
+                }`}
+                onClick={() => setActiveSeason(i)}
+                data-testid="season-tab"
+              >
+                {s.title ?? `Сезон ${s.number}`}
+              </button>
+            ))}
+          </div>
+          <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
+            {item.seasons[activeSeason]?.episodes.map((ep) => (
+              <li key={ep.id}>
+                {ep.mediaId ? (
+                  <Link
+                    href={`/watch/${item.id}/${ep.mediaId}`}
+                    className="flex items-center gap-4 px-4 py-3 transition hover:bg-surface-2"
+                    data-testid="episode-row"
+                  >
+                    <span className="w-8 text-center text-sm font-semibold text-accent">
+                      {ep.number}
+                    </span>
+                    {ep.thumbnailUrl && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={ep.thumbnailUrl}
+                        alt=""
+                        className="h-12 w-20 rounded object-cover"
+                        loading="lazy"
+                      />
+                    )}
+                    <span className="flex-1 text-sm text-white">{ep.title ?? `Серия ${ep.number}`}</span>
+                    {ep.runtime > 0 && (
+                      <span className="text-xs text-muted">{formatDuration(ep.runtime)}</span>
+                    )}
+                  </Link>
+                ) : (
+                  <div className="flex items-center gap-4 px-4 py-3 opacity-50">
+                    <span className="w-8 text-center text-sm">{ep.number}</span>
+                    <span className="flex-1 text-sm">{ep.title ?? `Серия ${ep.number}`}</span>
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* Фильм из нескольких частей */}
+      {item.media && item.media.length > 1 && (
+        <ul className="mt-8 divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
+          {item.media.map((part) => (
+            <li key={part.id}>
+              <Link
+                href={`/watch/${item.id}/${part.id}`}
+                className="flex items-center gap-4 px-4 py-3 transition hover:bg-surface-2"
+              >
+                <span className="w-8 text-center text-sm font-semibold text-accent">
+                  {part.partNumber}
+                </span>
+                <span className="flex-1 text-sm text-white">
+                  {part.title ?? `Часть ${part.partNumber}`}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}

@@ -512,6 +512,13 @@ export async function mediaLinks(
     mediaId: m.id,
     itemId: m.itemId,
     posterUrl: mediaUrl(baseUrl, m.posterKey),
+    intro:
+      m.introStartSeconds != null && m.introEndSeconds != null
+        ? {
+            startSeconds: m.introStartSeconds,
+            endSeconds: m.introEndSeconds,
+          }
+        : null,
     sprites:
       m.spriteKey && m.spriteMeta
         ? {

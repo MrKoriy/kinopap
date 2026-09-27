@@ -53,3 +53,28 @@ export type IngestJobStatusDto = z.infer<typeof ingestJobStatusSchema>;
 
 export const ingestResponseSchema = z.object({ job: ingestJobStatusSchema });
 export type IngestResponse = z.infer<typeof ingestResponseSchema>;
+
+/* ---------- Прогресс просмотра (watch_progress) ---------- */
+
+export const progressSchema = z.object({
+  mediaId: z.number().int(),
+  itemId: z.number().int(),
+  positionSeconds: z.number(),
+  durationSeconds: z.number(),
+  status: z.enum(["unwatched", "in_progress", "watched"]),
+  updatedAt: z.string(),
+});
+export type ProgressDto = z.infer<typeof progressSchema>;
+
+export const progressPutSchema = z.object({
+  positionSeconds: z.number().min(0),
+  durationSeconds: z.number().min(0),
+});
+export type ProgressPut = z.infer<typeof progressPutSchema>;
+
+export const progressResponseSchema = z.object({
+  progress: progressSchema.nullable(),
+});
+export const progressListResponseSchema = z.object({
+  items: z.array(progressSchema),
+});
