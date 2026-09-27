@@ -122,7 +122,9 @@ async function main(): Promise<void> {
     MEDIA_BASE_URL: PUBLIC_BASE,
     CORS_ORIGIN: "*",
   });
-  const app = await buildApp({ db, config });
+  // ZAL_E2E_LOG=1 включает лог запросов (нужен, когда клиент — не браузер,
+  // например симулятор iOS: иначе трафик приложения нигде не видно).
+  const app = await buildApp({ db, config, logger: process.env.ZAL_E2E_LOG === "1" });
 
   app.get("/media/*", async (request, reply) => {
     const rel = (request.params as Record<string, string>)["*"] ?? "";
