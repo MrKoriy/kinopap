@@ -37,6 +37,21 @@ import {
   type IngestRequest,
   type ProgressPut,
 } from "./ingest";
+import {
+  commentListResponseSchema,
+  commentPostSchema,
+  commentResponseSchema,
+  itemSocialResponseSchema,
+  newEpisodesResponseSchema,
+  subscriptionListResponseSchema,
+  subscriptionPutSchema,
+  subscriptionResponseSchema,
+  votePutSchema,
+  voteResponseSchema,
+  type CommentPost,
+  type SubscriptionPut,
+  type VotePut,
+} from "./social";
 import type { ApiErrorBody, ItemType } from "./common";
 import { apiErrorSchema } from "./common";
 
@@ -220,6 +235,57 @@ export function createApiClient(opts: ApiClientOptions) {
     },
     listProgress: () =>
       request("/v1/progress", progressListResponseSchema, { auth: true }),
+
+    /* social */
+    getItemSocial: (itemId: number) =>
+      request(`/v1/items/${itemId}/social`, itemSocialResponseSchema, { auth: true }),
+    listComments: (itemId: number) =>
+      request(`/v1/items/${itemId}/comments`, commentListResponseSchema),
+    postComment: (itemId: number, input: CommentPost) => {
+      commentPostSchema.parse(input);
+      return request(`/v1/items/${itemId}/comments`, commentResponseSchema, {
+        method: "POST",
+        body: input,
+        auth: true,
+      });
+    },
+    deleteComment: (commentId: number) =>
+      request(`/v1/comments/${commentId}`, { parse: (v) => v as { ok: boolean } }, {
+        method: "DELETE",
+        auth: true,
+      }),
+    getVote: (itemId: number) =>
+      request(`/v1/items/${itemId}/vote`, voteResponseSchema, { auth: true }),
+    setVote: (itemId: number, input: VotePut) => {
+      votePutSchema.parse(input);
+      return request(`/v1/items/${itemId}/vote`, voteResponseSchema, {
+        method: "PUT",
+        body: input,
+        auth: true,
+      });
+    },
+    clearVote: (itemId: number) =>
+      request(`/v1/items/${itemId}/vote`, voteResponseSchema, {
+        method: "DELETE",
+        auth: true,
+      }),
+    listSubscriptions: () =>
+      request("/v1/subscriptions", subscriptionListResponseSchema, { auth: true }),
+    getNewEpisodes: () =>
+      request("/v1/subscriptions/new-episodes", newEpisodesResponseSchema, { auth: true }),
+    subscribe: (itemId: number, input: SubscriptionPut = { notify: true }) => {
+      subscriptionPutSchema.parse(input);
+      return request(`/v1/subscriptions/${itemId}`, subscriptionResponseSchema, {
+        method: "PUT",
+        body: input,
+        auth: true,
+      });
+    },
+    unsubscribe: (itemId: number) =>
+      request(`/v1/subscriptions/${itemId}`, subscriptionResponseSchema, {
+        method: "DELETE",
+        auth: true,
+      }),
 
     /* meta */
     listTypes: () => request("/v1/types", typesResponseSchema),

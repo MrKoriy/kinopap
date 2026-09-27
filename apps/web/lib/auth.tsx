@@ -121,4 +121,9 @@ export function useAuth(): AuthState {
   return ctx;
 }
 
+/** Мягкий доступ: вне AuthProvider (юнит-тесты) — null, а не исключение. */
+export function useOptionalAuth(): AuthState | null {
+  return React.useContext(AuthContext);
+}
+
 export { API_URL };

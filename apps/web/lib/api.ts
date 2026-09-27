@@ -83,6 +83,22 @@ export async function fetchItem(id: number): Promise<ItemDetail | null> {
   }
 }
 
+/** Поиск с pg_trgm: title/director/cast. */
+export async function fetchSearch(
+  q: string,
+  field?: "title" | "director" | "cast",
+  limit = 24,
+): Promise<ItemPage> {
+  if (!q.trim()) return EMPTY_PAGE;
+  try {
+    return itemPageSchema.parse(
+      await getJson(`/v1/items/search${qs({ q: q.trim(), field, limit })}`),
+    );
+  } catch {
+    return EMPTY_PAGE;
+  }
+}
+
 export async function fetchSimilar(id: number): Promise<ItemPage> {
   try {
     return itemPageSchema.parse(await getJson(`/v1/items/${id}/similar`));

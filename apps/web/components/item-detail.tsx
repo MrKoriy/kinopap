@@ -8,6 +8,8 @@ import Link from "next/link";
 import type { ItemDetail } from "@zal/api-client";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { Comments } from "@/components/comments";
+import { ItemActions } from "@/components/item-actions";
 import { formatDuration } from "@/lib/format";
 
 export function ItemDetailView({ item }: { item: ItemDetail }) {
@@ -62,6 +64,9 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
                 ▶ Смотреть
               </Link>
             )}
+            <div className="self-center">
+              <ItemActions itemId={item.id} />
+            </div>
           </div>
         </div>
       </div>
@@ -166,6 +171,9 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
           ))}
         </ul>
       )}
+
+      {/* Комментарии */}
+      <Comments itemId={item.id} />
     </div>
   );
 }

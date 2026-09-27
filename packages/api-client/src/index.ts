@@ -3,4 +3,5 @@ export * from "./catalog";
 export * from "./auth";
 export * from "./cursor";
 export * from "./ingest";
+export * from "./social";
 export * from "./client";

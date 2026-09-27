@@ -9,6 +9,7 @@ import { catalogRoutes } from "./routes/catalog";
 import { docsRoutes } from "./routes/docs";
 import { ingestRoutes } from "./routes/ingest";
 import { progressRoutes } from "./routes/progress";
+import { socialRoutes } from "./routes/social";
 
 export interface BuildAppOptions {
   db: Db;
@@ -64,6 +65,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
         queue: opts.queue ?? noopIngestQueue,
       });
       await progressRoutes(scope, { db: opts.db, config: opts.config });
+      await socialRoutes(scope, { db: opts.db, config: opts.config });
     },
     { prefix: "/v1" },
   );
