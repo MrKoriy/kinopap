@@ -8,6 +8,12 @@
     "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "backgroundColor": "#0b0b0f",
-    "plugins": ["expo-router"]
+    "plugins": ["expo-router"],
+    "ios": { "bundleIdentifier": "dev.zal.mobile", "supportsTablet": true },
+    "android": { "package": "dev.zal.mobile" },
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    }
   }
 }

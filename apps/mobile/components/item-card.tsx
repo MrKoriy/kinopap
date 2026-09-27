@@ -13,7 +13,12 @@ export function ItemCard({ item, width = 140 }: { item: ItemSummary; width?: num
 
   return (
     <Link href={`/item/${item.id}`} asChild>
-      <Pressable style={[styles.card, { width }]} accessibilityRole="button">
+      <Pressable
+        testID="item-card"
+        // expo-router Link asChild требует один плоский style, не массив.
+        style={StyleSheet.flatten([styles.card, { width }])}
+        accessibilityRole="button"
+      >
         {poster ? (
           <Image source={{ uri: poster }} style={styles.poster} resizeMode="cover" />
         ) : (

@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@expo/metro-runtime": "~57.0.16",
     "@zal/api-client": "workspace:*",
     "@zal/ui": "workspace:*",
     "expo": "^57.0.25",
@@ -16,11 +17,17 @@
     "expo-secure-store": "~57.0.4",
     "expo-status-bar": "~57.0.1",
     "expo-video": "~57.0.5",
-    "react": "^19.3.0",
-    "react-native": "0.87.1"
+    "react": "^19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-web": "~0.21.3"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@react-native-tvos/config-tv": "^0.1.6",
     "@types/react": "^19.3.0",
+    "react-native-tvos": "0.85.3-3",
+    "tsx": "^4.23.15",
     "typescript": "^5.9.0",
     "vitest": "^5.0.2"
   }

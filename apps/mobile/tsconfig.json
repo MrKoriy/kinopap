@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2023"],
+    "lib": [
+      "ES2023"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
@@ -11,5 +13,13 @@
     "esModuleInterop": true,
     "isolatedModules": true
   },
-  "include": ["app", "lib", "components", "test", "*.ts", "*.tsx"]
+  "include": [
+    "app",
+    "lib",
+    "components",
+    "test",
+    "*.ts",
+    "*.tsx"
+  ],
+  "extends": "expo/tsconfig.base"
 }

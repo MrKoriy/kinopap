@@ -47,6 +47,7 @@ export default function LoginScreen() {
       </Text>
 
       <TextInput
+        testID="email-input"
         style={styles.input}
         placeholder="Email"
         placeholderTextColor={tokens.color.textMuted}
@@ -56,6 +57,7 @@ export default function LoginScreen() {
         onChangeText={setEmail}
       />
       <TextInput
+        testID="password-input"
         style={styles.input}
         placeholder="Пароль"
         placeholderTextColor={tokens.color.textMuted}
@@ -83,9 +85,14 @@ export default function LoginScreen() {
         </>
       )}
 
-      {error && <Text style={styles.error}>{error}</Text>}
+      {error && (
+        <Text style={styles.error} testID="auth-error">
+          {error}
+        </Text>
+      )}
 
       <Pressable
+        testID="auth-submit"
         style={[styles.submit, busy && styles.submitOff]}
         disabled={busy}
         onPress={() => void submit()}

@@ -85,7 +85,7 @@ export function ItemActions({ itemId }: { itemId: number }) {
 
   if (!user) {
     return (
-      <View style={styles.guestRow}>
+      <View style={styles.guestRow} testID="social-login-hint">
         <Text style={styles.guestText}>
           Войдите, чтобы голосовать, подписаться и комментировать
         </Text>
@@ -96,9 +96,10 @@ export function ItemActions({ itemId }: { itemId: number }) {
   const myVote = social?.vote.myVote ?? null;
 
   return (
-    <View style={styles.row}>
+    <View style={styles.row} testID="item-actions">
       <View style={styles.voteBox}>
         <Pressable
+          testID="vote-up"
           onPress={() => void vote(true)}
           style={[styles.voteButton, myVote === true && styles.voteActive]}
           accessibilityRole="button"
@@ -106,8 +107,11 @@ export function ItemActions({ itemId }: { itemId: number }) {
         >
           <Text style={styles.voteGlyph}>▲</Text>
         </Pressable>
-        <Text style={styles.voteCount}>{social?.vote.votes.positive ?? 0}</Text>
+        <Text style={styles.voteCount} testID="vote-positive">
+          {social?.vote.votes.positive ?? 0}
+        </Text>
         <Pressable
+          testID="vote-down"
           onPress={() => void vote(false)}
           style={[styles.voteButton, myVote === false && styles.voteActiveDown]}
           accessibilityRole="button"
@@ -115,10 +119,13 @@ export function ItemActions({ itemId }: { itemId: number }) {
         >
           <Text style={styles.voteGlyph}>▼</Text>
         </Pressable>
-        <Text style={styles.voteCount}>{social?.vote.votes.negative ?? 0}</Text>
+        <Text style={styles.voteCount} testID="vote-negative">
+          {social?.vote.votes.negative ?? 0}
+        </Text>
       </View>
 
       <Pressable
+        testID="subscribe-button"
         onPress={() => void toggleSubscription()}
         style={[styles.subButton, subscribed && styles.subButtonActive]}
         accessibilityRole="button"
@@ -128,7 +135,9 @@ export function ItemActions({ itemId }: { itemId: number }) {
         </Text>
       </Pressable>
 
-      <Text style={styles.comments}>{social?.commentsCount ?? 0} комм.</Text>
+      <Text style={styles.comments} testID="comments-count">
+        {social?.commentsCount ?? 0} комм.
+      </Text>
     </View>
   );
 }

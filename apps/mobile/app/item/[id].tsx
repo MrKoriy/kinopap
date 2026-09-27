@@ -113,7 +113,8 @@ export default function ItemScreen() {
                   asChild
                 >
                   <Pressable
-                    style={[styles.epRow, !ep.mediaId && styles.epOff]}
+                    // См. item-card: Link asChild ждёт плоский style.
+                    style={StyleSheet.flatten([styles.epRow, !ep.mediaId && styles.epOff])}
                     disabled={!ep.mediaId}
                     accessibilityRole="button"
                   >

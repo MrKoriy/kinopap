@@ -31,6 +31,14 @@ const SECTIONS: { kind: ShortcutKind; title: string }[] = [
 export default function HomeScreen() {
   const { user, ready, api, logout } = useAuth();
   const router = useRouter();
+
+  // QA-хук: EXPO_PUBLIC_INITIAL_ROUTE=/watch/1/1 уводит приложение сразу на
+  // нужный экран — так автоматические прогоны на симуляторе снимают плеер,
+  // не тыкая в UI (системный диалог deep-link'а мешает simctl openurl).
+  React.useEffect(() => {
+    const initial = process.env.EXPO_PUBLIC_INITIAL_ROUTE;
+    if (initial) router.replace(initial as never);
+  }, [router]);
   const [sections, setSections] = React.useState<
     Record<ShortcutKind, ItemSummary[]>
   >({ fresh: [], hot: [], popular: [] });
@@ -63,6 +71,7 @@ export default function HomeScreen() {
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.topRow}>
         <Pressable
+          testID="search-link"
           style={styles.navButton}
           onPress={() => router.push("/search")}
           accessibilityRole="button"
@@ -70,6 +79,7 @@ export default function HomeScreen() {
           <Text style={styles.navText}>Поиск</Text>
         </Pressable>
         <Pressable
+          testID="subs-link"
           style={styles.navButton}
           onPress={() => router.push("/subscriptions")}
           accessibilityRole="button"
@@ -78,13 +88,18 @@ export default function HomeScreen() {
         </Pressable>
         {ready && !user && (
           <Link href="/login" asChild>
-            <Pressable style={styles.loginButton} accessibilityRole="button">
+            <Pressable
+              testID="login-link"
+              style={styles.loginButton}
+              accessibilityRole="button"
+            >
               <Text style={styles.loginText}>Войти</Text>
             </Pressable>
           </Link>
         )}
         {user && (
           <Pressable
+            testID="logout-button"
             style={styles.navButton}
             onPress={() => void logout()}
             accessibilityRole="button"

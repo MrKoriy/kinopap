@@ -89,7 +89,7 @@ export default function SubscriptionsScreen() {
       }
       renderItem={({ item }) => (
         <Link href={`/watch/${item.itemId}/${item.mediaId}`} asChild>
-          <Pressable style={styles.epRow} accessibilityRole="button">
+          <Pressable testID="new-episode-row" style={styles.epRow} accessibilityRole="button">
             <Text style={styles.epLabel}>{feedLabel(item)}</Text>
             <View style={styles.epText}>
               <Text style={styles.epTitle} numberOfLines={1}>
@@ -107,7 +107,7 @@ export default function SubscriptionsScreen() {
             <Text style={styles.muted}>Подписок пока нет.</Text>
           )}
           {subs.map((s) => (
-            <View key={s.itemId} style={styles.subRow}>
+            <View key={s.itemId} style={styles.subRow} testID="subs-item">
               <Link href={`/item/${s.itemId}`} asChild>
                 <Pressable style={styles.subTitle} accessibilityRole="button">
                   <Text style={styles.epTitle}>
@@ -116,7 +116,11 @@ export default function SubscriptionsScreen() {
                   </Text>
                 </Pressable>
               </Link>
-              <Pressable onPress={() => void unsubscribe(s.itemId)} accessibilityRole="button">
+              <Pressable
+                testID="unsub-button"
+                onPress={() => void unsubscribe(s.itemId)}
+                accessibilityRole="button"
+              >
                 <Text style={styles.unsubText}>Отписаться</Text>
               </Pressable>
             </View>

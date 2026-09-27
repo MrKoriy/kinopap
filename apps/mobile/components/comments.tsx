@@ -20,18 +20,20 @@ import { formatDate } from "../lib/format";
 
 interface BodyFormProps {
   label: string;
+  testId: string;
   initial?: string;
   onSubmit: (body: string) => Promise<void>;
   onCancel: () => void;
 }
 
-function BodyForm({ label, initial = "", onSubmit, onCancel }: BodyFormProps) {
+function BodyForm({ label, testId, initial = "", onSubmit, onCancel }: BodyFormProps) {
   const [body, setBody] = React.useState(initial);
   const [busy, setBusy] = React.useState(false);
 
   return (
-    <View style={styles.form}>
+    <View style={styles.form} testID={testId}>
       <TextInput
+        testID={`${testId}-input`}
         style={styles.input}
         value={body}
         onChangeText={setBody}
@@ -41,6 +43,7 @@ function BodyForm({ label, initial = "", onSubmit, onCancel }: BodyFormProps) {
       />
       <View style={styles.formButtons}>
         <Pressable
+          testID={`${testId}-submit`}
           style={[styles.smallButton, (!body.trim() || busy) && styles.buttonOff]}
           disabled={!body.trim() || busy}
           onPress={async () => {
@@ -79,7 +82,7 @@ function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentR
   const own = currentUserId != null && comment.author.id === currentUserId;
 
   return (
-    <View style={[styles.node, { marginLeft: Math.min(comment.depth, 6) * 12 }]}>
+    <View style={[styles.node, { marginLeft: Math.min(comment.depth, 6) * 12 }]} testID="comment-item">
       <View style={styles.card}>
         <View style={styles.headerRow}>
           <Text style={styles.author}>{comment.author.name}</Text>
@@ -94,6 +97,7 @@ function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentR
         ) : editing ? (
           <BodyForm
             label="Сохранить"
+            testId="edit-form"
             initial={comment.body}
             onCancel={() => setEditing(false)}
             onSubmit={(body) => onEdit(comment.id, body)}
@@ -113,7 +117,10 @@ function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentR
               </Pressable>
             )}
             {own && (
-              <Pressable onPress={() => void onDelete(comment.id)}>
+              <Pressable
+                testID="delete-comment"
+                onPress={() => void onDelete(comment.id)}
+              >
                 <Text style={[styles.actionText, styles.deleteText]}>Удалить</Text>
               </Pressable>
             )}
@@ -123,6 +130,7 @@ function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentR
         {replying && (
           <BodyForm
             label="Ответить"
+            testId="reply-form"
             onCancel={() => setReplying(false)}
             onSubmit={(body) => onReply(comment.id, body)}
           />
@@ -205,11 +213,18 @@ export function Comments({ itemId }: { itemId: number }) {
   const tree = buildCommentTree(flat);
 
   return (
-    <View style={styles.root}>
-      <Text style={styles.title}>Комментарии ({total})</Text>
+    <View style={styles.root} testID="comments">
+      <Text style={styles.title} testID="comments-total">
+        Комментарии ({total})
+      </Text>
 
       {user ? (
-        <BodyForm label="Отправить" onCancel={() => {}} onSubmit={(body) => add(null, body)} />
+        <BodyForm
+          label="Отправить"
+          testId="comment-form"
+          onCancel={() => {}}
+          onSubmit={(body) => add(null, body)}
+        />
       ) : (
         <Text style={styles.mutedText}>Войдите, чтобы оставить комментарий.</Text>
       )}

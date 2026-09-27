@@ -16,9 +16,19 @@ import { tokens } from "@zal/ui";
 import { ItemCard } from "../components/item-card";
 import { useAuth } from "../lib/auth";
 
+type SearchField = "title" | "director" | "cast";
+
+const FIELDS: { id: SearchField | ""; title: string }[] = [
+  { id: "", title: "Везде" },
+  { id: "title", title: "Название" },
+  { id: "director", title: "Режиссёр" },
+  { id: "cast", title: "Актёры" },
+];
+
 export default function SearchScreen() {
   const { api } = useAuth();
   const [query, setQuery] = React.useState("");
+  const [field, setField] = React.useState<SearchField | "">("");
   const [results, setResults] = React.useState<ItemSummary[]>([]);
   const [searched, setSearched] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
@@ -28,18 +38,23 @@ export default function SearchScreen() {
     if (!q) return;
     setBusy(true);
     try {
-      const page = await api.searchItems({ q, limit: 30 });
+      const page = await api.searchItems({
+        q,
+        field: field || undefined,
+        limit: 30,
+      });
       setResults(page.items);
       setSearched(true);
     } finally {
       setBusy(false);
     }
-  }, [api, query]);
+  }, [api, query, field]);
 
   return (
-    <View style={styles.container}>
+    <View testID="search-screen" style={styles.container}>
       <View style={styles.searchRow}>
         <TextInput
+          testID="search-input"
           style={styles.input}
           placeholder="Название, режиссёр, актёр…"
           placeholderTextColor={tokens.color.textMuted}
@@ -50,12 +65,27 @@ export default function SearchScreen() {
           autoCapitalize="none"
         />
         <Pressable
+          testID="search-submit"
           style={styles.button}
           onPress={() => void runSearch()}
           accessibilityRole="button"
         >
           <Text style={styles.buttonText}>Найти</Text>
         </Pressable>
+      </View>
+
+      <View style={styles.fieldsRow}>
+        {FIELDS.map((f) => (
+          <Pressable
+            key={f.id}
+            style={[styles.fieldChip, field === f.id && styles.fieldChipActive]}
+            onPress={() => setField(f.id)}
+            accessibilityRole="button"
+            accessibilityState={{ selected: field === f.id }}
+          >
+            <Text style={styles.fieldText}>{f.title}</Text>
+          </Pressable>
+        ))}
       </View>
 
       {busy && <ActivityIndicator color={tokens.color.accent} style={styles.loader} />}
@@ -65,6 +95,7 @@ export default function SearchScreen() {
       )}
 
       <FlatList
+        testID="search-results"
         data={results}
         numColumns={3}
         keyExtractor={(item) => String(item.id)}
@@ -114,6 +145,28 @@ const styles = StyleSheet.create({
   },
   loader: {
     marginVertical: tokens.space.md,
+  },
+  fieldsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: tokens.space.sm,
+    marginBottom: tokens.space.md,
+  },
+  fieldChip: {
+    borderRadius: tokens.radius.full,
+    backgroundColor: tokens.color.surface,
+    borderWidth: 1,
+    borderColor: tokens.color.border,
+    paddingHorizontal: tokens.space.md,
+    paddingVertical: tokens.space.xs,
+  },
+  fieldChipActive: {
+    backgroundColor: tokens.color.accent,
+    borderColor: tokens.color.accent,
+  },
+  fieldText: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.sm,
   },
   empty: {
     color: tokens.color.textMuted,

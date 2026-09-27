@@ -24,6 +24,7 @@ import type { ItemDetail, MediaLinks } from "@zal/api-client";
 import { tokens } from "@zal/ui";
 import { useAuth } from "../../../lib/auth";
 import { formatTime } from "../../../lib/format";
+import { cueAt, parseVtt, type SubtitleCue } from "../../../lib/subtitles";
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 const SAVE_EVERY_SECONDS = 10;
@@ -40,6 +41,10 @@ export default function WatchScreen() {
   const [error, setError] = React.useState<string | null>(null);
   const [activeAudio, setActiveAudio] = React.useState(0);
   const [speedIdx, setSpeedIdx] = React.useState(1);
+  // Субтитры: внешние WebVTT рисуем оверлеем, сдвиг — в миллисекундах.
+  const [cues, setCues] = React.useState<SubtitleCue[]>([]);
+  const [activeSub, setActiveSub] = React.useState<number | null>(null);
+  const [shiftMs, setShiftMs] = React.useState(0);
 
   // Таймер плеера.
   const [current, setCurrent] = React.useState(0);
@@ -193,6 +198,35 @@ export default function WatchScreen() {
     player.playbackRate = SPEEDS[next]!;
   };
 
+  /** Субтитры: повторный клик по дорожке выключает её. */
+  const selectSubtitle = React.useCallback(
+    async (index: number) => {
+      if (activeSub === index) {
+        setActiveSub(null);
+        setCues([]);
+        return;
+      }
+      const sub = links?.subtitles[index];
+      if (!sub?.url) return;
+      try {
+        const res = await fetch(sub.url);
+        const parsed = parseVtt(await res.text());
+        setCues(parsed);
+        setShiftMs(sub.shiftMs ?? 0);
+        setActiveSub(index);
+      } catch {
+        setCues([]);
+        setActiveSub(null);
+      }
+    },
+    [links, activeSub],
+  );
+
+  const activeCue = React.useMemo(
+    () => (cues.length ? cueAt(cues, current, shiftMs) : null),
+    [cues, current, shiftMs],
+  );
+
   /** Дубляж: персональный мастер + восстановление позиции. */
   const changeAudio = (index: number) => {
     const dub = links?.audios[index];
@@ -216,14 +250,21 @@ export default function WatchScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <VideoView
-        ref={videoRef}
-        player={player}
-        style={styles.video}
-        contentFit="contain"
-        nativeControls={false}
-      />
+    <View testID="player-screen" style={styles.container}>
+      <View style={styles.videoWrap}>
+        <VideoView
+          ref={videoRef}
+          player={player}
+          style={styles.video}
+          contentFit="contain"
+          nativeControls={false}
+        />
+        {activeCue && (
+          <View testID="player-subtitle-overlay" style={styles.subtitleOverlay} pointerEvents="none">
+            <Text style={styles.subtitleText}>{activeCue.text}</Text>
+          </View>
+        )}
+      </View>
 
       {!links && (
         <View style={styles.center}>
@@ -233,8 +274,11 @@ export default function WatchScreen() {
 
       <ScrollView style={styles.controls} contentContainerStyle={styles.controlsContent}>
         <View style={styles.timeRow}>
-          <Text style={styles.time}>{formatTime(current)}</Text>
+          <Text testID="player-current-time" style={styles.time}>
+            {formatTime(current)}
+          </Text>
           <Pressable
+            testID="player-seekbar"
             style={styles.seekbar}
             onLayout={(e) => setBarWidth(e.nativeEvent.layout.width)}
             onPress={(e) => {
@@ -252,7 +296,9 @@ export default function WatchScreen() {
               ]}
             />
           </Pressable>
-          <Text style={styles.time}>{formatTime(duration)}</Text>
+          <Text testID="player-duration" style={styles.time}>
+            {formatTime(duration)}
+          </Text>
         </View>
 
         <View style={styles.buttonRow}>
@@ -260,6 +306,7 @@ export default function WatchScreen() {
             <Text style={styles.controlText}>−10с</Text>
           </Pressable>
           <Pressable
+            testID="player-play"
             style={styles.playButton}
             onPress={() => (player.playing ? player.pause() : player.play())}
             accessibilityRole="button"
@@ -269,7 +316,7 @@ export default function WatchScreen() {
           <Pressable style={styles.controlButton} onPress={() => seekBy(10)}>
             <Text style={styles.controlText}>+10с</Text>
           </Pressable>
-          <Pressable style={styles.controlButton} onPress={changeSpeed}>
+          <Pressable testID="player-speed" style={styles.controlButton} onPress={changeSpeed}>
             <Text style={styles.controlText}>{SPEEDS[speedIdx]}×</Text>
           </Pressable>
           <Pressable
@@ -282,6 +329,7 @@ export default function WatchScreen() {
 
         {inIntro && intro && (
           <Pressable
+            testID="player-skip-intro"
             style={styles.introButton}
             onPress={() => {
               player.currentTime = intro.endSeconds;
@@ -295,12 +343,71 @@ export default function WatchScreen() {
 
         {nextMedia && (
           <Pressable
+            testID="player-next"
             style={styles.nextButton}
             onPress={() => router.push(`/watch/${itemIdNum}/${nextMedia}`)}
             accessibilityRole="button"
           >
             <Text style={styles.controlText}>Следующая серия →</Text>
           </Pressable>
+        )}
+
+        {links && links.subtitles.length > 0 && (
+          <View style={styles.dubSection}>
+            <Text style={styles.sectionTitle}>Субтитры</Text>
+            <View style={styles.buttonRow}>
+              {links.subtitles.map((s, i) => (
+                <Pressable
+                  key={s.id}
+                  testID={`player-subtitle-${i}`}
+                  style={[
+                    styles.controlButton,
+                    i === activeSub && styles.controlActive,
+                    !s.url && styles.controlOff,
+                  ]}
+                  disabled={!s.url}
+                  onPress={() => void selectSubtitle(i)}
+                  accessibilityRole="button"
+                  aria-selected={i === activeSub}
+                >
+                  <Text style={styles.controlText}>
+                    {s.title ?? s.lang.toUpperCase()}
+                  </Text>
+                </Pressable>
+              ))}
+              {activeSub != null && (
+                <Pressable
+                  style={styles.controlButton}
+                  onPress={() => void selectSubtitle(activeSub)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.controlText}>Выкл</Text>
+                </Pressable>
+              )}
+            </View>
+            {activeSub != null && (
+              <View style={styles.buttonRow}>
+                <Pressable
+                  style={styles.controlButton}
+                  onPress={() => setShiftMs((v) => v - 100)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.controlText}>−0.1с</Text>
+                </Pressable>
+                <Text style={styles.muted}>
+                  сдвиг {shiftMs > 0 ? "+" : ""}
+                  {(shiftMs / 1000).toFixed(1)}с
+                </Text>
+                <Pressable
+                  style={styles.controlButton}
+                  onPress={() => setShiftMs((v) => v + 100)}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.controlText}>+0.1с</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
         )}
 
         {links && links.audios.length > 1 && (
@@ -313,6 +420,7 @@ export default function WatchScreen() {
                 return (
                   <Pressable
                     key={a.id}
+                    testID={`player-audio-${i}`}
                     style={[
                       styles.controlButton,
                       i === activeAudio && styles.controlActive,
@@ -321,6 +429,7 @@ export default function WatchScreen() {
                     disabled={!a.masterUrl}
                     onPress={() => changeAudio(i)}
                     accessibilityRole="button"
+                    aria-selected={i === activeAudio}
                   >
                     <Text style={styles.controlText}>{label}</Text>
                   </Pressable>
@@ -345,10 +454,30 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: tokens.color.bg,
   },
-  video: {
+  videoWrap: {
     width: "100%",
     aspectRatio: 16 / 9,
     backgroundColor: "#000",
+  },
+  video: {
+    width: "100%",
+    height: "100%",
+  },
+  subtitleOverlay: {
+    position: "absolute",
+    left: tokens.space.md,
+    right: tokens.space.md,
+    bottom: tokens.space.sm,
+    alignItems: "center",
+  },
+  subtitleText: {
+    color: tokens.color.text,
+    backgroundColor: "rgba(0,0,0,0.65)",
+    fontSize: tokens.fontSize.md,
+    textAlign: "center",
+    paddingHorizontal: tokens.space.sm,
+    paddingVertical: 2,
+    borderRadius: tokens.radius.sm,
   },
   controls: {
     flex: 1,
