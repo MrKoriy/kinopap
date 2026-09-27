@@ -4,6 +4,7 @@ import { createTestDb, seedFixtures } from "./helpers";
 import {
   MAX_COMMENT_DEPTH,
   addComment,
+  listCommentsPage,
   countComments,
   createUser,
   deleteSubscription,
@@ -13,10 +14,12 @@ import {
   hashPassword,
   listComments,
   listNewEpisodes,
+  media,
   listSubscriptions,
   removeVote,
   setVote,
   softDeleteComment,
+  updateComment,
   upsertProgress,
   upsertSubscription,
 } from "../src/index";
@@ -66,15 +69,20 @@ describe("подписки", () => {
     ).sort((a, b) => a.id - b.id);
 
     // Без подписок — пусто.
-    expect(await listNewEpisodes(db, profile.id)).toHaveLength(0);
+    expect(await listNewEpisodes(db, profile.id)).toEqual({ items: [], total: 0 });
 
     await upsertSubscription(db, profile.id, f.got, true);
     // Подписка на фильм без серий не добавляет строк.
     await upsertSubscription(db, profile.id, f.matrix, true);
 
     const feed = await listNewEpisodes(db, profile.id);
-    expect(feed).toHaveLength(2);
-    expect(feed.map((e) => e.itemTitle)).toEqual(["Игра престолов", "Игра престолов"]);
+    expect(feed.total).toBe(2);
+    expect(feed.items).toHaveLength(2);
+    expect(feed.items.map((e) => e.itemTitle)).toEqual([
+      "Игра престолов",
+      "Игра престолов",
+    ]);
+    expect(feed.items.every((e) => e.kind === "episode")).toBe(true);
 
     // Досмотрели первую серию → она уходит из ленты.
     await upsertProgress(db, {
@@ -85,8 +93,44 @@ describe("подписки", () => {
       durationSeconds: 62,
     });
     const after = await listNewEpisodes(db, profile.id);
-    expect(after).toHaveLength(1);
-    expect(after[0]!.mediaId).toBe(ep1Media[1]!.id);
+    expect(after.total).toBe(1);
+    expect(after.items).toHaveLength(1);
+    expect(after.items[0]!.mediaId).toBe(ep1Media[1]!.id);
+  });
+
+  it("новые части фильмов попадают в ленту как part", async () => {
+    const db = await createTestDb();
+    const f = await seedFixtures(db);
+    const { profile } = await makeUser(db, "parts@zal.local");
+
+    // Вторая часть фильма — новинка; первая часть — нет.
+    const [part2] = await db
+      .insert(media)
+      .values({ itemId: f.matrix, partNumber: 2, title: "Финал", runtime: 120 })
+      .returning();
+    await upsertSubscription(db, profile.id, f.matrix, true);
+
+    const feed = await listNewEpisodes(db, profile.id);
+    expect(feed.total).toBe(1);
+    expect(feed.items[0]).toMatchObject({
+      kind: "part",
+      itemId: f.matrix,
+      mediaId: part2!.id,
+      partNumber: 2,
+      title: "Финал",
+      seasonNumber: null,
+      episodeNumber: null,
+    });
+
+    // Досмотренная часть уходит из ленты.
+    await upsertProgress(db, {
+      profileId: profile.id,
+      itemId: f.matrix,
+      mediaId: part2!.id,
+      positionSeconds: 120,
+      durationSeconds: 120,
+    });
+    expect((await listNewEpisodes(db, profile.id)).total).toBe(0);
   });
 });
 
@@ -192,5 +236,54 @@ describe("комментарии", () => {
 
     // Счётчик считает только живые.
     expect(await countComments(db, f.matrix)).toBe(all.length - 1);
+  });
+
+  it("редактирование переносит updatedAt и не трогает удалённые", async () => {
+    const db = await createTestDb();
+    const f = await seedFixtures(db);
+    const { profile } = await makeUser(db, "editor@zal.local");
+
+    const c = await addComment(db, {
+      itemId: f.matrix,
+      profileId: profile.id,
+      body: "черновик",
+    });
+    expect(c.updatedAt).toBe(c.createdAt);
+
+    const edited = await updateComment(db, c.id, "готово");
+    expect(edited!.body).toBe("готово");
+    expect(edited!.updatedAt >= c.createdAt).toBe(true);
+
+    // Удалённый не редактируется.
+    await softDeleteComment(db, c.id);
+    expect(await updateComment(db, c.id, "мимо")).toBeNull();
+  });
+
+  it("постраничная выдача отдаёт ветки целиком", async () => {
+    const db = await createTestDb();
+    const f = await seedFixtures(db);
+    const { profile } = await makeUser(db, "pager@zal.local");
+
+    // 3 ветки: в первой два ответа.
+    const r1 = await addComment(db, { itemId: f.matrix, profileId: profile.id, body: "в1" });
+    await addComment(db, {
+      itemId: f.matrix,
+      profileId: profile.id,
+      parentId: r1.id,
+      body: "в1.1",
+    });
+    await addComment(db, { itemId: f.matrix, profileId: profile.id, body: "в2" });
+    await addComment(db, { itemId: f.matrix, profileId: profile.id, body: "в3" });
+
+    const page1 = await listCommentsPage(db, f.matrix, 2, 0);
+    expect(page1.total).toBe(3);
+    expect(page1.nextOffset).toBe(2);
+    // Страница — ветки целиком: 2 корня + ответ первой ветки.
+    expect(page1.items).toHaveLength(3);
+    expect(page1.items.map((c) => c.body)).toEqual(["в1", "в1.1", "в2"]);
+
+    const page2 = await listCommentsPage(db, f.matrix, 2, 2);
+    expect(page2.nextOffset).toBeNull();
+    expect(page2.items.map((c) => c.body)).toEqual(["в3"]);
   });
 });

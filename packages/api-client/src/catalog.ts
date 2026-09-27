@@ -267,6 +267,11 @@ export const audioTrackSchema = z.object({
   }),
   /** Плейлист аудио-рендitions из HLS-мастера (null для старых записей). */
   url: z.string().nullable(),
+  /**
+   * Персональный мастер этого дубляжа (видео-лестница + одна аудио-группа).
+   * Для плееров без API выбора аудио (нативный HLS на мобиле).
+   */
+  masterUrl: z.string().nullable(),
 });
 export const subtitleSchema = z.object({
   id: z.number().int(),

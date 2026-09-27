@@ -62,9 +62,11 @@ describe("social routes", () => {
       url: "/v1/subscriptions/new-episodes",
       headers: auth,
     });
-    const episodes = newEpisodesResponseSchema.parse(feed.json()).items;
-    expect(episodes).toHaveLength(1);
-    expect(episodes[0]).toMatchObject({
+    const feedDto = newEpisodesResponseSchema.parse(feed.json());
+    expect(feedDto.total).toBe(1);
+    expect(feedDto.items).toHaveLength(1);
+    expect(feedDto.items[0]).toMatchObject({
+      kind: "episode",
       itemId: ids.serial,
       mediaId: ids.episodeMedia,
       seasonNumber: 1,
@@ -192,6 +194,82 @@ describe("social routes", () => {
       payload: { body: "анон" },
     });
     expect(anonPost.statusCode).toBe(401);
+  });
+
+  it("редактирование и пагинация веток", async () => {
+    const app = await createTestApp();
+    const ids = await makeFixtures(app.db);
+    const token1 = await registerUser(app, "writer@zal.local");
+    const token2 = await registerUser(app, "guest2@zal.local");
+    const auth1 = { authorization: `Bearer ${token1}` };
+    const auth2 = { authorization: `Bearer ${token2}` };
+
+    // Три ветки, у первой есть ответ.
+    const mk = async (body: string, parentId?: number) => {
+      const res = await app.app.inject({
+        method: "POST",
+        url: `/v1/items/${ids.movie}/comments`,
+        headers: auth1,
+        payload: { body, parentId },
+      });
+      return commentResponseSchema.parse(res.json()).comment;
+    };
+    const b1 = await mk("ветка 1");
+    await mk("ответ ветки 1", b1.id);
+    await mk("ветка 2");
+    await mk("ветка 3");
+
+    // Страница — ветка целиком, nextOffset ведёт на следующие.
+    const page1 = await app.app.inject({
+      method: "GET",
+      url: `/v1/items/${ids.movie}/comments?limit=1`,
+    });
+    const p1 = commentListResponseSchema.parse(page1.json());
+    expect(p1.total).toBe(3);
+    expect(p1.nextOffset).toBe(1);
+    expect(p1.items.map((c) => c.body)).toEqual(["ветка 1", "ответ ветки 1"]);
+
+    const page2 = await app.app.inject({
+      method: "GET",
+      url: `/v1/items/${ids.movie}/comments?limit=2&offset=1`,
+    });
+    const p2 = commentListResponseSchema.parse(page2.json());
+    expect(p2.nextOffset).toBeNull();
+    expect(p2.items.map((c) => c.body)).toEqual(["ветка 2", "ветка 3"]);
+
+    // Редактирование: своё — можно.
+    const edited = await app.app.inject({
+      method: "PUT",
+      url: `/v1/comments/${b1.id}`,
+      headers: auth1,
+      payload: { body: "ветка 1 (правка)" },
+    });
+    expect(commentResponseSchema.parse(edited.json()).comment.body).toBe(
+      "ветка 1 (правка)",
+    );
+
+    // Чужое — 403.
+    const foreign = await app.app.inject({
+      method: "PUT",
+      url: `/v1/comments/${b1.id}`,
+      headers: auth2,
+      payload: { body: "взлом" },
+    });
+    expect(foreign.statusCode).toBe(403);
+
+    // Удалённое — 404.
+    await app.app.inject({
+      method: "DELETE",
+      url: `/v1/comments/${b1.id}`,
+      headers: auth1,
+    });
+    const gone = await app.app.inject({
+      method: "PUT",
+      url: `/v1/comments/${b1.id}`,
+      headers: auth1,
+      payload: { body: "мимо" },
+    });
+    expect(gone.statusCode).toBe(404);
   });
 
   it("голосование: смена, снятие, сводное состояние тайтла", async () => {

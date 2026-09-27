@@ -40,6 +40,7 @@ import {
 import {
   commentListResponseSchema,
   commentPostSchema,
+  commentPutSchema,
   commentResponseSchema,
   itemSocialResponseSchema,
   newEpisodesResponseSchema,
@@ -49,6 +50,7 @@ import {
   votePutSchema,
   voteResponseSchema,
   type CommentPost,
+  type CommentPut,
   type SubscriptionPut,
   type VotePut,
 } from "./social";
@@ -239,12 +241,22 @@ export function createApiClient(opts: ApiClientOptions) {
     /* social */
     getItemSocial: (itemId: number) =>
       request(`/v1/items/${itemId}/social`, itemSocialResponseSchema, { auth: true }),
-    listComments: (itemId: number) =>
-      request(`/v1/items/${itemId}/comments`, commentListResponseSchema),
+    listComments: (itemId: number, opts?: { limit?: number; offset?: number }) =>
+      request(`/v1/items/${itemId}/comments`, commentListResponseSchema, {
+        query: { limit: opts?.limit, offset: opts?.offset },
+      }),
     postComment: (itemId: number, input: CommentPost) => {
       commentPostSchema.parse(input);
       return request(`/v1/items/${itemId}/comments`, commentResponseSchema, {
         method: "POST",
+        body: input,
+        auth: true,
+      });
+    },
+    editComment: (commentId: number, input: CommentPut) => {
+      commentPutSchema.parse(input);
+      return request(`/v1/comments/${commentId}`, commentResponseSchema, {
+        method: "PUT",
         body: input,
         auth: true,
       });

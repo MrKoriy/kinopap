@@ -201,6 +201,9 @@ export async function runIngest(
         fileKey: audioRenditions[i]
           ? `${baseKey}/${audioRenditions[i]!.dirName}/index.m3u8`
           : null,
+        masterKey: audioRenditions[i]
+          ? `${baseKey}/master-${audioRenditions[i]!.dirName}.m3u8`
+          : null,
       })),
       subtitles: vttFiles.map((v) => ({
         lang: v.lang,

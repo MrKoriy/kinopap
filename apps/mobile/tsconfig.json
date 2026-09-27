@@ -11,5 +11,5 @@
     "esModuleInterop": true,
     "isolatedModules": true
   },
-  "include": ["app", "*.ts", "*.tsx"]
+  "include": ["app", "lib", "components", "test", "*.ts", "*.tsx"]
 }

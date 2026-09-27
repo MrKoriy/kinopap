@@ -5,7 +5,7 @@
  * ссылаются на общую группу аудио, переключение дубляжа — на лету.
  */
 import { execFile } from "node:child_process";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { probeMedia, type FfmpegConfig } from "./probe";
@@ -33,6 +33,8 @@ export interface TranscodedAudioRendition {
   index: number;
   dirName: string;
   playlistPath: string;
+  /** Персональный мастер этого дубляжа (видео-лестница + одна аудио-группа). */
+  masterPlaylistPath: string | null;
   segmentPaths: string[];
 }
 
@@ -82,8 +84,48 @@ export function buildVarStreamMap(
 }
 
 /**
+ * Персональный мастер-плейлист дубляжа: из общего master.m3u8 оставляем
+ * одну аудио-рендition (DEFAULT=YES) и все видео-варианты. Так дубляж
+ * переключают плееры без API выбора аудио (нативный HLS на мобиле).
+ */
+export function buildDubMaster(masterContent: string, renditionName: string): string {
+  const lines = masterContent.split(/\r?\n/);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.startsWith("#EXT-X-MEDIA:")) {
+      // ffmpeg переименовывает NAME (audio_2, …), наши имена живут в URI.
+      if (
+        line.includes(`NAME="${renditionName}"`) ||
+        line.includes(`URI="${renditionName}/`)
+      ) {
+        out.push(
+          line
+            .replace(/NAME="[^"]*"/, `NAME="${renditionName}"`)
+            .replace(/DEFAULT=(?:YES|NO)/, "DEFAULT=YES"),
+        );
+      }
+      continue;
+    }
+    if (line.startsWith("#EXT-X-STREAM-INF:")) {
+      const uri = lines[i + 1] ?? "";
+      // Аудио-вариации (если ffmpeg вывел их отдельными стримами) пропускаем.
+      if (uri.trim().startsWith("audio-")) {
+        i++;
+        continue;
+      }
+      out.push(line);
+      continue;
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
+/**
  * ffmpeg → outDir: <качество>/index.m3u8 (видео), audio-N-lang/index.m3u8
- * (аудио-рендitions), master.m3u8 (audio groups). Апскейла нет.
+ * (аудио-рендitions), master.m3u8 (audio groups) + master-audio-N-lang.m3u8
+ * (персональные мастера дубляжей). Апскейла нет.
  */
 export async function transcodeToHls(
   sourcePath: string,
@@ -149,15 +191,23 @@ export async function transcodeToHls(
   }
 
   const audioRenditions: TranscodedAudioRendition[] = [];
+  const masterContent = audios.length
+    ? await readFile(masterPlaylistPath, "utf8")
+    : "";
   for (const [i, a] of audios.entries()) {
     const dirName = audioRenditionName(i, a.lang);
     const dir = path.join(outDir, dirName);
     const segments = await listSegments(dir);
     if (!segments.length) throw new Error(`transcode: no segments for ${dirName}`);
+
+    const dubMasterPath = path.join(outDir, `master-${dirName}.m3u8`);
+    await writeFile(dubMasterPath, buildDubMaster(masterContent, dirName));
+
     audioRenditions.push({
       index: i,
       dirName,
       playlistPath: path.join(dir, "index.m3u8"),
+      masterPlaylistPath: dubMasterPath,
       segmentPaths: segments,
     });
   }

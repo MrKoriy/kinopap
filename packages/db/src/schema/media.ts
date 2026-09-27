@@ -90,6 +90,9 @@ export const audioTracks = pgTable(
     authorTitle: varchar("author_title", { length: 120 }),
     authorShortTitle: varchar("author_short_title", { length: 120 }),
     fileKey: text("file_key"),
+    /** Персональный мастер-плейлист этого дубляжа (видео-лестница + одна аудио-группа).
+     * Нужен плеерам без API выбора аудио (нативный HLS на мобиле). */
+    masterKey: text("master_key"),
   },
   (t) => [index("audio_tracks_media_idx").on(t.mediaId)],
 );

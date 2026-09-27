@@ -3,7 +3,7 @@
  * Голоса суммируем в items (votes_positive/votes_negative), рейтинг —
  * доля «за» от всех голосов, шкала 0..10.
  */
-import { and, asc, desc, eq, isNull, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import type {
   CommentDto,
   NewEpisodeDto,
@@ -25,6 +25,11 @@ import {
 } from "../schema/index";
 
 export type SubscriptionRow = typeof subscriptions.$inferSelect;
+export interface NewEpisodesFeed {
+  items: NewEpisodeDto[];
+  /** Всего недосмотренных новинок (для badge в шапке). */
+  total: number;
+}
 export type CommentRow = typeof comments.$inferSelect;
 export type VoteRow = typeof votes.$inferSelect;
 
@@ -127,16 +132,26 @@ export async function listSubscriptions(
   return rows.map((r) => mapSubscription(r.row, r.item));
 }
 
+const NOT_WATCHED = or(
+  isNull(watchProgress.status),
+  ne(watchProgress.status, "watched"),
+);
+
+const WATCHED_JOIN = and(
+  eq(watchProgress.mediaId, media.id),
+  eq(watchProgress.profileId, subscriptions.profileId),
+);
+
 /**
- * Лента «новые серии»: эпизоды подписанных тайтов, которые ещё не досмотрены.
- * Свежие сверху.
+ * Лента «новое по подпискам»: недосмотренные серии сериалов и новые
+ * части фильмов (partNumber > 1). Свежие сверху, total — для badge.
  */
 export async function listNewEpisodes(
   db: Db,
   profileId: number,
   limit = 20,
-): Promise<NewEpisodeDto[]> {
-  const rows = await db
+): Promise<NewEpisodesFeed> {
+  const epRows = await db
     .select({
       itemId: items.id,
       itemTitle: items.title,
@@ -144,6 +159,8 @@ export async function listNewEpisodes(
       seasonNumber: seasons.number,
       episodeNumber: episodes.number,
       episodeTitle: episodes.title,
+      partNumber: media.partNumber,
+      title: media.title,
       runtime: episodes.runtime,
       publishedAt: media.createdAt,
     })
@@ -152,32 +169,58 @@ export async function listNewEpisodes(
     .innerJoin(media, and(eq(media.itemId, items.id), sql`${media.episodeId} is not null`))
     .innerJoin(episodes, eq(episodes.id, media.episodeId))
     .innerJoin(seasons, eq(seasons.id, episodes.seasonId))
-    .leftJoin(
-      watchProgress,
-      and(
-        eq(watchProgress.mediaId, media.id),
-        eq(watchProgress.profileId, subscriptions.profileId),
-      ),
-    )
-    .where(
-      and(
-        eq(subscriptions.profileId, profileId),
-        or(isNull(watchProgress.status), ne(watchProgress.status, "watched")),
-      ),
-    )
-    .orderBy(desc(media.createdAt))
-    .limit(limit);
+    .leftJoin(watchProgress, WATCHED_JOIN)
+    .where(and(eq(subscriptions.profileId, profileId), NOT_WATCHED));
 
-  return rows.map((r) => ({
-    itemId: r.itemId,
-    itemTitle: r.itemTitle,
-    mediaId: r.mediaId,
-    seasonNumber: r.seasonNumber,
-    episodeNumber: r.episodeNumber,
-    episodeTitle: r.episodeTitle,
-    runtime: r.runtime,
-    publishedAt: r.publishedAt.toISOString(),
-  }));
+  const partRows = await db
+    .select({
+      itemId: items.id,
+      itemTitle: items.title,
+      mediaId: media.id,
+      partNumber: media.partNumber,
+      title: media.title,
+      runtime: media.runtime,
+      publishedAt: media.createdAt,
+    })
+    .from(subscriptions)
+    .innerJoin(items, eq(items.id, subscriptions.itemId))
+    .innerJoin(
+      media,
+      and(eq(media.itemId, items.id), isNull(media.episodeId), gt(media.partNumber, 1)),
+    )
+    .leftJoin(watchProgress, WATCHED_JOIN)
+    .where(and(eq(subscriptions.profileId, profileId), NOT_WATCHED));
+
+  const merged: NewEpisodeDto[] = [
+    ...epRows.map((r) => ({
+      kind: "episode" as const,
+      itemId: r.itemId,
+      itemTitle: r.itemTitle,
+      mediaId: r.mediaId,
+      seasonNumber: r.seasonNumber,
+      episodeNumber: r.episodeNumber,
+      episodeTitle: r.episodeTitle,
+      partNumber: null,
+      title: null,
+      runtime: r.runtime,
+      publishedAt: r.publishedAt.toISOString(),
+    })),
+    ...partRows.map((r) => ({
+      kind: "part" as const,
+      itemId: r.itemId,
+      itemTitle: r.itemTitle,
+      mediaId: r.mediaId,
+      seasonNumber: null,
+      episodeNumber: null,
+      episodeTitle: null,
+      partNumber: r.partNumber,
+      title: r.title,
+      runtime: r.runtime,
+      publishedAt: r.publishedAt.toISOString(),
+    })),
+  ].sort((a, b) => b.publishedAt.localeCompare(a.publishedAt));
+
+  return { items: merged.slice(0, limit), total: merged.length };
 }
 
 /* ---------- Голосование ---------- */
@@ -332,6 +375,7 @@ function mapComment(row: CommentRow, author: { id: number; name: string }): Comm
     deleted: row.deleted,
     author,
     createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -353,6 +397,62 @@ export async function listComments(db: Db, itemId: number): Promise<CommentDto[]
     .where(eq(comments.itemId, itemId))
     .orderBy(asc(comments.createdAt), asc(comments.id));
   return rows.map((r) => mapComment(r.row, r.author));
+}
+
+/**
+ * Постранично по корневым веткам: страница — корни целиком со всеми
+ * ответами (обход вниз уровнями, глубина ограничена MAX_COMMENT_DEPTH).
+ * nextOffset — смещение следующей страницы веток, null — конец.
+ */
+export async function listCommentsPage(
+  db: Db,
+  itemId: number,
+  limit: number,
+  offset: number,
+): Promise<{ items: CommentDto[]; nextOffset: number | null; total: number }> {
+  const [rootRows, countRows] = await Promise.all([
+    db
+      .select({ id: comments.id })
+      .from(comments)
+      .where(and(eq(comments.itemId, itemId), isNull(comments.parentId)))
+      .orderBy(asc(comments.createdAt), asc(comments.id))
+      .limit(limit)
+      .offset(offset),
+    db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(comments)
+      .where(and(eq(comments.itemId, itemId), isNull(comments.parentId))),
+  ]);
+  const total = countRows[0]?.n ?? 0;
+  const roots = rootRows.map((r) => r.id);
+  const nextOffset = offset + roots.length < total ? offset + roots.length : null;
+  if (!roots.length) return { items: [], nextOffset: null, total };
+
+  // Спускаемся по веткам уровнями: parentId проиндексирован, глубина ≤ лимита.
+  const ids = new Set(roots);
+  let frontier = roots;
+  while (frontier.length) {
+    const children = await db
+      .select({ id: comments.id })
+      .from(comments)
+      .where(and(eq(comments.itemId, itemId), inArray(comments.parentId, frontier)));
+    frontier = [];
+    for (const c of children) {
+      if (!ids.has(c.id)) {
+        ids.add(c.id);
+        frontier.push(c.id);
+      }
+    }
+  }
+
+  const rows: CommentJoinRow[] = await commentFrom(db)
+    .where(and(eq(comments.itemId, itemId), inArray(comments.id, [...ids])))
+    .orderBy(asc(comments.createdAt), asc(comments.id));
+  return {
+    items: rows.map((r) => mapComment(r.row, r.author)),
+    nextOffset,
+    total,
+  };
 }
 
 export async function countComments(db: Db, itemId: number): Promise<number> {
@@ -408,6 +508,20 @@ export async function addComment(
     })
     .returning();
   return (await getComment(db, inserted[0]!.id))!;
+}
+
+/** Редактирование: только живые комментарии, updatedAt перескакивает. */
+export async function updateComment(
+  db: Db,
+  id: number,
+  body: string,
+): Promise<CommentDto | null> {
+  const updated = await db
+    .update(comments)
+    .set({ body, updatedAt: new Date() })
+    .where(and(eq(comments.id, id), eq(comments.deleted, false)))
+    .returning({ id: comments.id });
+  return updated.length ? getComment(db, id) : null;
 }
 
 /** Мягкое удаление: узел остаётся, чтобы дерево ответов не рассыпалось. */

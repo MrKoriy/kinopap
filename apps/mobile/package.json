@@ -5,18 +5,23 @@
   "main": "expo-router/entry",
   "scripts": {
     "dev": "expo start",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@zal/api-client": "workspace:*",
     "@zal/ui": "workspace:*",
     "expo": "^57.0.25",
     "expo-router": "^57.0.23",
+    "expo-secure-store": "~57.0.4",
+    "expo-status-bar": "~57.0.1",
+    "expo-video": "~57.0.5",
     "react": "^19.3.0",
     "react-native": "0.87.1"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
-    "typescript": "^5.9.0"
+    "typescript": "^5.9.0",
+    "vitest": "^5.0.2"
   }
 }

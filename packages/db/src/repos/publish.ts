@@ -55,6 +55,8 @@ export interface PublishAudio {
   authorShortTitle?: string | null;
   /** Ключ плейлиста аудио-рендitions в HLS-мастере. */
   fileKey?: string | null;
+  /** Ключ персонального мастера дубляжа (видео + одна аудио-группа). */
+  masterKey?: string | null;
 }
 
 export interface PublishSubtitle {
@@ -221,6 +223,7 @@ export async function publishIngest(
         authorTitle: a.authorTitle ?? null,
         authorShortTitle: a.authorShortTitle ?? null,
         fileKey: a.fileKey ?? null,
+        masterKey: a.masterKey ?? null,
       })),
     );
   }

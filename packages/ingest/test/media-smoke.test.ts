@@ -8,6 +8,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
+  buildDubMaster,
   convertSubtitlesToVtt,
   generatePoster,
   generateSprite,
@@ -143,6 +144,20 @@ describe("multi-audio HLS (реальный ffmpeg)", () => {
     const uris = [...master.matchAll(/URI="([^"]+)"/g)].map((m) => m[1]!);
     expect(uris).toHaveLength(2);
     for (const uri of uris) await stat(path.join(outDir, uri));
+
+    // Персональные мастера дубляжей: одна аудио-рендition, все видео-варианты.
+    for (const r of audioRenditions) {
+      await stat(r.masterPlaylistPath!);
+      const dub = await readFile(r.masterPlaylistPath!, "utf8");
+      expect(dub.match(/TYPE=AUDIO/g)).toHaveLength(1);
+      expect(dub).toContain(`NAME="${r.dirName}"`);
+      expect(dub).toContain("DEFAULT=YES");
+      expect(dub).not.toContain("DEFAULT=NO");
+      expect(dub.match(/#EXT-X-STREAM-INF/g)).toHaveLength(rungs.length);
+      for (const uri of [...dub.matchAll(/URI="([^"]+)"/g)].map((m) => m[1]!)) {
+        await stat(path.join(outDir, uri));
+      }
+    }
   });
 
   it("дорожки действительно различаются: 300Гц против 3000Гц", async () => {
@@ -167,6 +182,36 @@ describe("multi-audio HLS (реальный ffmpeg)", () => {
     // Мощность на своей частоте должна доминировать в каждой дорожке.
     expect(goertzelPower(a, 300, sr)).toBeGreaterThan(goertzelPower(a, 3000, sr) * 10);
     expect(goertzelPower(b, 3000, sr)).toBeGreaterThan(goertzelPower(b, 300, sr) * 10);
+  });
+});
+
+describe("buildDubMaster (персональный мастер дубляжа)", () => {
+  const master = [
+    "#EXTM3U",
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="audio-0-rus",DEFAULT=YES,LANGUAGE="rus",URI="audio-0-rus/index.m3u8"',
+    '#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="aud",NAME="audio-1-eng",DEFAULT=NO,LANGUAGE="eng",URI="audio-1-eng/index.m3u8"',
+    '#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=1280x720,AUDIO="aud"',
+    "720p/index.m3u8",
+    '#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=854x480,AUDIO="aud"',
+    "480p/index.m3u8",
+  ].join("\n");
+
+  it("оставляет одну дорожку, делает её DEFAULT и сохраняет видео", () => {
+    const dub = buildDubMaster(master, "audio-1-eng");
+    expect(dub).toContain('NAME="audio-1-eng"');
+    expect(dub).not.toContain("audio-0-rus");
+    expect(dub).toContain("DEFAULT=YES");
+    expect(dub).not.toContain("DEFAULT=NO");
+    expect(dub.match(/#EXT-X-STREAM-INF/g)).toHaveLength(2);
+    expect(dub).toContain("720p/index.m3u8");
+    expect(dub).toContain("480p/index.m3u8");
+  });
+
+  it("первая дорожка уже DEFAULT — остаётся как есть", () => {
+    const dub = buildDubMaster(master, "audio-0-rus");
+    expect(dub.match(/TYPE=AUDIO/g)).toHaveLength(1);
+    expect(dub).toContain('NAME="audio-0-rus"');
+    expect(dub).toContain("LANGUAGE=\"rus\"");
   });
 });
 

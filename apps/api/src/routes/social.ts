@@ -5,7 +5,9 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
+  commentListQuerySchema,
   commentPostSchema,
+  commentPutSchema,
   subscriptionPutSchema,
   votePutSchema,
   type CommentDto,
@@ -19,12 +21,13 @@ import {
   getDefaultProfile,
   getSubscription,
   getVoteState,
-  listComments,
+  listCommentsPage,
   listNewEpisodes,
   listSubscriptions,
   removeVote,
   setVote,
   softDeleteComment,
+  updateComment,
   upsertSubscription,
   type Db,
 } from "@zal/db";
@@ -74,10 +77,12 @@ export async function socialRoutes(
 
   /* ---------- Комментарии ---------- */
 
+  /** Постранично по корневым веткам: страница — корни со всеми ответами. */
   app.get("/items/:id/comments", async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
+    const q = parseOrThrow(commentListQuerySchema, request.query ?? {});
     await assertItem(id);
-    return { items: await listComments(db, id) };
+    return listCommentsPage(db, id, q.limit, q.offset);
   });
 
   app.post("/items/:id/comments", { preHandler: app.authenticate }, async (request, reply) => {
@@ -101,6 +106,23 @@ export async function socialRoutes(
       throw err;
     }
     reply.code(201);
+    return { comment };
+  });
+
+  /** Редактировать может только автор (admin/owner — через удаление). */
+  app.put("/comments/:id", { preHandler: app.authenticate }, async (request) => {
+    const { id } = parseOrThrow(idParamsSchema, request.params);
+    const body = parseOrThrow(commentPutSchema, request.body);
+    const existing = await getComment(db, id);
+    if (!existing || existing.deleted) throw notFound(`Comment ${id} not found`);
+
+    const authorUserId = await getCommentAuthorUserId(db, id);
+    if (authorUserId !== request.user.sub) {
+      throw forbidden("Можно редактировать только свои комментарии");
+    }
+
+    const comment = await updateComment(db, id, body.body);
+    if (!comment) throw notFound(`Comment ${id} not found`);
     return { comment };
   });
 
@@ -152,10 +174,10 @@ export async function socialRoutes(
     return { items: await listSubscriptions(db, profile.id) };
   });
 
-  /** Лента «новые серии»: вышедшее по подпискам, что ещё не досмотрено. */
+  /** Лента «новое по подпискам»: серии и части, что ещё не досмотрены. */
   app.get("/subscriptions/new-episodes", { preHandler: app.authenticate }, async (request) => {
     const profile = await getDefaultProfile(db, request.user.sub);
-    return { items: await listNewEpisodes(db, profile.id) };
+    return listNewEpisodes(db, profile.id);
   });
 
   app.put("/subscriptions/:itemId", { preHandler: app.authenticate }, async (request) => {
