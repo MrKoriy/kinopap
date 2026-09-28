@@ -37,13 +37,20 @@ export class ApiUnavailableError extends Error {
 }
 
 /**
- * Без серверного кэша Next: данные ходят в API напрямую, иначе
- * протухшие media-links из прошлых сборок уезжают в плеер.
+ * Серверное чтение API. По умолчанию — короткий ISR-кэш Next: страница
+ * отдаётся готовой (TTFB ~30мс) вместо рендера на каждый визит, а API/БД
+ * не получают дублирующий удар.
+ *
+ * `revalidate: 0` — всегда свежо: media-links (протухшие ссылки из прошлых
+ * сборок нельзя отдавать в плеер) и поиск.
  */
-async function getJson(path: string): Promise<unknown> {
+async function getJson(path: string, revalidate = 30): Promise<unknown> {
   let res: Response;
   try {
-    res = await fetch(`${API_BASE}${path}`, { cache: "no-store" });
+    res = await fetch(
+      `${API_BASE}${path}`,
+      revalidate > 0 ? { next: { revalidate } } : { cache: "no-store" },
+    );
   } catch {
     throw new ApiUnavailableError(0, path);
   }
@@ -129,7 +136,7 @@ export async function fetchSearch(
   return softOnBuildPhase(
     async () =>
       itemPageSchema.parse(
-        await getJson(`/v1/items/search${qs({ q: q.trim(), field, limit })}`),
+        await getJson(`/v1/items/search${qs({ q: q.trim(), field, limit })}`, 0),
       ),
     EMPTY_PAGE,
   );
@@ -158,7 +165,7 @@ export async function fetchMediaLinks(
 ): Promise<MediaLinks | null> {
   try {
     return mediaLinksSchema.parse(
-      await getJson(`/v1/items/${itemId}/media-links${qs({ mid: mediaId })}`),
+      await getJson(`/v1/items/${itemId}/media-links${qs({ mid: mediaId })}`, 0),
     );
   } catch (err) {
     if (err instanceof ApiUnavailableError && err.status === 404) return null;
