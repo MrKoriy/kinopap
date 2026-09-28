@@ -11,9 +11,13 @@ API_INTERNAL="http://127.0.0.1:7001"
 TMDB_KEY="${TMDB_API_KEY:?export TMDB_API_KEY=... перед запуском}"
 
 echo "==> 1/6: код на сервер (rsync, без node_modules/.next/.env/data/bin)"
+# media/ исключён намеренно: это MEDIA_ROOT, рабочий каталог сервера. Локально
+# его нет, и без --exclude rsync --delete вычистил бы оттуда всё залитое.
+# .workbuddy-ai — заметки агента, на сервере не нужны.
 rsync -az --delete \
   --exclude node_modules --exclude .next --exclude .turbo --exclude .expo \
   --exclude .env --exclude data --exclude bin --exclude .git \
+  --exclude media --exclude .workbuddy-ai \
   --exclude test-results --exclude dist-e2e --exclude dist --exclude coverage \
   --exclude ios --exclude android \
   ./ "$SERVER:$APP_DIR/"
