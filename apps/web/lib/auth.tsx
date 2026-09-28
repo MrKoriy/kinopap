@@ -89,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         api.setToken(res.tokens.accessToken);
         const me = await api.me().catch(() => null);
         if (!cancelled) setUser(me?.user ?? null);
-      } catch (err) {
+      } catch {
         // 401 — гость (куки нет/отозвана); сбой сети — тоже гость до
         // следующего логина, повторный refresh безопасен.
         if (!cancelled) setUser(null);

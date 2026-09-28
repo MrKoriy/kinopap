@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
 import { eq } from "drizzle-orm";
-import { createTestDb } from "./helpers";
+import { describe, expect, it } from "vitest";
 import { ingestJobs, reconcileStaleIngestJobs } from "../src";
+import { createTestDb } from "./helpers";
 
 describe("reconcileStaleIngestJobs", () => {
   it("помечает застрявшие running/queued, свежие не трогает", async () => {

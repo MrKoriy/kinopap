@@ -251,7 +251,7 @@ describe("invites (owner/admin)", () => {
 describe("refresh через httpOnly-cookie (веб)", () => {
   it("логин ставит куку, refresh по ней ротирует и переписывает её", async () => {
     const { app, db } = await createTestApp();
-    const { invite } = await makeOwnerWithInvite(db);
+    await makeOwnerWithInvite(db);
 
     const login = await app.inject({
       method: "POST",
