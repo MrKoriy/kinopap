@@ -4,6 +4,7 @@ import {
   activeCues,
   isIntroVisible,
   isNearEnd,
+  nextAliveSource,
   parseVtt,
   spriteTileFor,
 } from "@/lib/player-logic";
@@ -117,5 +118,34 @@ describe("format", () => {
     expect(formatTime(4425)).toBe("1:13:45");
     expect(formatDuration(null)).toBe("");
     expect(formatDuration(90)).toBe("1:30");
+  });
+});
+
+describe("nextAliveSource", () => {
+  it("без потерь берёт первую", () => {
+    expect(nextAliveSource([], 8)).toBe(0);
+  });
+
+  it("перебирает по возрастанию индекса", () => {
+    expect(nextAliveSource([0], 8)).toBe(1);
+    expect(nextAliveSource([0, 1], 8)).toBe(2);
+    expect(nextAliveSource([2], 8)).toBe(0);
+  });
+
+  it("возвращает null, когда живых не осталось", () => {
+    expect(nextAliveSource([0, 1, 2], 3)).toBeNull();
+    expect(nextAliveSource([], 0)).toBeNull();
+  });
+
+  it("игнорирует индексы за пределами списка", () => {
+    // Мёртвым мог оказаться индекс, которого в новом списке раздач уже нет.
+    expect(nextAliveSource([99], 3)).toBe(0);
+    expect(nextAliveSource([0, 99, 1], 3)).toBe(2);
+  });
+
+  it("не мутирует входной список", () => {
+    const dead = [0, 1];
+    nextAliveSource(dead, 5);
+    expect(dead).toEqual([0, 1]);
   });
 });

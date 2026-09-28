@@ -15,6 +15,7 @@ import {
   activeCues,
   isIntroVisible,
   isNearEnd,
+  nextAliveSource,
   parseVtt,
   type SubtitleCue as VttCue,
 } from "@/lib/player-logic";
@@ -82,6 +83,21 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
   // Автоплей заблокирован политикой браузера — играем без звука и показываем
   // кнопку «Включить звук», чтобы пользователь не остался с тишиной без выхода.
   const [soundBlocked, setSoundBlocked] = React.useState(false);
+  // Раздачи, которые уже не заиграли: gst-транскодер отказал и прямой стрим не
+  // пошёл. Перебираем список, пока не найдём рабочую.
+  //
+  // Зачем: резолвер отдаёт до восьми раздач одного фильма, отсортированных по
+  // сидам и размеру, но НЕ проверяет, транскодируется ли файл. DVD-remux с
+  // MPEG-2 gst не берёт вовсе («unsupported video codec»), а стоит он первым —
+  // и фильм закрыт целиком, хотя рядом лежат пять рабочих раздач. Раньше плеер
+  // восемь раз долбился в один и тот же мёртвый URL и показывал «браузер не
+  // поддерживает MKV / AC3», что неправда: браузер тут ни при чём.
+  const [deadFiles, setDeadFiles] = React.useState<number[]>([]);
+  // Идёт перебор: показываем это пользователю, чтобы пауза не выглядела зависанием.
+  const [switchingSource, setSwitchingSource] = React.useState(false);
+  // Растёт по «Попробовать снова»: перезапускает инициализацию потока, даже
+  // если индекс раздачи не изменился (setActiveFileIndex(0) при нуле — no-op).
+  const [sourceEpoch, setSourceEpoch] = React.useState(0);
 
   const activeFile = links.files[activeFileIndex] ?? links.files[0];
   // Дубляж zero-storage: каждая дорожка — персональный HLS-мастер
@@ -186,9 +202,79 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
   // торрент, первая попытка сразу после резолва может не успеть.
   const gstRetryRef = React.useRef(0);
 
+  const activeFileIndexRef = React.useRef(activeFileIndex);
+  activeFileIndexRef.current = activeFileIndex;
+  const deadFilesRef = React.useRef<number[]>([]);
+  deadFilesRef.current = deadFiles;
+
+  /**
+   * Помечает текущую раздачу мёртвой и переключает на следующую неиспробованную.
+   * Когда живых не осталось — только тогда показываем ошибку.
+   */
+  const abandonCurrentFile = React.useCallback(() => {
+    const current = activeFileIndexRef.current;
+    // Уже помечена — переключение на неё ещё не завершилось, а это эхо ошибки
+    // от предыдущей раздачи. Без этой проверки одна ошибка съедала бы сразу
+    // две раздачи из списка.
+    if (deadFilesRef.current.includes(current)) return;
+    const dead = [...deadFilesRef.current, current];
+    deadFilesRef.current = dead;
+    setDeadFiles(dead);
+
+    const next = nextAliveSource(dead, links.files.length);
+
+    if (next == null) {
+      setSwitchingSource(false);
+      setIsBuffering(false);
+      setError(
+        "Ни одна раздача этого фильма не заиграла. Попробуйте открыть позже — торренты оживут — или выберите другое качество в меню.",
+      );
+      return;
+    }
+
+    setSwitchingSource(true);
+    // Счётчик ретраев и откат на прямой стрим — свои для каждой раздачи:
+    // иначе новая раздача получила бы бюджет ретраев предыдущей.
+    gstRetryRef.current = 0;
+    setDirectFallback(false);
+    // Автоплей — одноразовый на mediaId (чтобы не спорить с ручной паузой).
+    // Перебор раздачи — исключение: пользователь просил играть, поэтому снимаем
+    // флаг, иначе новая раздача распарсит манифест и встанет на паузе.
+    autoplayForMedia.current = null;
+    setActiveFileIndex(next);
+  }, [links.files.length]);
+
+  // Ссылка, чтобы вызывать из слушателей hls.js и <video>, не пересоздавая их.
+  const abandonRef = React.useRef(abandonCurrentFile);
+  abandonRef.current = abandonCurrentFile;
+
+  /**
+   * «Попробовать снова» после того, как перебрали все раздачи: список мог
+   * устареть (торренты оживают, gst прогревается), поэтому начинаем с чистого
+   * листа, а не показываем тупик.
+   */
+  const retryAllSources = React.useCallback(() => {
+    deadFilesRef.current = [];
+    setDeadFiles([]);
+    setError(null);
+    setDirectFallback(false);
+    setSwitchingSource(false);
+    setIsBuffering(true);
+    gstRetryRef.current = 0;
+    // Явная просьба играть — снимаем одноразовый флаг автоплея (см. выше).
+    autoplayForMedia.current = null;
+    setActiveFileIndex(0);
+    setSourceEpoch((n) => n + 1);
+  }, []);
+
   React.useEffect(() => {
     const video = videoRef.current;
     if (!video || !streamUrl) return;
+
+    // sourceEpoch — ручной триггер «Попробовать снова»: индекс раздачи при этом
+    // может не измениться, поэтому эффект слушает и его. Читаем явно, иначе
+    // линтер считает зависимость лишней.
+    void sourceEpoch;
 
     setError(null);
     setIsBuffering(true);
@@ -261,7 +347,7 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
               data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
               data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT ||
               data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR;
-            if (manifestGone && activeFile?.urls.http) {
+            if (manifestGone) {
               gstRetryRef.current += 1;
               if (gstRetryRef.current <= 2) {
                 setIsBuffering(true);
@@ -273,10 +359,15 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
                 }, delay);
                 return;
               }
-              if (!directFallback) {
+              if (!directFallback && activeFile?.urls.http) {
                 setDirectFallback(true);
                 return;
               }
+              // gst не собрал манифест и прямого стрима нет либо он уже не
+              // сработал — раздача мёртвая, берём следующую. Раньше здесь был
+              // hls.startLoad(), то есть бесконечный перезаход в тот же URL.
+              abandonRef.current();
+              return;
             }
             hls.startLoad();
             return;
@@ -303,7 +394,7 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
       hlsRef.current = null;
       video.removeAttribute("src");
     };
-  }, [streamUrl, activeFile, directFallback]);
+  }, [streamUrl, activeFile, directFallback, sourceEpoch]);
 
   /* ---------- Субтитры: загрузка WebVTT ---------- */
   React.useEffect(() => {
@@ -357,6 +448,8 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
     const onPlaying = () => {
       setIsBuffering(false);
       setError(null);
+      // Раздача заиграла — перебор закончен, убираем плашку «пробуем другую».
+      setSwitchingSource(false);
       if (!playbackStartNotified.current) {
         playbackStartNotified.current = true;
         onPlaybackStartRef.current?.();
@@ -367,13 +460,26 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
     const onError = () => {
       setIsBuffering(false);
       const err = video.error;
-      if (err?.code === 4) {
-        setError(
-          "Браузер не поддерживает кодек этого видеофайла (MKV / AC3 аудио). Рекомендуем открыть поток в VLC или IINA через кнопку ниже.",
-        );
-      } else if (err) {
-        setError(`Ошибка воспроизведения видео (код ${err.code}): ${err.message || "сбой загрузки"}`);
+      if (!err) return;
+
+      // Код 2 — сетевой сбой, он бывает транзиентным: одна повторная попытка
+      // на раздачу. Коды 3 и 4 — декодер и «источник не поддерживается»:
+      // этот файл не заиграет никогда, ждать нечего.
+      if (err.code === 2 && gstRetryRef.current < 1) {
+        gstRetryRef.current += 1;
+        setIsBuffering(true);
+        window.setTimeout(() => {
+          video.load();
+          tryAutoplayRef.current();
+        }, 1_500);
+        return;
       }
+
+      // Прямой стрим — последний рубеж для этой раздачи. Не пошёл — берём
+      // следующую. Раньше здесь показывалось «браузер не поддерживает MKV /
+      // AC3», что сбивало с толку: проблема была в конкретной раздаче, а не
+      // в браузере, и рядом лежали рабочие.
+      abandonRef.current();
     };
     const onVolume = () => {
       setVolume(video.volume);
@@ -807,9 +913,16 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
 
       {/* Индикатор буферизации */}
       {isBuffering && !error && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 text-white">
+        <div
+          className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 text-white"
+          data-testid="player-buffering"
+        >
           <div className="mb-3 h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-          <p className="text-sm font-medium text-white/90">Буферизация потока / поиск пиров в сети...</p>
+          <p className="text-sm font-medium text-white/90">
+            {switchingSource
+              ? `Раздача не заиграла — пробуем следующую (${deadFiles.length + 1} из ${links.files.length})…`
+              : "Буферизация потока / поиск пиров в сети..."}
+          </p>
         </div>
       )}
 
@@ -817,9 +930,19 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
       {error && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 p-6 text-center text-white">
           <div className="max-w-md">
-            <h3 className="mb-2 text-base font-semibold text-white">Воспроизведение в браузере ограничено</h3>
+            <h3 className="mb-2 text-base font-semibold text-white">
+              Не удалось воспроизвести в браузере
+            </h3>
             <p className="mb-5 text-sm text-muted">{error}</p>
             <div className="flex flex-wrap items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={retryAllSources}
+                className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover"
+                data-testid="player-retry"
+              >
+                Попробовать снова
+              </button>
               {streamUrl && (
                 <>
                   <a
@@ -873,7 +996,9 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
           activeSubtitle={activeSubtitle}
           qualities={links.files.map((f, i) => ({
             index: i,
-            label: f.quality,
+            // Помечаем уже отброшенные раздачи, чтобы выбор качества не был
+            // лотереей: пользователь видит, какие не заиграли, и не тыкает в них.
+            label: deadFiles.includes(i) ? `${f.quality} · не заиграла` : f.quality,
           }))}
           activeQuality={activeFileIndex}
           onQuality={changeQuality}

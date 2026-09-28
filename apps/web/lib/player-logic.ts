@@ -76,3 +76,20 @@ export function isIntroVisible(
 export function isNearEnd(timeSeconds: number, duration: number): boolean {
   return duration > 0 && duration - timeSeconds <= 10 && timeSeconds < duration;
 }
+
+/* ---------- Перебор раздач ---------- */
+
+/**
+ * Первая раздача, которую ещё не пробовали, или null — если живых не осталось.
+ *
+ * Резолвер сортирует раздачи по сидам и размеру и не знает, транскодируется ли
+ * файл: DVD-remux с MPEG-2 gst не берёт вовсе и при этом стоит первым. Поэтому
+ * порядок обхода — строго по возрастанию индекса, а не «следующий по кругу»:
+ * список отсортирован по качеству, и лучшая из живых должна выигрывать.
+ */
+export function nextAliveSource(dead: readonly number[], total: number): number | null {
+  for (let i = 0; i < total; i += 1) {
+    if (!dead.includes(i)) return i;
+  }
+  return null;
+}
