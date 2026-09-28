@@ -26,7 +26,9 @@ import {
   itemDetailSchema,
   itemPageSchema,
   type MediaLinks,
+  type MediaTracks,
   mediaLinksSchema,
+  mediaTracksSchema,
   typesResponseSchema,
 } from "./catalog";
 import type { ApiErrorBody, ItemType } from "./common";
@@ -220,6 +222,15 @@ export function createApiClient(opts: ApiClientOptions) {
       request(`/v1/items/${itemId}/media-links`, mediaLinksSchema, {
         query: { mid: mediaId },
       }),
+    /**
+     * Ленивые аудио-дорожки прогретого релиза: подтягиваются фоном, пока
+     * плеер уже играет — gst-проба на холодных пирах занимает до 45с и не
+     * должна блокировать старт воспроизведения.
+     */
+    getMediaTracks: (itemId: number, mediaId: number) =>
+      request(`/v1/items/${itemId}/media-tracks`, mediaTracksSchema, {
+        query: { mid: mediaId },
+      }),
     getSimilar: (id: number) =>
       request(`/v1/items/${id}/similar`, itemPageSchema),
     getShortcut: (kind: "fresh" | "hot" | "popular", q?: Record<string, unknown>) =>
@@ -327,4 +338,4 @@ export function createApiClient(opts: ApiClientOptions) {
 
 export type ApiClient = ReturnType<typeof createApiClient>;
 
-export type { AuthResponse, ItemDetail, ItemPage, MediaLinks, Tokens, User };
+export type { AuthResponse, ItemDetail, ItemPage, MediaLinks, MediaTracks, Tokens, User };

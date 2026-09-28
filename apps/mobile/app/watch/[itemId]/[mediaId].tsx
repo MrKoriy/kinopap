@@ -140,6 +140,42 @@ export default function WatchScreen() {
     return idx >= 0 && idx + 1 < ordered.length ? ordered[idx + 1]! : null;
   }, [item, mediaIdNum]);
 
+  /**
+   * 3. Ленивые аудио-дорожки: gst-проба на холодных пирах занимает до 45с,
+   * поэтому идёт фоном, пока видео уже играет, и подмешивается в links.
+   */
+  React.useEffect(() => {
+    if (!links || links.audios.length > 0) return;
+    let cancelled = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const load = () => {
+      void (async () => {
+        try {
+          const res = await api.getMediaTracks(links.itemId, links.mediaId);
+          if (cancelled) return;
+          if (res.audios.length > 0) {
+            setLinks((cur) => (cur ? { ...cur, audios: res.audios } : cur));
+            return;
+          }
+        } catch {
+          // Фоновая дорожка: сбой не должен дёргать играющий плеер.
+        }
+        if (!cancelled && attempt < 2) {
+          attempt += 1;
+          timer = setTimeout(load, 8_000);
+        }
+      })();
+    };
+
+    timer = setTimeout(load, 4_000);
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [api, links]);
+
   /** Отправка прогресса: пауза, таймер, размонтирование. */
   const saveProgress = React.useCallback(
     (force = false) => {

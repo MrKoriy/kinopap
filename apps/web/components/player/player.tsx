@@ -1,6 +1,6 @@
 "use client";
 
-import type { MediaLinks, SpriteMetaDto } from "@zal/api-client";
+import type { AudioTrack, MediaLinks, SpriteMetaDto } from "@zal/api-client";
 import type HlsJs from "hls.js";
 /**
  * Плеер «Зал»: hls.js + собственный UI. Аудиодорожки, субтитры со сдвигом,
@@ -56,6 +56,8 @@ export function Player({ links, title, next }: PlayerProps) {
   const [playbackRate, setPlaybackRate] = React.useState(1);
   const [shiftMs, setShiftMs] = React.useState(0);
   const [activeAudio, setActiveAudio] = React.useState(0);
+  // Ленивые аудио-дорожки: gst-проба идёт фоном, пока видео уже играет.
+  const [lazyAudios, setLazyAudios] = React.useState<AudioTrack[]>([]);
   const [activeSubtitle, setActiveSubtitle] = React.useState<number | null>(null);
   const [subtitles, setSubtitles] = React.useState<SubtitleTrack[]>([]);
   const [cues, setCues] = React.useState<VttCue[]>([]);
@@ -73,12 +75,51 @@ export function Player({ links, title, next }: PlayerProps) {
   const activeFile = links.files[activeFileIndex] ?? links.files[0];
   // Дубляж zero-storage: каждая дорожка — персональный HLS-мастер
   // (gst выбирает аудио параметром URL), переключаемся сменой источника.
-  const audioMaster = activeAudio > 0 ? links.audios[activeAudio]?.masterUrl : null;
+  // Дорожки приходят лениво (media-tracks) — до них играем базовым мастером.
+  const audios = lazyAudios.length > 0 ? lazyAudios : links.audios;
+  const audioMaster = activeAudio > 0 ? audios[activeAudio]?.masterUrl : null;
   const baseStream = activeFile?.urls.hls ?? activeFile?.urls.http ?? null;
   const streamUrl = directFallback
     ? (activeFile?.urls.http ?? baseStream)
     : (audioMaster ?? baseStream);
   const sprites: SpriteMetaDto | null = links.sprites;
+
+  /* ---------- Ленивые аудио-дорожки (gst-проба в фоне) ---------- */
+  React.useEffect(() => {
+    // У ингест-тайтлов дорожки уже в media-links — второй раз не спрашиваем.
+    if (links.audios.length > 0 || lazyAudios.length > 0) return;
+    let cancelled = false;
+    let attempt = 0;
+    let timer = 0;
+
+    const load = () => {
+      void (async () => {
+        try {
+          const res = await api.getMediaTracks(links.itemId, links.mediaId);
+          if (cancelled) return;
+          if (res.audios.length > 0) {
+            setLazyAudios(res.audios);
+            return;
+          }
+        } catch {
+          // Фоновая дорожка: сбой не должен дёргать уже играющий плеер.
+        }
+        // Прогрев ещё едет — пробуем ещё пару раз, потом сдаёмся.
+        if (!cancelled && attempt < 2) {
+          attempt += 1;
+          timer = window.setTimeout(load, 8_000);
+        }
+      })();
+    };
+
+    // Ставим после старта воспроизведения: gst-проба читает ту же голову
+    // файла, что и первый сегмент, и не должна с ним конкурировать.
+    timer = window.setTimeout(load, 4_000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [api, lazyAudios.length, links.audios.length, links.itemId, links.mediaId]);
 
   /* ---------- Инициализация потока (HLS или прямой HTTP Range) ---------- */
   const activeAudioRef = React.useRef(0);
@@ -116,9 +157,9 @@ export function Player({ links, title, next }: PlayerProps) {
           maxBufferLength: 30,
           maxMaxBufferLength: 120,
           backBufferLength: 60,
-          // Оптимистичная стартовая оценка канала (2.5 Мбит/с) — иначе ABR
+          // Оптимистичная стартовая оценка канала (4 Мбит/с) — иначе ABR
           // после старта держит 480p и повышает качество медленно.
-          abrEwmaDefaultEstimate: 2_500_000,
+          abrEwmaDefaultEstimate: 4_000_000,
         });
         hlsRef.current = hls;
         hls.loadSource(streamUrl);
@@ -162,9 +203,12 @@ export function Player({ links, title, next }: PlayerProps) {
               gstRetryRef.current += 1;
               if (gstRetryRef.current <= 2) {
                 setIsBuffering(true);
+                // Первый ретрай скоро (тёплый торрент уже есть в кэше),
+                // второй позже — холодным пиром нужно время на подключение.
+                const delay = gstRetryRef.current === 1 ? 2_000 : 4_000;
                 window.setTimeout(() => {
                   if (hls && hlsRef.current === hls) hls.loadSource(streamUrl);
-                }, 5000);
+                }, delay);
                 return;
               }
               if (!directFallback) {
@@ -409,7 +453,7 @@ export function Player({ links, title, next }: PlayerProps) {
     (index: number) => {
       // zero-storage: дорожки с masterUrl переключаются сменой источника
       // (gst выбирает аудио параметром URL); сброс на 0 — базовый мастер.
-      if (links.audios.some((a) => a.masterUrl)) {
+      if (audios.some((a) => a.masterUrl)) {
         swapStream(() => {
           setDirectFallback(false);
           setActiveAudio(index);
@@ -429,7 +473,7 @@ export function Player({ links, title, next }: PlayerProps) {
       }
       setActiveAudio(index);
     },
-    [links.audios, swapStream],
+    [audios, swapStream],
   );
 
   const changeSubtitle = React.useCallback(
@@ -725,7 +769,7 @@ export function Player({ links, title, next }: PlayerProps) {
           playbackRate={playbackRate}
           speeds={SPEEDS}
           shiftMs={shiftMs}
-          audioTracks={links.audios.map((a, i) => ({
+          audioTracks={audios.map((a, i) => ({
             index: i,
             label: `${a.type.toUpperCase()}${a.author.title ? ` · ${a.author.title}` : ""} (${a.lang})`,
           }))}

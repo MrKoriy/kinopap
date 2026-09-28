@@ -317,6 +317,26 @@ export const mediaLinksSchema = z.object({
 });
 export type MediaLinks = z.infer<typeof mediaLinksSchema>;
 
+/**
+ * Тепловые метаданные прогретого релиза: хеш торрента в TorrServer и точный
+ * индекс видеофайла. Нужны резолверу и ленивым аудио-дорожкам; в
+ * media-links наружу не отдаются — магнит-ссылки клиенту не положены.
+ */
+export interface WarmRelease {
+  hash: string;
+  fileIndex: number;
+  magnet: string;
+  title: string;
+}
+
+/** Ленивые аудио-дорожки: gst-проба уже выполненного прогрева. */
+export const mediaTracksSchema = z.object({
+  mediaId: z.number().int(),
+  itemId: z.number().int(),
+  audios: z.array(audioTrackSchema),
+});
+export type MediaTracks = z.infer<typeof mediaTracksSchema>;
+
 /* ---------- Мета ---------- */
 
 export const typeInfoSchema = z.object({

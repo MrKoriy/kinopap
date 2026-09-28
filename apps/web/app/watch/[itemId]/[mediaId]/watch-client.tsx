@@ -23,6 +23,27 @@ export function WatchClient({
   const { api } = useAuth();
   const [links, setLinks] = React.useState<MediaLinks | null>(null);
   const [failed, setFailed] = React.useState(false);
+  const [elapsed, setElapsed] = React.useState(0);
+
+  // Пока идёт поиск — считаем секунды и показываем стадию: резолвер
+  // сначала ищет релизы в rutor (до ~6с), потом прогревает торрент
+  // (budget 2.5с), потом клиент собирает манифест.
+  React.useEffect(() => {
+    if (links || failed) return;
+    const startedAt = Date.now();
+    const timer = window.setInterval(
+      () => setElapsed(Math.floor((Date.now() - startedAt) / 1000)),
+      500,
+    );
+    return () => window.clearInterval(timer);
+  }, [failed, links]);
+
+  const stage =
+    elapsed >= 7
+      ? "Прогреваем торрент и собираем манифест…"
+      : elapsed >= 3
+        ? "Оцениваем релизы и размечаем источники…"
+        : "Ищем источники трансляции…";
 
   const load = React.useCallback(() => {
     setFailed(false);
@@ -60,12 +81,11 @@ export function WatchClient({
       <div
         className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] bg-black text-white"
         data-testid="watch-links-loading"
-      >
-        <div className="h-9 w-9 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-        <p className="text-sm font-medium text-white/90">Ищем источники трансляции…</p>
-        <p className="text-xs text-white/50">
-          Rutor + TorrServer + TMDb: до 10 секунд на первый запрос
-        </p>
+      >          <div className="h-9 w-9 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+          <p className="text-sm font-medium text-white/90">{stage}</p>
+          <p className="text-xs text-white/50">
+            Rutor + TorrServer + TMDb: {elapsed > 0 ? `${elapsed}с` : "до 10 секунд на первый запрос"}
+          </p>
       </div>
     );
   }

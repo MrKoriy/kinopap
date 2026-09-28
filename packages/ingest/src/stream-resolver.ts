@@ -2,10 +2,25 @@
  * Zero-storage Stream Resolver.
  * Resolves media links on the fly from torrents (TorrServer + Rutor) and anime CDNs.
  */
-import type { AudioTrack, MediaFile, MediaLinks } from "@zal/api-client";
+import type { AudioTrack, MediaFile, MediaLinks, WarmRelease } from "@zal/api-client";
 import { AnilibriaConnector } from "./connectors/anilibria";
 import { RutorConnector, type RutorRelease } from "./connectors/rutor";
 import { TorrServerConnector } from "./connectors/torrserver";
+
+/**
+ * Прогрев релиза в TorrServer. Ответ на резолв не ждёт его дольше
+ * WARM_BUDGET_MS: список файлов уходит клиенту сразу, а метаданные
+ * торрента (addTorrent + DHT) доехжают фоном и допишутся в кэш.
+ */
+interface WarmedRelease extends WarmRelease {
+  /** Прямая ссылка на видеофайл (http-фолбэк без gst-транскода). */
+  url: string;
+}
+
+/** Бюджет ожидания прогрева в критическом пути резолва. */
+const WARM_BUDGET_MS = 2500;
+/** Как долго в памяти держим завершённые прогревы (для media-tracks). */
+const WARM_TTL_MS = 10 * 60 * 1000;
 
 export interface ResolveQuery {
   itemId: number;
@@ -16,12 +31,35 @@ export interface ResolveQuery {
   type?: string;
   seasonNumber?: number;
   episodeNumber?: number;
+  /**
+   * Внешний источник тайтла: для аниме (externalSource="anilibria") резолвер
+   * идёт напрямую в getRelease(externalId) — точный матч релиза вместо
+   * поиска по названию, который ловит одноимённые ремейки и чужие сезоны.
+   */
+  externalSource?: string | null;
+  externalId?: string | null;
+  /**
+   * Тепловые метаданные из кэша: если релиз уже прогревался (в т.ч. до
+   * рестарта API), ответ не ждёт addTorrent вообще — индекс файла известен.
+   */
+  warm?: WarmRelease | null;
+}
+
+/** Результат резолва: публичные ссылки + внутренний прогрев. */
+export interface ResolvedStream extends MediaLinks {
+  /** В публичный DTO не уходит — магнит-ссылки клиенту не положены. */
+  warm: WarmRelease | null;
 }
 
 export class StreamResolver {
   public readonly rutor: RutorConnector;
   public readonly torrServer: TorrServerConnector;
   public readonly anilibria: AnilibriaConnector;
+
+  /** Фоновые прогревы по паре (item, media) → их результат. */
+  private readonly warms = new Map<string, { at: number; promise: Promise<WarmedRelease | null> }>();
+  /** Активные gst-пробы по файлу: параллельные запросы делят одну пробу. */
+  private readonly trackProbes = new Map<string, Promise<AudioTrack[]>>();
 
   constructor(opts?: {
     rutorBaseUrl?: string;
@@ -38,7 +76,7 @@ export class StreamResolver {
    * Resolves on-the-fly streaming options for a movie or episode.
    * Zero disk storage required.
    */
-  async resolve(query: ResolveQuery): Promise<MediaLinks> {
+  async resolve(query: ResolveQuery): Promise<ResolvedStream> {
     const files: MediaFile[] = [];
     const audios: AudioTrack[] = [];
     let intro: MediaLinks["intro"] = null;
@@ -46,15 +84,27 @@ export class StreamResolver {
     // 1. If it's anime or contains anime keywords, try AniLibria for instant HLS
     if (query.type === "anime" || /аниме|anime/i.test(query.title)) {
       try {
-        const aniReleases = await this.anilibria.search(query.title);
-        if (aniReleases.length > 0) {
-          const full = await this.anilibria.getRelease(aniReleases[0].id);
-          if (full && full.episodes.length > 0) {
-            const targetEp =
-              query.episodeNumber != null
-                ? full.episodes.find((e) => e.ordinal === query.episodeNumber) ??
-                  full.episodes[0]
-                : full.episodes[0];
+        // Точный путь: тайтл импортирован из AniLibria — берём его релиз по id.
+        let full: Awaited<ReturnType<AnilibriaConnector["getRelease"]>> = null;
+        if (query.externalSource === "anilibria" && query.externalId) {
+          const externalId = Number(query.externalId);
+          if (Number.isFinite(externalId)) {
+            full = await this.anilibria.getRelease(externalId);
+          }
+        }
+        // Фолбэк (ручной тайтл / источник лежит) — поиск по названию.
+        if (!full) {
+          const aniReleases = await this.anilibria.search(query.title);
+          if (aniReleases.length > 0) {
+            full = await this.anilibria.getRelease(aniReleases[0].id);
+          }
+        }
+        if (full && full.episodes.length > 0) {
+          const targetEp =
+            query.episodeNumber != null
+              ? full.episodes.find((e) => e.ordinal === query.episodeNumber) ??
+                full.episodes[0]
+              : full.episodes[0];
 
             if (targetEp.introStart && targetEp.introStop) {
               intro = {
@@ -108,7 +158,6 @@ export class StreamResolver {
               url: null,
               masterUrl: null,
             });
-          }
         }
       } catch {
         // Fallback to torrent search
@@ -204,24 +253,37 @@ export class StreamResolver {
       viableReleases = releases.slice(0, 5);
     }
 
-    let audioIndex = audios.length + 1;
+    // Прогрев лучшего релиза. Знакомый релиз (тёплый кэш) не ждём вообще,
+    // новый — только в пределах бюджета: клиент получает список файлов
+    // сразу, а точный fileIndex подтянется, когда метаданные доехали.
+    // Раньше здесь стоял безусловный await — addTorrent + DHT добавляли
+    // к каждому холодному резолву до 3с сверх поиска в rutor.
+    const known = query.warm ?? null;
+    let warmed: WarmedRelease | null = null;
+    const best = viableReleases[0] ?? null;
 
-    // Warm-up лучшего релиза: добавляем торрент в TorrServer заранее и
-    // выбираем крупнейший видеофайл. Прогрев стартует с открытием
-    // watch-страницы — к нажатию «play» пиры уже подключены, а index
-    // указывает на фильм, а не на sample/jacket в multi-file релизах.
-    const warmed = await this.warmBestRelease(viableReleases[0] ?? null);
+    if (known && best && known.magnet === best.magnet) {
+      warmed = { ...known, url: this.torrServer.getStreamUrl(known.hash, known.fileIndex) };
+      // Сервер TorrServer мог перезапуститься — заново приоткрываем голову
+      // файла, чтобы первый сегмент не ждал DHT.
+      void this.torrServer.preopenStream(known.hash, known.fileIndex).catch(() => {});
+    } else if (best) {
+      const pending = this.startWarm(`${query.itemId}:${query.mediaId}`, best);
+      warmed = (await budget(pending, WARM_BUDGET_MS)) ?? null;
+    }
 
     for (const rel of viableReleases) {
       // Generate TorrServer stream link for the magnet
-      const isWarmed = warmed && warmed.magnet === rel.magnet;
-      const streamUrl = isWarmed
-        ? warmed.url
+      const warmHit = warmed && warmed.magnet === rel.magnet ? warmed : null;
+      const streamUrl = warmHit
+        ? warmHit.url
         : this.torrServer.getStreamUrlForMagnet(rel.magnet, 1);
       // HLS через gst-транскодер: звук AAC (Chrome играет), HEVC→H.264.
       // Незнакомый хеш TorrServer подтянет сам — достаточно btih из магнита.
-      const hash = isWarmed ? warmed.hash : btihOf(rel.magnet);
-      const fileIndex = isWarmed ? warmed.fileIndex : 1;
+      const hash = warmHit ? warmHit.hash : btihOf(rel.magnet);
+      // На холоде индекс неизвестен (метаданные ещё едут) — gst сам
+      // подтянет торрент по хешу, а неверный index подхватит ретрай плеера.
+      const fileIndex = warmHit ? warmHit.fileIndex : 1;
       const hlsUrl = hash ? this.torrServer.getGstHlsUrl(hash, fileIndex) : null;
       const is4k = rel.quality.includes("4K") || rel.quality.includes("2160");
       const is1080 = rel.quality.includes("1080");
@@ -241,46 +303,10 @@ export class StreamResolver {
       });
     }
 
-    // Реальные дорожки прогретого релиза из gst-пробы: точные аудио-треки
-    // файла (дубляж/оригинал) с персональными HLS-мастерами. Проба не
-    // удалась — дорожки не заявляем: дефолтная дорожка в HLS со звуком,
-    // а переключать нечего.
-    if (warmed) {
-      let probe = await this.torrServer.probeGst(warmed.hash, warmed.fileIndex);
-      if (!probe) {
-        // Торренты из БД после рестарта TorrServer иногда висят без данных
-        // («пиры есть, куски не идут») — дропаем и пере-добавляем.
-        await this.torrServer.dropTorrent(warmed.hash);
-        await this.torrServer.addTorrent(warmed.magnet, warmed.title);
-        await new Promise((r) => setTimeout(r, 5000));
-        probe = await this.torrServer.probeGst(warmed.hash, warmed.fileIndex);
-      }
-      if (probe) {
-        for (const pad of probe.tracks.filter((t) => t.Type === "audio")) {
-          const lang = (pad.Language || "ru").slice(0, 12);
-          const isOriginal = lang.startsWith("en");
-          const title = pad.Title?.trim()
-            ? pad.Title.slice(0, 120)
-            : isOriginal
-              ? "Оригинал"
-              : "Дубляж";
-          audios.push({
-            id: audioIndex++,
-            index: pad.Index,
-            codec: "aac",
-            channels: pad.Channels ?? 2,
-            lang,
-            type: isOriginal ? "original" : "dub",
-            author: {
-              title,
-              shortTitle: title.split(/[\s(]/)[0]?.slice(0, 24) || lang,
-            },
-            url: null,
-            masterUrl: this.torrServer.getGstHlsUrl(warmed.hash, warmed.fileIndex, pad.Index),
-          });
-        }
-      }
-    }
+    // Аудио-дорожки НЕ резолвим здесь: gst-проба читает голову файла из
+    // торрента и на холодных пирах занимает до 45с. Дорожки подтягиваются
+    // лениво через tracksFor() по маршруту /items/:id/media-tracks, когда
+    // плеер уже играет.
 
     // Default fallback file if no releases matched
     if (files.length === 0) {
@@ -308,7 +334,103 @@ export class StreamResolver {
       posterUrl: null,
       sprites: null,
       intro,
+      // Только 4 поля: url (прямая ссылка) — производная, в кэш не нужна.
+      warm: warmed
+        ? {
+            hash: warmed.hash,
+            fileIndex: warmed.fileIndex,
+            magnet: warmed.magnet,
+            title: warmed.title,
+          }
+        : null,
     };
+  }
+
+  /**
+   * Прогрев этой пары (item, media): дедуплицирует параллельные вызовы и
+   * отдаёт результат, когда фоновый прогрев из resolve() доедет. Нужен
+   * роуту media-tracks — ответ клиенту он не задерживает.
+   */
+  async warmFor(itemId: number, mediaId: number): Promise<WarmRelease | null> {
+    const entry = this.warms.get(`${itemId}:${mediaId}`);
+    if (!entry || Date.now() - entry.at > WARM_TTL_MS) return null;
+    return entry.promise;
+  }
+
+  /** Запускает прогрев релиза под пару (item, media) с дедупликацией. */
+  private startWarm(key: string, rel: RutorRelease | null): Promise<WarmedRelease | null> {
+    if (!rel) return Promise.resolve(null);
+    const existing = this.warms.get(key);
+    if (existing && Date.now() - existing.at <= WARM_TTL_MS) return existing.promise;
+
+    // Ошибки глотаем: прогрев опционален, резолв и без него отдаёт файлы.
+    const promise = this.warmBestRelease(rel).catch(() => null);
+    this.warms.set(key, { at: Date.now(), promise });
+    if (this.warms.size > 500) {
+      const cutoff = Date.now() - WARM_TTL_MS;
+      for (const [k, v] of this.warms) {
+        if (v.at < cutoff) this.warms.delete(k);
+      }
+    }
+    return promise;
+  }
+
+  /**
+   * Ленивые аудио-дорожки прогретого релиза: gst-проба, при неудаче —
+   * самолечение (drop+re-add для зависших после рестарта торрентов).
+   * Вызывается фоном уже во время воспроизведения. Одновременные запросы
+   * на один файл делят одну пробу — двойная проба на холодных пирах
+   * означает две паузы по 45с.
+   */
+  tracksFor(warm: WarmRelease): Promise<AudioTrack[]> {
+    const key = `${warm.hash}:${warm.fileIndex}`;
+    const existing = this.trackProbes.get(key);
+    if (existing) return existing;
+    const promise = this.probeTracks(warm).finally(() => {
+      this.trackProbes.delete(key);
+    });
+    this.trackProbes.set(key, promise);
+    return promise;
+  }
+
+  private async probeTracks(warm: WarmRelease): Promise<AudioTrack[]> {
+    let probe = await this.torrServer.probeGst(warm.hash, warm.fileIndex);
+    if (!probe) {
+      // Торренты из БД после рестарта TorrServer иногда висят без данных
+      // («пиры есть, куски не идут») — дропаем и пере-добавляем.
+      await this.torrServer.dropTorrent(warm.hash);
+      await this.torrServer.addTorrent(warm.magnet, warm.title);
+      await new Promise((r) => setTimeout(r, 5000));
+      probe = await this.torrServer.probeGst(warm.hash, warm.fileIndex);
+    }
+
+    const audios: AudioTrack[] = [];
+    if (!probe) return audios;
+    let id = 1;
+    for (const pad of probe.tracks.filter((t) => t.Type === "audio")) {
+      const lang = (pad.Language || "ru").slice(0, 12);
+      const isOriginal = lang.startsWith("en");
+      const title = pad.Title?.trim()
+        ? pad.Title.slice(0, 120)
+        : isOriginal
+          ? "Оригинал"
+          : "Дубляж";
+      audios.push({
+        id: id++,
+        index: pad.Index,
+        codec: "aac",
+        channels: pad.Channels ?? 2,
+        lang,
+        type: isOriginal ? "original" : "dub",
+        author: {
+          title,
+          shortTitle: title.split(/[\s(]/)[0]?.slice(0, 24) || lang,
+        },
+        url: null,
+        masterUrl: this.torrServer.getGstHlsUrl(warm.hash, warm.fileIndex, pad.Index),
+      });
+    }
+    return audios;
   }
 
   /**
@@ -316,15 +438,7 @@ export class StreamResolver {
    * на крупнейший видеофайл торрента. null — TorrServer недоступен или
    * метаданные не подтянулись: вызывающий код откатывается на magnet-URL.
    */
-  private async warmBestRelease(
-    rel: RutorRelease | null,
-  ): Promise<{
-    magnet: string;
-    hash: string;
-    title: string;
-    fileIndex: number;
-    url: string;
-  } | null> {
+  private async warmBestRelease(rel: RutorRelease | null): Promise<WarmedRelease | null> {
     if (!rel) return null;
     try {
       const added = await this.torrServer.addTorrent(rel.magnet, rel.title);
@@ -341,6 +455,12 @@ export class StreamResolver {
       const best = torrent ? this.torrServer.findBestVideoFile(torrent.file_stats) : null;
       const index = best ? best.id : 1;
       const filename = best?.path.split(/[\\/]/).pop();
+
+      // Предоткрытие: тянем 2МБ головы файла — TorrServer подключает пиров
+      // и закачивает первые куски в кэш. Транскодеру потом не ждать DHT:
+      // манифест и init.mp4 собираются из тёплого кэша. Fire-and-forget.
+      void this.torrServer.preopenStream(hash, index).catch(() => {});
+
       return {
         magnet: rel.magnet,
         hash,
@@ -358,4 +478,22 @@ export class StreamResolver {
 export function btihOf(magnet: string): string | null {
   const m = /[?&]xt=urn:btih:([a-fA-F0-9]{40}|[A-Z2-7]{32})/.exec(magnet);
   return m?.[1]?.toLowerCase() ?? null;
+}
+
+/**
+ * Ждёт промис не дольше `ms`: по таймауту отдаёт null, а сам промис
+ * продолжает работать в фоне (его результат заберут warmFor/saveSource).
+ */
+async function budget<T>(promise: Promise<T>, ms: number): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }

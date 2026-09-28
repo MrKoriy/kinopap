@@ -1,3 +1,4 @@
+import type { AudioTrack, IntroMarker, MediaFile, WarmRelease } from "@zal/api-client";
 import {
   bigint,
   boolean,
@@ -5,6 +6,7 @@ import {
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   serial,
   text,
   timestamp,
@@ -119,4 +121,31 @@ export const subtitles = pgTable(
     fileKey: text("file_key"),
   },
   (t) => [index("subtitles_media_idx").on(t.mediaId)],
+);
+
+/**
+ * Кэш zero-storage резолва: ссылки и прогретый релиз по паре (item, media).
+ * Живёт в БД, а не в памяти API: рестарт/деплой больше не обнуляет
+ * прогрев — warm переживает redeploy и отдаёт аудио-дорожки сразу.
+ */
+export const mediaSources = pgTable(
+  "media_sources",
+  {
+    itemId: integer("item_id")
+      .notNull()
+      .references(() => items.id, { onDelete: "cascade" }),
+    mediaId: integer("media_id")
+      .notNull()
+      .references(() => media.id, { onDelete: "cascade" }),
+    files: jsonb("files").$type<MediaFile[]>().notNull(),
+    audios: jsonb("audios").$type<AudioTrack[]>().notNull(),
+    intro: jsonb("intro").$type<IntroMarker | null>(),
+    /** Хеш и индекс файла в TorrServer — то, ради чего вся таблица. */
+    warm: jsonb("warm").$type<WarmRelease | null>(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.itemId, t.mediaId] }),
+    index("media_sources_resolved_at_idx").on(t.resolvedAt),
+  ],
 );

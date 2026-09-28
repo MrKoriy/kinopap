@@ -14,7 +14,9 @@ describe("catalog routes", () => {
 
     const types = await app.inject({ method: "GET", url: "/v1/types" });
     expect(types.statusCode).toBe(200);
-    expect(types.json().types.length).toBe(8);
+    // movie, serial, anime, concert, documovie, docuserial, tvshow, 3d, 4k
+    expect(types.json().types.length).toBe(9);
+    expect(types.json().types.map((t: { id: string }) => t.id)).toContain("anime");
 
     const genres = await app.inject({ method: "GET", url: "/v1/genres" });
     expect(genres.statusCode).toBe(200);

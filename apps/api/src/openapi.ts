@@ -20,6 +20,7 @@ import {
   itemSocialResponseSchema,
   itemSummarySchema,
   mediaLinksSchema,
+  mediaTracksSchema,
   newEpisodeSchema,
   newEpisodesResponseSchema,
   progressPutSchema,
@@ -173,6 +174,16 @@ export function buildOpenApiSpec(): Record<string, unknown> {
             { name: "mid", in: "query", required: true, schema: { type: "integer" } },
           ],
           responses: { 200: jsonBody("MediaLinks"), 404: errorResponse },
+        },
+      },
+      "/v1/items/{id}/media-tracks": {
+        get: {
+          summary: "Ленивые аудио-дорожки прогретого релиза (gst-проба в фоне)",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "integer" } },
+            { name: "mid", in: "query", required: true, schema: { type: "integer" } },
+          ],
+          responses: { 200: jsonBody("MediaTracks") },
         },
       },
       "/v1/items/{id}/similar": {
@@ -373,6 +384,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
         ItemDetail: z.toJSONSchema(itemDetailSchema),
         ItemPage: z.toJSONSchema(itemPageSchema),
         MediaLinks: z.toJSONSchema(mediaLinksSchema),
+        MediaTracks: z.toJSONSchema(mediaTracksSchema),
         Genre: z.toJSONSchema(genreSchema),
         Country: z.toJSONSchema(countrySchema),
         GenresResponse: {

@@ -250,6 +250,28 @@ export class TorrServerConnector {
   }
 
   /**
+   * Предоткрытие потока: читаем 10МБ головы файла по внутреннему адресу.
+   * TorrServer при этом коннектится к пирам и качает первые куски в кэш,
+   * а ближайшие запросы (проба/мастер/сегменты) обслуживаются из тёплого
+   * кэша. Вызывается fire-and-forget, ошибки игнорируются вызывающим.
+   */
+  async preopenStream(hash: string, fileIndex: number): Promise<void> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/stream?link=${hash}&index=${fileIndex}&play`,
+        {
+          headers: { Range: "bytes=0-10485759" },
+          signal: AbortSignal.timeout(12_000),
+        },
+      );
+      // Читаем чанк и закрываем — цель: форсировать приоритет головы файла.
+      await res.body?.cancel().catch(() => {});
+    } catch {
+      // Прогрев опционален — поток и без него стартует, просто медленнее.
+    }
+  }
+
+  /**
    * Finds the best (largest) video file in a torrent.
    */
   findBestVideoFile(
