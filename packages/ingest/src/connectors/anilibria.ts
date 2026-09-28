@@ -79,7 +79,12 @@ export class AnilibriaConnector {
         : Array.isArray(obj.data)
           ? obj.data
           : [];
-      const pag = (obj.pagination ?? {}) as Record<string, unknown>;
+      const pag = (() => {
+        // Формат плавает: пагинация лежит то в корне, то в meta.pagination
+        // ({"meta":{"pagination":{"total_pages":39}}} — так отдаёт каталог).
+        const meta = (obj.meta ?? {}) as Record<string, unknown>;
+        return ((obj.pagination ?? meta.pagination ?? {}) ?? {}) as Record<string, unknown>;
+      })();
       const rawTotal = pag.total_pages ?? pag.pages ?? pag.last_page ?? obj.last_page;
       const totalPages = typeof rawTotal === "number" ? rawTotal : Number(rawTotal ?? 0) || 0;
 

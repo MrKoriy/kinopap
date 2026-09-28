@@ -91,7 +91,7 @@ export async function importAnilibriaCatalog(
 ): Promise<AnimeImportSummary> {
   const startedAt = Date.now();
   const connector = new AnilibriaConnector(opts.baseUrl, opts.fetch);
-  const maxReleases = opts.maxReleases ?? 500;
+  const maxReleases = opts.maxReleases ?? 1000;
   const interval = opts.requestIntervalMs ?? 150;
 
   const known = await listExternalIds(opts.db, EXTERNAL_SOURCE);
@@ -99,7 +99,8 @@ export async function importAnilibriaCatalog(
   const report = () => opts.onProgress?.({ ...out });
 
   let page = 1;
-  let totalPages = 1;
+  // Infinity — источник не сообщил пагинацию: доходим до первой пустой страницы.
+  let totalPages = Number.POSITIVE_INFINITY;
   while (page <= totalPages && out.listed < maxReleases) {
     const { releases, totalPages: reported } = await connector.listReleases(page, 50);
     if (reported > 0) totalPages = reported;
@@ -109,6 +110,13 @@ export async function importAnilibriaCatalog(
       if (out.listed >= maxReleases) break;
       out.listed += 1;
 
+      // Уже в каталоге — не пересобираем эпизоды: повторный fill не должен
+      // тратить десятки минут на идемпотентные upsert'ы.
+      if (known.has(String(listed.id))) {
+        report();
+        continue;
+      }
+
       const full = await connector.getRelease(listed.id);
       if (!full || full.episodes.length === 0) {
         // Без серий играть нечего — осмотрели и пошли дальше.
@@ -116,13 +124,9 @@ export async function importAnilibriaCatalog(
         continue;
       }
 
-      const before = known.has(String(listed.id));
       const episodes = await materialize(opts.db, full);
-      if (before) out.updated += 1;
-      else {
-        out.added += 1;
-        known.add(String(listed.id));
-      }
+      out.added += 1;
+      known.add(String(listed.id));
       out.episodes += episodes;
       report();
       await sleep(interval);
