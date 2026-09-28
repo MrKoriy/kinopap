@@ -22,11 +22,17 @@ module.exports = {
         PORT: process.env.PORT ?? "7001",
         DATABASE_URL:
           process.env.DATABASE_URL ?? "postgres://zal:zal@localhost:5433/zal",
+        // Без REDIS_URL API стартует без очереди fill — /v1/discover
+        // выполняется синхронно и nginx рвёт его по таймауту (504).
+        REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:6379",
         TORRSERVER_URL: process.env.TORRSERVER_URL ?? "http://127.0.0.1:7002",
         TORRSERVER_PUBLIC_URL: process.env.TORRSERVER_PUBLIC_URL,
         JWT_SECRET: process.env.JWT_SECRET,
         TMDB_API_KEY: process.env.TMDB_API_KEY,
         CORS_ORIGIN: process.env.CORS_ORIGIN,
+        MEDIA_BASE_URL: process.env.MEDIA_BASE_URL,
+        COOKIE_SECURE: process.env.COOKIE_SECURE,
+        ANILIBRIA_URL: process.env.ANILIBRIA_URL,
       },
     },
     {
