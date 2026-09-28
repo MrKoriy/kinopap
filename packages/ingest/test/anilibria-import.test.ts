@@ -73,4 +73,43 @@ describe("importAnilibriaCatalog", () => {
     const seasonRows = await db.select().from(seasons).where(eq(seasons.itemId, count[0]!.id));
     expect(seasonRows.length).toBe(1);
   });
+
+  it("дробная спец-серия (6.5) пропускается и не роняет импорт", async () => {
+    const db = await createTestDb();
+    const summary = await importAnilibriaCatalog({
+      db,
+      requestIntervalMs: 0,
+      fetch: async (input: Parameters<typeof fetch>[0]) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/anime/catalog/releases")) {
+          return jsonResponse({
+            data: [{ id: 1, name: { main: "Сериал со спецвыпуском" }, year: 2024 }],
+            meta: { pagination: { total_pages: 1 } },
+          });
+        }
+        if (url.pathname.endsWith("/anime/releases/1")) {
+          return jsonResponse({
+            id: 1,
+            name: { main: "Сериал со спецвыпуском" },
+            year: 2024,
+            episodes: [
+              { ordinal: 1, name: "Обычная", duration: 1400 },
+              { ordinal: 6.5, name: "Спецвыпуск между серий", duration: 1400 },
+              { ordinal: 2, name: "Вторая", duration: 1400 },
+            ],
+          });
+        }
+        return new Response("not found", { status: 404 });
+      },
+    });
+
+    expect(summary.added).toBe(1);
+    // Только целые серии: 1 и 2, спец 6.5 пропущен.
+    expect(summary.episodes).toBe(2);
+
+    const itemRows = await db.select({ id: items.id }).from(items);
+    expect(itemRows.length).toBe(1);
+    const seasonRows = await db.select().from(seasons).where(eq(seasons.itemId, itemRows[0]!.id));
+    expect(seasonRows.length).toBe(1);
+  });
 });

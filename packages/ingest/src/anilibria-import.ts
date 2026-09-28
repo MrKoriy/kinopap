@@ -60,7 +60,11 @@ async function materialize(db: Db, release: AnilibriaRelease): Promise<number> {
   };
 
   let firstItemId: number | null = null;
+  let created = 0;
   for (const ep of release.episodes) {
+    // Дробные спецвыпуски («Серия 6.5»): episodes.number — integer, а ломать
+    // весь импорт из-за одной спец-серии нельзя.
+    if (!Number.isInteger(ep.ordinal)) continue;
     const res = await publishIngest(db, {
       item,
       media: {
@@ -76,6 +80,7 @@ async function materialize(db: Db, release: AnilibriaRelease): Promise<number> {
       subtitles: [],
     });
     firstItemId ??= res.itemId;
+    created += 1;
   }
 
   if (firstItemId != null) {
@@ -83,7 +88,7 @@ async function materialize(db: Db, release: AnilibriaRelease): Promise<number> {
     await applyEnrichment(db, firstItemId, { genres: ["Аниме"] });
   }
 
-  return release.episodes.length;
+  return created;
 }
 
 export async function importAnilibriaCatalog(
@@ -118,13 +123,22 @@ export async function importAnilibriaCatalog(
       }
 
       const full = await connector.getRelease(listed.id);
-      if (!full || full.episodes.length === 0) {
+      if (!full || full.episodes.filter((e) => Number.isInteger(e.ordinal)).length === 0) {
         // Без серий играть нечего — осмотрели и пошли дальше.
         report();
         continue;
       }
 
-      const episodes = await materialize(opts.db, full);
+      let episodes = 0;
+      try {
+        episodes = await materialize(opts.db, full);
+      } catch (err) {
+        // Один битой релиз не должен срывать весь импорт (так ловили
+        // дробные номера серий — падала вся fill-джоба).
+        console.warn(`anilibria: release ${listed.id} failed:`, String(err).slice(0, 200));
+        report();
+        continue;
+      }
       out.added += 1;
       known.add(String(listed.id));
       out.episodes += episodes;
