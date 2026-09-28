@@ -50,6 +50,27 @@
       "when": 1790544144179,
       "tag": "0006_stormy_terrax",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790589753666,
+      "tag": "0007_slow_leader",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790593437920,
+      "tag": "0008_swift_hercules",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790595655928,
+      "tag": "0009_nappy_warbound",
+      "breakpoints": true
     }
   ]
 }

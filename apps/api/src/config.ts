@@ -9,6 +9,8 @@ const envSchema = z.object({
   TORRSERVER_URL: z.string().default("http://localhost:8090"),
   TORRSERVER_PUBLIC_URL: z.string().optional(),
   TMDB_API_KEY: z.string().optional(),
+  /** Базовый URL AniLibria (фаза аниме в fill + резолв серий). */
+  ANILIBRIA_URL: z.string().default("https://anilibria.top/api/v1"),
   PORT: z.coerce.number().int().default(3001),
   /** Разрешённые CORS-источники, через запятую; "*" — публичный (без кредов). */
   CORS_ORIGIN: z.string().default("*"),
@@ -23,6 +25,7 @@ export interface Config {
   torrServerUrl: string;
   torrServerPublicUrl?: string;
   tmdbApiKey?: string;
+  anilibriaUrl: string;
   port: number;
   corsOrigin: string;
   cookieSecure: boolean;
@@ -37,6 +40,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     torrServerUrl: e.TORRSERVER_URL,
     torrServerPublicUrl: e.TORRSERVER_PUBLIC_URL,
     tmdbApiKey: e.TMDB_API_KEY,
+    anilibriaUrl: e.ANILIBRIA_URL,
     port: e.PORT,
     corsOrigin: e.CORS_ORIGIN,
     cookieSecure: e.COOKIE_SECURE,

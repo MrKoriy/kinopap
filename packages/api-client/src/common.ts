@@ -4,6 +4,7 @@ import { z } from "zod";
 export const ITEM_TYPES = [
   "movie",
   "serial",
+  "anime",
   "concert",
   "documovie",
   "docuserial",
@@ -64,6 +65,7 @@ export type ApiErrorBody = z.infer<typeof apiErrorSchema>;
 export const ITEM_TYPE_TITLES: Record<ItemType, string> = {
   movie: "Фильмы",
   serial: "Сериалы",
+  anime: "Аниме",
   concert: "Концерты",
   documovie: "Документальные фильмы",
   docuserial: "Документальные сериалы",

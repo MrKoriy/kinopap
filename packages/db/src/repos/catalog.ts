@@ -71,6 +71,8 @@ const itemColumns = {
     tmdbId: items.tmdbId,
     tmdbRating: items.tmdbRating,
     tmdbVotes: items.tmdbVotes,
+    externalSource: items.externalSource,
+    externalId: items.externalId,
   rating: items.rating,
   votesPositive: items.votesPositive,
   votesNegative: items.votesNegative,
@@ -360,47 +362,50 @@ export async function getItem(db: Db, id: number): Promise<ItemDetail | null> {
   const refs = (await attachRefs(db, [id])).get(id)!;
   const base = mapItem(row, refs);
 
-  if (SERIAL_LIKE.includes(row.type)) {
+  if (SERIAL_LIKE.includes(row.type) || row.type === "anime") {
     const seasonRows = await db
       .select()
       .from(seasons)
       .where(eq(seasons.itemId, id))
       .orderBy(seasons.number);
-    const eps = seasonRows.length
-      ? await db
-          .select({
-            id: episodes.id,
-            seasonId: episodes.seasonId,
-            number: episodes.number,
-            title: episodes.title,
-            thumbnailUrl: episodes.thumbnailUrl,
-            runtime: episodes.runtime,
-            mediaId: media.id,
-          })
-          .from(episodes)
-          .leftJoin(media, eq(media.episodeId, episodes.id))
-          .where(inArray(episodes.seasonId, seasonRows.map((s) => s.id)))
-          .orderBy(episodes.number)
-      : [];
-    return {
-      ...base,
-      seasons: seasonRows.map((s) => ({
-        id: s.id,
-        number: s.number,
-        title: s.title,
-        episodes: eps
-          .filter((e) => e.seasonId === s.id)
-          .map((e) => ({
-            id: e.id,
-            number: e.number,
-            title: e.title,
-            thumbnailUrl: e.thumbnailUrl,
-            runtime: e.runtime,
-            mediaId: e.mediaId,
-          })),
-      })),
-      media: null,
-    };
+    // Аниме без сезонов — это фильм: навигация по media-частям, не по сериям.
+    if (seasonRows.length > 0 || SERIAL_LIKE.includes(row.type)) {
+      const eps = seasonRows.length
+        ? await db
+            .select({
+              id: episodes.id,
+              seasonId: episodes.seasonId,
+              number: episodes.number,
+              title: episodes.title,
+              thumbnailUrl: episodes.thumbnailUrl,
+              runtime: episodes.runtime,
+              mediaId: media.id,
+            })
+            .from(episodes)
+            .leftJoin(media, eq(media.episodeId, episodes.id))
+            .where(inArray(episodes.seasonId, seasonRows.map((s) => s.id)))
+            .orderBy(episodes.number)
+        : [];
+      return {
+        ...base,
+        seasons: seasonRows.map((s) => ({
+          id: s.id,
+          number: s.number,
+          title: s.title,
+          episodes: eps
+            .filter((e) => e.seasonId === s.id)
+            .map((e) => ({
+              id: e.id,
+              number: e.number,
+              title: e.title,
+              thumbnailUrl: e.thumbnailUrl,
+              runtime: e.runtime,
+              mediaId: e.mediaId,
+            })),
+        })),
+        media: null,
+      };
+    }
   }
 
   const mediaRows = await db

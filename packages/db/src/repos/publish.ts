@@ -33,6 +33,13 @@ export interface PublishItemDraft {
   langs?: number;
   hasAc3?: boolean;
   /**
+   * Внешний источник и его id (anilibria:123). Задан — ищем item по нему
+   * в первую очередь: id источника надёжнее названия (переименования,
+   * дубли «Наруто» под разными языками).
+   */
+  externalSource?: string | null;
+  externalId?: string | null;
+  /**
    * Постеры-фолбэк (абсолютные URL), например сгенерированный ингестом
    * poster.jpg. Пишутся только если у тайтла постеров ещё нет — явные
    * метаданные (обогащение) их не перебивают.
@@ -95,6 +102,9 @@ export interface PublishIngestInput {
     episode?: PublishEpisode | null;
     /** Ключ источника: тот же ref → обновляем существующую media, не дублируем. */
     sourceKey?: string | null;
+    /** Маркер интро из источника (AniLibria): кнопка «пропустить». */
+    introStartSeconds?: number | null;
+    introEndSeconds?: number | null;
   };
   files: PublishFile[];
   audios: PublishAudio[];
@@ -106,17 +116,61 @@ export interface PublishResult {
   mediaId: number;
 }
 
-/** Ищем существующий item (title+year+type), иначе создаём — без дублей. */
+/** Ищем существующий item иначе создаём — без дублей.
+ * Приоритет: внешний id (id источника точнее названия) → (title, year[, type]). */
 export async function upsertItem(
   db: Db,
   draft: PublishItemDraft,
 ): Promise<number> {
+  const empty = (posterSmall: string | null, posterMedium: string | null, posterBig: string | null) =>
+    !posterSmall && !posterMedium && !posterBig;
+
+  // 1. Уже знаем этот внешний id — переиспользуем строку, чиним пустое.
+  if (draft.externalSource && draft.externalId) {
+    const byExternal = await db
+      .select({
+        id: items.id,
+        type: items.type,
+        title: items.title,
+        posterSmall: items.posterSmall,
+        posterMedium: items.posterMedium,
+        posterBig: items.posterBig,
+      })
+      .from(items)
+      .where(
+        and(
+          eq(items.externalSource, draft.externalSource),
+          eq(items.externalId, draft.externalId),
+        ),
+      )
+      .limit(1);
+    const ext = byExternal[0];
+    if (ext) {
+      if (
+        empty(ext.posterSmall, ext.posterMedium, ext.posterBig) &&
+        draft.posterMedium
+      ) {
+        await db
+          .update(items)
+          .set({
+            posterSmall: draft.posterSmall ?? draft.posterMedium,
+            posterMedium: draft.posterMedium,
+            posterBig: draft.posterBig ?? draft.posterMedium,
+          })
+          .where(eq(items.id, ext.id));
+      }
+      return ext.id;
+    }
+  }
+
   const existing = await db
     .select({
       id: items.id,
       posterSmall: items.posterSmall,
       posterMedium: items.posterMedium,
       posterBig: items.posterBig,
+      externalSource: items.externalSource,
+      externalId: items.externalId,
     })
     .from(items)
     .where(
@@ -130,8 +184,7 @@ export async function upsertItem(
   const found = existing[0];
   if (found) {
     // Постеры ингеста — только фолбэк: пустые поля заполняем, чужие не трогаем.
-    const empty = !found.posterSmall && !found.posterMedium && !found.posterBig;
-    if (empty && draft.posterMedium) {
+    if (empty(found.posterSmall, found.posterMedium, found.posterBig) && draft.posterMedium) {
       await db
         .update(items)
         .set({
@@ -139,6 +192,14 @@ export async function upsertItem(
           posterMedium: draft.posterMedium,
           posterBig: draft.posterBig ?? draft.posterMedium,
         })
+        .where(eq(items.id, found.id));
+    }
+    // Запись уже существует, но без внешнего id (сида/прошлые импорты) —
+    // проставляем его, чтобы следующий импорт нашёл её по источнику.
+    if (draft.externalSource && draft.externalId) {
+      await db
+        .update(items)
+        .set({ externalSource: draft.externalSource, externalId: draft.externalId })
         .where(eq(items.id, found.id));
     }
     return found.id;
@@ -160,9 +221,25 @@ export async function upsertItem(
       posterSmall: draft.posterSmall ?? draft.posterMedium ?? null,
       posterMedium: draft.posterMedium ?? draft.posterSmall ?? null,
       posterBig: draft.posterBig ?? draft.posterMedium ?? null,
+      externalSource: draft.externalSource ?? null,
+      externalId: draft.externalId ?? null,
     })
+    .onConflictDoNothing({ target: [items.externalSource, items.externalId] })
     .returning({ id: items.id });
-  return row!.id;
+  if (row) return row.id;
+
+  // Гонка двух ingest'ов одного источника: второй берёт уже вставленную строку.
+  const [raced] = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(
+      and(
+        eq(items.externalSource, draft.externalSource ?? ""),
+        eq(items.externalId, draft.externalId ?? ""),
+      ),
+    )
+    .limit(1);
+  return raced!.id;
 }
 
 /** Полная публикация: item (upsert) → media (+сезон/эпизод) → файлы/аудио/субтитры.
@@ -241,6 +318,8 @@ export async function publishIngest(
             posterKey: input.media.posterKey ?? null,
             spriteKey: input.media.spriteKey ?? null,
             spriteMeta: input.media.spriteMeta ?? null,
+            introStartSeconds: input.media.introStartSeconds ?? null,
+            introEndSeconds: input.media.introEndSeconds ?? null,
           })
           .where(eq(media.id, mediaId));
         // Старые файлы/дорожки/субтитры заменяются новыми (каскад не годится —
@@ -265,6 +344,8 @@ export async function publishIngest(
           spriteKey: input.media.spriteKey ?? null,
           spriteMeta: input.media.spriteMeta ?? null,
           sourceKey: input.media.sourceKey ?? null,
+          introStartSeconds: input.media.introStartSeconds ?? null,
+          introEndSeconds: input.media.introEndSeconds ?? null,
         })
         .returning({ id: media.id });
       mediaId = mediaRow!.id;

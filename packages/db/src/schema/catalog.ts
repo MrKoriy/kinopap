@@ -50,6 +50,13 @@ export const items = pgTable(
     kinopoiskId: integer("kinopoisk_id"),
     kinopoiskRating: doublePrecision("kinopoisk_rating"),
     kinopoiskVotes: integer("kinopoisk_votes"),
+    /**
+     * Внешний источник и его id (anilibria:123). Позволяет резолвить стрим
+     * без поиска по названию: у аниме «Наруто» под русским и английским
+     * названием в торрент-трекерах разная выдача, а тут id — истина.
+     */
+    externalSource: varchar("external_source", { length: 32 }),
+    externalId: varchar("external_id", { length: 64 }),
     tmdbId: integer("tmdb_id"),
     tmdbRating: doublePrecision("tmdb_rating"),
     tmdbVotes: integer("tmdb_votes"),
@@ -76,6 +83,11 @@ export const items = pgTable(
     index("items_updated_idx").on(t.updatedAt),
     // sort=title без b-tree — всегда filesort.
     index("items_title_idx").on(t.title),
+    // Дедуп discovery-импорта: tmdbId + (title, year) — по 15к+ поисков за fill.
+    index("items_tmdb_id_idx").on(t.tmdbId),
+    // Дедуп и резолв по внешнему источнику (anilibria и дальше).
+    uniqueIndex("items_external_uq").on(t.externalSource, t.externalId),
+    index("items_title_year_idx").on(t.title, t.year),
     // Композиты под shortcuts: фильтр типа + сортировка fresh/hot/popular.
     index("items_type_year_idx").on(t.type, t.year),
     index("items_type_views_idx").on(t.type, t.views),

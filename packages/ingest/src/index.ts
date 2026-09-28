@@ -1,3 +1,5 @@
+export * from "./anilibria-import";
+export * from "./catalog-fill";
 export * from "./connectors/anilibria";
 export * from "./connectors/local-folder";
 export * from "./connectors/rutor";
