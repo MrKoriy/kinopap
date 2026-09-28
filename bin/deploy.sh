@@ -65,8 +65,9 @@ fi
 
 # --- nginx: /media отдаётся статикой прямо с диска (Range из коробки) ---
 NGINX_SITE=\$(grep -rl "7001" /etc/nginx/sites-enabled/ 2>/dev/null | head -1 || true)
-if [ -n "\$NGINX_SITE" ] && ! grep -q "location /media/" "\$NGINX_SITE"; then
-  python3 - "\$NGINX_SITE" <<'PY'
+if [ -n "\$NGINX_SITE" ]; then
+  if ! grep -q "location /media/" "\$NGINX_SITE"; then
+    python3 - "\$NGINX_SITE" <<'PY'
 import re, sys
 p = sys.argv[1]
 s = open(p).read()
@@ -84,6 +85,29 @@ if m:
     open(p, "w").write(s)
     print("nginx: /media добавлен")
 PY
+  fi
+  # /gst — HLS-транскодер TorrServer (AAC-звук для браузеров). Сегменты
+  # генерируются на лету — буферизация nginx выключена, таймаут длинный.
+  if ! grep -q "location /gst/" "\$NGINX_SITE"; then
+    python3 - "\$NGINX_SITE" <<'PY'
+import re, sys
+p = sys.argv[1]
+s = open(p).read()
+block = """
+    location /gst/ {
+        proxy_pass http://127.0.0.1:7002;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+"""
+m = re.search(r"location[^\{]*\{", s)
+if m:
+    s = s[:m.start()] + block.strip("\n") + "\n    " + s[m.start():]
+    open(p, "w").write(s)
+    print("nginx: /gst добавлен")
+PY
+  fi
   nginx -t && systemctl reload nginx
 fi
 mkdir -p "$APP_DIR/media"

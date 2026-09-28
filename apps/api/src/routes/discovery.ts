@@ -1,7 +1,9 @@
 /**
  * Discovery: наполнение каталога из официального TMDb API.
- * Тренды недели + популярное (кино и сериалы), с дедупом против локального
- * каталога. Запускает владелец/админ — POST /v1/discover { pages?: 1..5 }.
+ * Тренды недели + популярное (кино и сериалы), массовый fill по годам
+ * (discover) и импорт коллекций — целые франшизы («Форсаж», «Миньоны»)
+ * со всеми частями. Дедуп против локального каталога. Запускает
+ * владелец/админ — POST /v1/discover.
  * Просмотр таких тайтлов — zero-storage: media-links резолвит стримы на лету.
  */
 
@@ -13,7 +15,14 @@ import type { Config } from "../config";
 import { forbidden, parseOrThrow } from "../lib/http";
 
 const discoverBodySchema = z.object({
-  pages: z.coerce.number().int().min(1).max(5).default(2),
+  /** Тренды + популярное (старый режим, страницы 1..5). */
+  pages: z.coerce.number().int().min(1).max(5).optional(),
+  /** Имена коллекций TMDb: импортируются все части (до 50 имён за вызов). */
+  collections: z.array(z.string().min(1).max(120)).max(50).optional(),
+  /** Годы для массового fill: discover по году выпуска, по популярности. */
+  years: z.array(z.coerce.number().int().min(1950).max(2035)).max(80).optional(),
+  /** Страниц discover на год. */
+  yearPages: z.coerce.number().int().min(1).max(10).default(3),
 });
 
 /** TMDb (ru) → локальные названия жанров из сида. */
@@ -74,7 +83,7 @@ function mapEntry(
   const title = String(raw.title ?? raw.name ?? "").trim();
   const posterPath = raw.poster_path ? String(raw.poster_path) : null;
   const votes = typeof raw.vote_count === "number" ? raw.vote_count : 0;
-  if (!tmdbId || !title || !posterPath || votes < 50) return null;
+  if (!tmdbId || !title || !posterPath || votes < 30) return null;
 
   const date = String(raw.release_date ?? raw.first_air_date ?? "");
   const year = date.length >= 4 ? parseInt(date.slice(0, 4), 10) : null;
@@ -108,6 +117,18 @@ function mapEntry(
   };
 }
 
+/** Детали фильма из коллекции: genres[] вместо genre_ids, runtime на месте. */
+function mapDetail(raw: Record<string, unknown>): TmdbEntry | null {
+  const entry = mapEntry(raw, "movie");
+  if (!entry) return null;
+  const gs = Array.isArray(raw.genres)
+    ? raw.genres
+        .map((g) => (typeof g === "object" && g ? (g as { id?: unknown }).id : null))
+        .filter((id): id is number => typeof id === "number")
+    : [];
+  return { ...entry, genreIds: gs };
+}
+
 async function collectEntries(
   config: Config,
   pages: number,
@@ -138,6 +159,88 @@ async function collectEntries(
   return [...byKey.values()];
 }
 
+/** Массовый fill: discover по годам, популярность, кино + сериалы. */
+async function collectYearEntries(
+  config: Config,
+  years: number[],
+  pagesPerYear: number,
+): Promise<TmdbEntry[]> {
+  const byKey = new Map<string, TmdbEntry>();
+  const push = (e: TmdbEntry | null) => {
+    if (e) byKey.set(`${e.type}:${e.tmdbId}`, e);
+  };
+
+  for (const year of years) {
+    for (let p = 1; p <= pagesPerYear; p++) {
+      const paths = [
+        `/discover/movie?sort_by=popularity.desc&include_adult=false&primary_release_year=${year}&vote_count.gte=80&page=${p}`,
+        `/discover/tv?sort_by=popularity.desc&include_adult=false&first_air_date_year=${year}&vote_count.gte=30&page=${p}`,
+      ];
+      for (const path of paths) {
+        try {
+          const data = (await tmdbGet(config, path)) as
+            | { results?: Array<Record<string, unknown>> }
+            | null;
+          const isTv = path.includes("/tv");
+          for (const raw of data?.results ?? []) {
+            push(mapEntry(raw, isTv ? "serial" : "movie"));
+          }
+        } catch {
+          // Пропущенная страница года не роняет весь fill.
+        }
+      }
+    }
+  }
+  return [...byKey.values()];
+}
+
+/**
+ * Коллекции TMDb: по имени («Форсаж») находим collection и импортируем
+ * все части. Топ результатов поиска даёт устойчивость к опечаткам.
+ */
+async function collectCollectionEntries(
+  config: Config,
+  names: string[],
+): Promise<{ entries: TmdbEntry[]; found: string[]; missing: string[] }> {
+  const byKey = new Map<string, TmdbEntry>();
+  const push = (e: TmdbEntry | null) => {
+    if (e) byKey.set(`${e.type}:${e.tmdbId}`, e);
+  };
+  const found: string[] = [];
+  const missing: string[] = [];
+
+  for (const name of names) {
+    try {
+      const search = (await tmdbGet(
+        config,
+        `/search/collection?query=${encodeURIComponent(name)}`,
+      )) as { results?: Array<{ id?: number; name?: string }> } | null;
+      const collectionId = search?.results?.[0]?.id;
+      if (!collectionId) {
+        missing.push(name);
+        continue;
+      }
+      found.push(name);
+
+      const details = (await tmdbGet(config, `/collection/${collectionId}`)) as
+        | { name?: string; parts?: Array<Record<string, unknown>> }
+        | null;
+      for (const part of details?.parts ?? []) {
+        const partId = typeof part.id === "number" ? part.id : null;
+        if (!partId) continue;
+        // Части коллекции без жанров — тянем полные детали фильма.
+        const full = (await tmdbGet(config, `/movie/${partId}`)) as
+          | Record<string, unknown>
+          | null;
+        push(full ? mapDetail(full) : mapEntry(part, "movie"));
+      }
+    } catch {
+      missing.push(name);
+    }
+  }
+  return { entries: [...byKey.values()], found, missing };
+}
+
 export async function discoveryRoutes(
   app: FastifyInstance,
   deps: { db: Db; config: Config },
@@ -148,7 +251,7 @@ export async function discoveryRoutes(
     "/discover",
     {
       preHandler: app.authenticate,
-      config: { rateLimit: { max: 5, timeWindow: "10 minutes" } },
+      config: { rateLimit: { max: 40, timeWindow: "10 minutes" } },
     },
     async (request) => {
       if (request.user.role !== "owner" && request.user.role !== "admin") {
@@ -160,7 +263,34 @@ export async function discoveryRoutes(
 
       const body = parseOrThrow(discoverBodySchema, request.body ?? {});
 
-      const entries = await collectEntries(config, body.pages);
+      const sources: string[] = [];
+      const entries: TmdbEntry[] = [];
+      let collectionsInfo: { found: string[]; missing: string[] } | null = null;
+
+      if (body.collections?.length) {
+        const res = await collectCollectionEntries(config, body.collections);
+        entries.push(...res.entries);
+        collectionsInfo = { found: res.found, missing: res.missing };
+        sources.push(`collections:${res.found.length}`);
+      }
+      if (body.years?.length) {
+        const res = await collectYearEntries(config, body.years, body.yearPages);
+        entries.push(...res);
+        sources.push(`years:${body.years.length}`);
+      }
+      // Старый режим (тренды/популярное) — только без явных источников,
+      // чтобы массовые импорты не тащили лишнее.
+      if (body.pages && !body.collections?.length && !body.years?.length) {
+        entries.push(...(await collectEntries(config, body.pages)));
+        sources.push("trending+popular");
+      }
+      if (entries.length === 0) {
+        return { added: 0, updated: 0, skipped: 0, total: 0, sources, collections: collectionsInfo };
+      }
+
+      // Дедуп внутри одного вызова (годы и коллекции пересекаются).
+      const byKey = new Map<string, TmdbEntry>();
+      for (const e of entries) byKey.set(`${e.type}:${e.tmdbId}`, e);
 
       // Локальные жанры + карта TMDb genre_id → локальный genre_id.
       const genreRows = await db.select().from(genres);
@@ -185,7 +315,7 @@ export async function discoveryRoutes(
       let updated = 0;
       let skipped = 0;
 
-      for (const e of entries) {
+      for (const e of byKey.values()) {
         // Дедуп: по tmdbId либо по (title, year).
         const dup = await db
           .select({ id: items.id, poster: items.posterMedium })
@@ -258,7 +388,14 @@ export async function discoveryRoutes(
         added++;
       }
 
-      return { added, updated, skipped, total: entries.length };
+      return {
+        added,
+        updated,
+        skipped,
+        total: byKey.size,
+        sources,
+        collections: collectionsInfo,
+      };
     },
   );
 }

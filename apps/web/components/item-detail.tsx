@@ -12,15 +12,25 @@ import { ItemActions } from "@/components/item-actions";
 import { PosterImage } from "@/components/poster-image";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth";
 import { formatDuration } from "@/lib/format";
 
 export function ItemDetailView({ item }: { item: ItemDetail }) {
   const [activeSeason, setActiveSeason] = React.useState(0);
   const [showTrailer, setShowTrailer] = React.useState(false);
+  const { api, isAuthed } = useAuth();
 
   const firstMovieMedia = item.media?.[0]?.id ?? null;
   const firstEpisodeMedia = item.seasons?.[0]?.episodes.find((e) => e.mediaId)?.mediaId ?? null;
   const playMediaId = firstMovieMedia ?? firstEpisodeMedia ?? item.id;
+
+  // Тихий прогрев стримов, пока пользователь читает карточку: резолвер
+  // положит релиз в TorrServer и кэш API — переход «Смотреть» откроется
+  // мгновенно, пиры к моменту play уже подключены.
+  React.useEffect(() => {
+    if (!isAuthed) return;
+    void api.getMediaLinks(item.id, playMediaId).catch(() => {});
+  }, [api, isAuthed, item.id, playMediaId]);
 
   const poster = item.posters.big ?? item.posters.medium;
   const rating = item.rating > 0 ? item.rating : item.imdb.rating;

@@ -65,14 +65,29 @@ export function Player({ links, title, next }: PlayerProps) {
   const [isBuffering, setIsBuffering] = React.useState(false);
   const [copied, setCopied] = React.useState(false);
   const [activeFileIndex, setActiveFileIndex] = React.useState(0);
+  // gst-HLS недоступен (транскодер упал / версия без gst) — откат на прямой
+  // HTTP-стрим: картинка и звук родными кодеками есть не у всех браузеров,
+  // но это лучше, чем чёрный экран.
+  const [directFallback, setDirectFallback] = React.useState(false);
 
   const activeFile = links.files[activeFileIndex] ?? links.files[0];
-  const streamUrl = activeFile?.urls.hls ?? activeFile?.urls.http ?? null;
+  // Дубляж zero-storage: каждая дорожка — персональный HLS-мастер
+  // (gst выбирает аудио параметром URL), переключаемся сменой источника.
+  const audioMaster = activeAudio > 0 ? links.audios[activeAudio]?.masterUrl : null;
+  const baseStream = activeFile?.urls.hls ?? activeFile?.urls.http ?? null;
+  const streamUrl = directFallback
+    ? (activeFile?.urls.http ?? baseStream)
+    : (audioMaster ?? baseStream);
   const sprites: SpriteMetaDto | null = links.sprites;
 
   /* ---------- Инициализация потока (HLS или прямой HTTP Range) ---------- */
   const activeAudioRef = React.useRef(0);
   activeAudioRef.current = activeAudio;
+  const activeSubtitleRef = React.useRef<number | null>(null);
+  activeSubtitleRef.current = activeSubtitle;
+  // Ретраи gst-манифеста до отката на прямой стрим: транскодеру нужен тёплый
+  // торрент, первая попытка сразу после резолва может не успеть.
+  const gstRetryRef = React.useRef(0);
 
   React.useEffect(() => {
     const video = videoRef.current;
@@ -80,8 +95,9 @@ export function Player({ links, title, next }: PlayerProps) {
 
     setError(null);
     setIsBuffering(true);
+    gstRetryRef.current = 0;
 
-    const isHls = streamUrl.includes(".m3u8") || Boolean(activeFile?.urls.hls);
+    const isHls = !directFallback && (streamUrl.includes(".m3u8") || Boolean(activeFile?.urls.hls));
     // MSE доступен → грузим hls.js динамически; нативный HLS (iOS Safari)
     // играет напрямую, не скачивая ~150КБ библиотеки.
     const canMse = typeof MediaSource !== "undefined";
@@ -114,12 +130,48 @@ export function Player({ links, title, next }: PlayerProps) {
           if (hls && hls.audioTracks.length > 1 && activeAudioRef.current > 0) {
             hls.audioTrack = activeAudioRef.current;
           }
+          // Встроенные субтитры gst-HLS: треков с прямыми VTT-урлами нет,
+          // подменяем список дорожек манифеста и включаем выбранную.
+          if (hls && hls.subtitleTracks.length > 0) {
+            setSubtitles((cur) => {
+              if (cur.some((t) => t.url != null)) return cur;
+              return hls!.subtitleTracks.map((t, i) => ({
+                index: i,
+                label: t.name || t.lang?.toUpperCase() || `Трек ${i + 1}`,
+                url: null,
+                cues: [],
+              }));
+            });
+            if (activeSubtitleRef.current != null && hls.subtitleTracks[activeSubtitleRef.current]) {
+              hls.subtitleTrack = activeSubtitleRef.current;
+            }
+          }
         });
         hls.on(Hls.Events.ERROR, (_e, data) => {
           if (!data.fatal || !hls) return;
           // Транзиентные сбои — норма для торрента-стрима: один блып не должен
           // вешать плеер до перезагрузки страницы.
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            // Манифест недоступен (gst-транскодер не успел прогреть торрент) —
+            // даём ему пару ретраев с паузой, потом падаем на прямой стрим.
+            const manifestGone =
+              data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+              data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT ||
+              data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR;
+            if (manifestGone && activeFile?.urls.http) {
+              gstRetryRef.current += 1;
+              if (gstRetryRef.current <= 2) {
+                setIsBuffering(true);
+                window.setTimeout(() => {
+                  if (hls && hlsRef.current === hls) hls.loadSource(streamUrl);
+                }, 5000);
+                return;
+              }
+              if (!directFallback) {
+                setDirectFallback(true);
+                return;
+              }
+            }
             hls.startLoad();
             return;
           }
@@ -144,7 +196,7 @@ export function Player({ links, title, next }: PlayerProps) {
       hlsRef.current = null;
       video.removeAttribute("src");
     };
-  }, [streamUrl, activeFile]);
+  }, [streamUrl, activeFile, directFallback]);
 
   /* ---------- Субтитры: загрузка WebVTT ---------- */
   React.useEffect(() => {
@@ -306,6 +358,24 @@ export function Player({ links, title, next }: PlayerProps) {
   }, [reportProgress]);
 
   /* ---------- Управление ---------- */
+
+  /** Смена источника (качество/дубляж) с восстановлением позиции. */
+  const swapStream = React.useCallback((mutate: () => void) => {
+    const video = videoRef.current;
+    const prevTime = video?.currentTime ?? 0;
+    const wasPlaying = video ? !video.paused : false;
+    mutate();
+
+    const onLoaded = () => {
+      if (video && prevTime > 0) {
+        video.currentTime = prevTime;
+        if (wasPlaying) void video.play().catch(() => {});
+      }
+      video?.removeEventListener("loadedmetadata", onLoaded);
+    };
+    video?.addEventListener("loadedmetadata", onLoaded);
+  }, []);
+
   const togglePlay = React.useCallback(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -335,44 +405,58 @@ export function Player({ links, title, next }: PlayerProps) {
   }, []);
 
   /** Реальное переключение дубляжа: hls.js либо нативные audioTracks (Safari). */
-  const changeAudio = React.useCallback((index: number) => {
-    const hls = hlsRef.current;
-    const video = videoRef.current as (HTMLVideoElement & {
-      audioTracks?: { length: number; [i: number]: { enabled: boolean } };
-    }) | null;
-    if (hls && hls.audioTracks.length > 1) {
-      hls.audioTrack = index;
-    } else if (video?.audioTracks && video.audioTracks.length > 1) {
-      for (let i = 0; i < video.audioTracks.length; i++) {
-        video.audioTracks[i]!.enabled = i === index;
+  const changeAudio = React.useCallback(
+    (index: number) => {
+      // zero-storage: дорожки с masterUrl переключаются сменой источника
+      // (gst выбирает аудио параметром URL); сброс на 0 — базовый мастер.
+      if (links.audios.some((a) => a.masterUrl)) {
+        swapStream(() => {
+          setDirectFallback(false);
+          setActiveAudio(index);
+        });
+        return;
       }
-    }
-    setActiveAudio(index);
-  }, []);
+      const hls = hlsRef.current;
+      const video = videoRef.current as (HTMLVideoElement & {
+        audioTracks?: { length: number; [i: number]: { enabled: boolean } };
+      }) | null;
+      if (hls && hls.audioTracks.length > 1) {
+        hls.audioTrack = index;
+      } else if (video?.audioTracks && video.audioTracks.length > 1) {
+        for (let i = 0; i < video.audioTracks.length; i++) {
+          video.audioTracks[i]!.enabled = i === index;
+        }
+      }
+      setActiveAudio(index);
+    },
+    [links.audios, swapStream],
+  );
 
   const changeSubtitle = React.useCallback(
     (index: number | null) => {
+      // Встроенные субтитры gst-HLS — треки манифеста, рендерит hls.js.
+      const hls = hlsRef.current;
+      if (hls && hls.subtitleTracks.length > 0 && subtitles[index ?? 0]?.url == null) {
+        hls.subtitleTrack = index ?? -1;
+      }
       setActiveSubtitle(index);
       setCues(index == null ? [] : (subtitles[index]?.cues ?? []));
     },
     [subtitles],
   );
 
-  const changeQuality = React.useCallback((index: number) => {
-    const video = videoRef.current;
-    const prevTime = video?.currentTime ?? 0;
-    const wasPlaying = video ? !video.paused : false;
-    setActiveFileIndex(index);
-
-    const onLoaded = () => {
-      if (video && prevTime > 0) {
-        video.currentTime = prevTime;
-        if (wasPlaying) void video.play().catch(() => {});
-      }
-      video?.removeEventListener("loadedmetadata", onLoaded);
-    };
-    video?.addEventListener("loadedmetadata", onLoaded);
-  }, []);
+  const changeQuality = React.useCallback(
+    (index: number) => {
+      // Дорожки привязаны к прогретому релизу — при смене качества
+      // возвращаем дефолтную дорожку и gst-стрим.
+      swapStream(() => {
+        setActiveAudio(0);
+        setDirectFallback(false);
+        setActiveFileIndex(index);
+      });
+    },
+    [swapStream],
+  );
 
   const togglePip = React.useCallback(async () => {
     const video = videoRef.current;

@@ -12,6 +12,22 @@ vi.mock("next/link", () => ({
   ),
 }));
 
+// ItemDetailView дергает useAuth для тихого прогрева стримов, Comments —
+// useOptionalAuth для формы комментария.
+vi.mock("@/lib/auth", () => {
+  const state = {
+    api: null,
+    isAuthed: false,
+    user: null,
+    login: vi.fn(),
+    register: vi.fn(),
+    logout: vi.fn(),
+    refresh: vi.fn(),
+    ready: true,
+  };
+  return { useAuth: () => state, useOptionalAuth: () => state };
+});
+
 import { ItemCard } from "@/components/item-card";
 import { ItemDetailView } from "@/components/item-detail";
 import { PlayerControls } from "@/components/player/controls";

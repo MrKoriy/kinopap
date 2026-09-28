@@ -32,7 +32,7 @@ const mediaLinksQuerySchema = z.object({ mid: z.coerce.number().int().positive()
 
 /** TTL кэша on-the-fly резолва стримов: повторное открытие watch-страницы
  * не должно снова ходить в rutor (до ~12с латентности). */
-const RESOLVE_CACHE_TTL_MS = 5 * 60 * 1000;
+const RESOLVE_CACHE_TTL_MS = 30 * 60 * 1000;
 
 /** Опциональная авторизация: гость — это гость, а не 401. */
 async function optionalUser(request: FastifyRequest): Promise<AccessPayload | null> {

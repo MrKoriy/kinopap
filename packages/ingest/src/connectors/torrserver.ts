@@ -31,6 +31,21 @@ export interface TorrServerSettings {
   ConnectionsLimit: number;
 }
 
+/** Один трек из gst-пробы (probe) транскодера TorrServer. */
+export interface GstProbeTrack {
+  Index: number;
+  PadName: string;
+  Type: "video" | "audio" | "subtitle";
+  Codec?: string;
+  Title?: string;
+  Language?: string;
+  Channels?: number;
+}
+
+export interface GstProbe {
+  tracks: GstProbeTrack[];
+}
+
 const VIDEO_EXTENSIONS = new Set([
   ".mkv",
   ".mp4",
@@ -171,6 +186,25 @@ export class TorrServerConnector {
   }
 
   /**
+   * Drop: сбрасывает соединения и кэш торрента без удаления из базы.
+   * Торренты, восстановленные из БД после рестарта сервера, иногда
+   * «висят» с подключёнными, но молчащими пирами — drop лечит.
+   */
+  async dropTorrent(hash: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${this.baseUrl}/torrents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "drop", hash }),
+        signal: AbortSignal.timeout(3000),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Returns playable HTTP stream URL for a file in the torrent.
    * Direct streaming with Range request support (no disk storage).
    */
@@ -183,6 +217,36 @@ export class TorrServerConnector {
 
   getStreamUrlForMagnet(magnet: string, fileIndex = 1): string {
     return `${this.publicBaseUrl}/stream?link=${encodeURIComponent(magnet)}&index=${fileIndex}&play`;
+  }
+
+  /**
+   * HLS-стрим через gst-транскодер TorrServer: видео remux в fMP4 (HEVC при
+   * необходимости перекодируется в H.264), звук — всегда AAC. Единственный
+   * формат, который стабильно играет звук в Chrome: роторские релизы почти
+   * все с AC3/DTS. Незнакомый хеш TorrServer сам добавляет по DHT.
+   * Аудио-дорожка выбирается параметром `audio` (нумерация gst-проба).
+   */
+  getGstHlsUrl(hash: string, fileIndex = 1, audioIndex = 0): string {
+    return `${this.publicBaseUrl}/gst/${hash}/master.m3u8?index=${fileIndex}&audio=${audioIndex}`;
+  }
+
+  /** Про-дорожки транскодера: реальные аудио-треки и субтитры файла. */
+  async probeGst(
+    hash: string,
+    fileIndex = 1,
+  ): Promise<GstProbe | null> {
+    try {
+      const res = await fetch(
+        `${this.baseUrl}/gst/${hash}/probe?index=${fileIndex}`,
+        { signal: AbortSignal.timeout(45_000) },
+      );
+      if (!res.ok) return null;
+      const raw = (await res.json()) as { Tracks?: GstProbeTrack[] };
+      if (!raw.Tracks) return null;
+      return { tracks: raw.Tracks };
+    } catch {
+      return null;
+    }
   }
 
   /**

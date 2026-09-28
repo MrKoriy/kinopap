@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { ContinueWatching } from "@/components/continue-watching";
 import { HeroCarousel } from "@/components/hero-carousel";
 import { ItemRail } from "@/components/item-rail";
 import { HeroSkeleton, RailSkeleton } from "@/components/skeletons";
@@ -52,6 +53,7 @@ export default function HomePage() {
       <Suspense fallback={<HeroSkeleton />}>
         <Hero />
       </Suspense>
+      <ContinueWatching />
       <Suspense fallback={<RailSkeleton />}>
         <RailOrError kind="fresh" title="Свежее" href="/catalog?sort=updated-" />
       </Suspense>
