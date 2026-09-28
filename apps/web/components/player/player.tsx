@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import * as React from "react";
 import { useAuth } from "@/lib/auth";
 import {
+  absoluteStreamUrl,
   activeCues,
   isIntroVisible,
   isNearEnd,
@@ -827,6 +828,10 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
   const activeCueList = activeCues(cues, currentTime, shiftMs);
   const introVisible = isIntroVisible(currentTime, links.intro);
   const nearEnd = isNearEnd(currentTime, duration) && !!next;
+  // Ссылки на потоки приходят относительными (/gst/..., /stream?...): один билд
+  // обслуживает и http://<ip>, и https://<имя>. Внешним плеерам и буферу обмена
+  // относительный путь бесполезен — там нужен полный адрес.
+  const externalStreamUrl = absoluteStreamUrl(streamUrl);
 
   return (
     <div
@@ -943,16 +948,16 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
               >
                 Попробовать снова
               </button>
-              {streamUrl && (
+              {externalStreamUrl && (
                 <>
                   <a
-                    href={`iina://weblink?url=${encodeURIComponent(streamUrl)}`}
+                    href={`iina://weblink?url=${encodeURIComponent(externalStreamUrl)}`}
                     className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover"
                   >
                     Открыть в IINA (Mac)
                   </a>
                   <a
-                    href={`vlc://${streamUrl}`}
+                    href={`vlc://${externalStreamUrl}`}
                     className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
                   >
                     Открыть в VLC
@@ -960,11 +965,9 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
                   <button
                     type="button"
                     onClick={() => {
-                      if (streamUrl) {
-                        navigator.clipboard.writeText(streamUrl);
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 2000);
-                      }
+                      navigator.clipboard.writeText(externalStreamUrl);
+                      setCopied(true);
+                      setTimeout(() => setCopied(false), 2000);
                     }}
                     className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-white/80 transition hover:bg-white/10"
                   >

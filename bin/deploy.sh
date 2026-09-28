@@ -7,6 +7,10 @@ set -euo pipefail
 SERVER=kinopap
 APP_DIR=/opt/kinopap
 PUBLIC_URL="http://94.103.1.126"
+# HTTPS-адрес: имя в зоне sslip.io резолвится в тот же IP, сертификат Let's Encrypt
+# выпущен (vhost zal-ssl). Нужен потому, что мобильные браузеры по умолчанию идут
+# на HTTPS, а на 443 за голым IP отвечает чужой сертификат — телефон блокирует сайт.
+HTTPS_URL="https://zal.94-103-1-126.sslip.io"
 API_INTERNAL="http://127.0.0.1:7001"
 TMDB_KEY="${TMDB_API_KEY:?export TMDB_API_KEY=... перед запуском}"
 
@@ -42,13 +46,20 @@ add_env() {
 }
 touch .env
 add_env TMDB_API_KEY "$TMDB_KEY"
-add_env CORS_ORIGIN "$PUBLIC_URL"
+add_env CORS_ORIGIN "$PUBLIC_URL,$HTTPS_URL"
 add_env COOKIE_SECURE "0"
 add_env MEDIA_ROOT "$APP_DIR/media"
-add_env MEDIA_BASE_URL "$PUBLIC_URL/media"
+# Относительный путь: постеры и спрайты должны открываться и с http://<ip>,
+# и с https://<имя>, а абсолютный http:// на HTTPS-странице браузер блокирует.
+add_env MEDIA_BASE_URL "/media"
 add_env REDIS_URL "redis://127.0.0.1:6379"
 add_env INTERNAL_API_URL "$API_INTERNAL"
-add_env NEXT_PUBLIC_API_URL "$PUBLIC_URL"
+# Пусто = относительные URL API (lib/api.ts, lib/auth.tsx берут origin окна).
+# Один билд обслуживает оба адреса; абсолютный http:// дал бы mixed content.
+add_env NEXT_PUBLIC_API_URL ""
+# То же для ссылок на потоки: TorrServer проксируется nginx на том же хосте,
+# поэтому /gst/... и /stream?... обязаны быть относительными.
+add_env TORRSERVER_PUBLIC_URL ""
 add_env PORT "7001"
 add_env DATABASE_URL "postgres://zal:zal@localhost:5433/zal"
 # JWT_SECRET обязателен (>= 32 символов) — API не стартует без него.
@@ -123,7 +134,9 @@ pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -1
 pnpm db:setup 2>&1 | tail -2
 
 # --- веб-сборка: NEXT_PUBLIC_API_URL инлайнится в бандл при билде ---
-NEXT_PUBLIC_API_URL="$PUBLIC_URL" INTERNAL_API_URL="$API_INTERNAL" \
+# Пустое значение — намеренно: адрес API берётся из origin окна, поэтому один и
+# тот же бандл работает и по http://<ip>, и по https://<имя>.
+NEXT_PUBLIC_API_URL="" INTERNAL_API_URL="$API_INTERNAL" \
   pnpm --filter @zal/web build 2>&1 | tail -2
 
 # --- PM2: воркер теперь в ecosystem; env уже в окружении из .env ---
@@ -154,9 +167,18 @@ REMOTE
 
 echo "==> 5/6: смоук"
 ssh "$SERVER" bash -s <<REMOTE
-echo -n "  web:     "; curl -s -o /dev/null -w "%{http_code}\n" $PUBLIC_URL/
-echo -n "  api:     "; curl -s -o /dev/null -w "%{http_code}\n" "$PUBLIC_URL/v1/items?limit=1"
-echo -n "  docs:    "; curl -s -o /dev/null -w "%{http_code}\n" $PUBLIC_URL/docs
+echo -n "  web (http/ip):    "; curl -s -o /dev/null -w "%{http_code}\n" $PUBLIC_URL/
+echo -n "  api (http/ip):    "; curl -s -o /dev/null -w "%{http_code}\n" "$PUBLIC_URL/v1/items?limit=1"
+echo -n "  docs (http/ip):   "; curl -s -o /dev/null -w "%{http_code}\n" $PUBLIC_URL/docs
+echo -n "  web (https/имя):  "; curl -s -o /dev/null -w "%{http_code}\n" $HTTPS_URL/
+echo -n "  api (https/имя):  "; curl -s -o /dev/null -w "%{http_code}\n" "$HTTPS_URL/v1/items?limit=1"
+# Абсолютный http:// в бандле = mixed content на HTTPS-странице. Ловим регрессию.
+echo -n "  mixed content:    "
+if grep -rq "$PUBLIC_URL" apps/web/.next/static/ 2>/dev/null; then
+  echo "ЕСТЬ ($PUBLIC_URL в бандле) — на HTTPS-странице запросы заблокируются"
+else
+  echo "нет"
+fi
 pm2 ls | grep kinopap
 REMOTE
 

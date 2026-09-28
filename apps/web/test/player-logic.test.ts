@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { formatDuration, formatTime } from "@/lib/format";
 import {
+  absoluteStreamUrl,
   activeCues,
   isIntroVisible,
   isNearEnd,
@@ -147,5 +148,39 @@ describe("nextAliveSource", () => {
     const dead = [0, 1];
     nextAliveSource(dead, 5);
     expect(dead).toEqual([0, 1]);
+  });
+});
+
+describe("absoluteStreamUrl", () => {
+  it("достраивает относительную ссылку до полной", () => {
+    // API отдаёт /gst/... и /stream?... относительными: один билд обслуживает
+    // и http://<ip>, и https://<имя>. Внешнему плееру нужен полный адрес.
+    expect(absoluteStreamUrl("/gst/abc/master.m3u8?index=1&audio=0")).toBe(
+      `${window.location.origin}/gst/abc/master.m3u8?index=1&audio=0`,
+    );
+  });
+
+  it("не трогает ссылку со своей схемой", () => {
+    expect(absoluteStreamUrl("https://cdn.test/hls/index.m3u8")).toBe(
+      "https://cdn.test/hls/index.m3u8",
+    );
+    expect(absoluteStreamUrl("http://94.103.1.126/stream?link=abc")).toBe(
+      "http://94.103.1.126/stream?link=abc",
+    );
+    // Живая magnet-ссылка из ответа API: percent-кодирование обязано уцелеть.
+    const magnet =
+      "http://94.103.1.126/stream?link=magnet%3A%3Fxt%3Durn%3Abtih%3A1aab46e155c45e602b9ed7145d5ddf1904fb2603%26dn%3D%D0%A4%D0%B8%D0%BB%D1%8C%D0%BC&index=1&play";
+    expect(absoluteStreamUrl(magnet)).toBe(magnet);
+  });
+
+  it("отдаёт ссылку как есть, если она не парсится", () => {
+    // Мусор в ответе API не должен ронять рендер оверлея ошибки.
+    expect(absoluteStreamUrl("http://[")).toBe("http://[");
+  });
+
+  it("возвращает пустую строку на пустом входе", () => {
+    expect(absoluteStreamUrl(null)).toBe("");
+    expect(absoluteStreamUrl(undefined)).toBe("");
+    expect(absoluteStreamUrl("")).toBe("");
   });
 });

@@ -93,3 +93,28 @@ export function nextAliveSource(dead: readonly number[], total: number): number 
   }
   return null;
 }
+
+/**
+ * Абсолютный URL потока.
+ *
+ * API отдаёт ссылки на потоки относительными (`/gst/...`, `/stream?...`), чтобы
+ * один билд работал и по http://<ip>, и по https://<имя>: абсолютный http:// на
+ * HTTPS-странице браузер блокирует как mixed content. Но внешнему плееру
+ * (`iina://`, `vlc://`), буферу обмена и M3U относительный путь бесполезен —
+ * там нужен полный адрес, иначе кнопка «Открыть в IINA» ломается ровно тогда,
+ * когда браузер уже не справился.
+ *
+ * Отдельной проверки схемы нет намеренно: `new URL` возвращает `magnet:?xt=…`
+ * и `https://…` без изменений (проверено на семи живых magnet-ссылках API).
+ * try — на случай мусора в ответе: упасть в рендере оверлея хуже, чем отдать
+ * ссылку как есть.
+ */
+export function absoluteStreamUrl(url: string | null | undefined): string {
+  if (!url) return "";
+  if (typeof window === "undefined") return url;
+  try {
+    return new URL(url, window.location.origin).toString();
+  } catch {
+    return url;
+  }
+}

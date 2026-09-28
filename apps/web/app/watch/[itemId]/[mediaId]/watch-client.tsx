@@ -10,6 +10,7 @@ import type { ItemDetail, MediaLinks } from "@zal/api-client";
 import * as React from "react";
 import { Player, type PlayerNext } from "@/components/player/player";
 import { useAuth } from "@/lib/auth";
+import { absoluteStreamUrl } from "@/lib/player-logic";
 
 export function WatchClient({
   item,
@@ -65,14 +66,18 @@ export function WatchClient({
   // ещё монтирует плеер, — первый сегмент идёт без задержки на соединение.
   React.useEffect(() => {
     if (!links) return;
-    const url = links.files[0]?.urls.hls ?? links.files[0]?.urls.http;
-    if (!url) return;
+    const raw = links.files[0]?.urls.hls ?? links.files[0]?.urls.http;
+    if (!raw) return;
     let origin: string;
     try {
-      origin = new URL(url).origin;
+      // Ссылки на потоки относительные (/gst/...): без базы `new URL` бросит,
+      // и предподключение молча отключилось бы.
+      origin = new URL(raw, window.location.origin).origin;
     } catch {
       return;
     }
+    // Свой origin уже подключён самой страницей — предподключать нечего.
+    if (origin === window.location.origin) return;
     const add = (rel: string, crossOrigin: boolean) => {
       // Дедуп: компонент монтируется заново при клиентской навигации, а
       // <link> живёт в <head> до перезагрузки — второй раз не добавляем.
@@ -132,6 +137,11 @@ export function WatchClient({
     );
   }
 
+  // Ссылки на потоки приходят относительными (/gst/..., /stream?...), чтобы один
+  // билд работал и по http://<ip>, и по https://<имя>. Внешним плеерам и M3U
+  // нужен полный адрес — с относительным кнопка открыла бы пустоту.
+  const externalStreamUrl = absoluteStreamUrl(links.files[0]?.urls.http);
+
   return (
     <>
       {/* key по media: при переходе на следующую серию плеер пересоздаётся,
@@ -145,7 +155,7 @@ export function WatchClient({
       />
 
       {/* Панель быстрого запуска во внешнем плеере */}
-      {links.files[0]?.urls.http && (
+      {externalStreamUrl && (
         <section className="mt-6 rounded-[var(--radius-card)] border border-border bg-surface p-4">
           <div className="flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -159,20 +169,20 @@ export function WatchClient({
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <a
-                href={`iina://weblink?url=${encodeURIComponent(links.files[0].urls.http)}`}
+                href={`iina://weblink?url=${encodeURIComponent(externalStreamUrl)}`}
                 className="rounded-full bg-accent px-4 py-2 text-xs font-semibold text-white transition hover:bg-accent-hover"
               >
                 Открыть в IINA (Mac)
               </a>
               <a
-                href={`vlc://${links.files[0].urls.http}`}
+                href={`vlc://${externalStreamUrl}`}
                 className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
               >
                 Открыть в VLC
               </a>
               <a
                 href={`data:text/plain;charset=utf-8,${encodeURIComponent(
-                  `#EXTM3U\n#EXTINF:-1,${item.title}\n${links.files[0].urls.http}`,
+                  `#EXTM3U\n#EXTINF:-1,${item.title}\n${externalStreamUrl}`,
                 )}`}
                 download={`${item.title}.m3u`}
                 className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-xs font-semibold text-white/90 transition hover:bg-white/10"
