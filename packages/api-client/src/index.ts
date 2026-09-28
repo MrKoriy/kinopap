@@ -4,4 +4,5 @@ export * from "./client";
 export * from "./common";
 export * from "./cursor";
 export * from "./ingest";
+export * from "./profile";
 export * from "./social";

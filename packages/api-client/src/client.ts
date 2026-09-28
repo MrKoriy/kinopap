@@ -43,6 +43,20 @@ import {
   progressResponseSchema,
 } from "./ingest";
 import {
+  favoriteListResponseSchema,
+  favoriteResponseSchema,
+  historyListResponseSchema,
+  itemProgressResponseSchema,
+  profileOverviewResponseSchema,
+  type UserListCreate,
+  type UserListUpdate,
+  userListCreateSchema,
+  userListDetailResponseSchema,
+  userListListResponseSchema,
+  userListResponseSchema,
+  userListUpdateSchema,
+} from "./profile";
+import {
   type CommentPost,
   type CommentPut,
   commentListResponseSchema,
@@ -264,6 +278,82 @@ export function createApiClient(opts: ApiClientOptions) {
     },
     listProgress: () =>
       request("/v1/progress", progressListResponseSchema, { auth: true }),
+
+    /* profile */
+    getProfileOverview: () =>
+      request("/v1/profile/overview", profileOverviewResponseSchema, { auth: true }),
+    /** Прогресс всех media тайтла — галочки по сериям и активный сезон. */
+    getItemProgress: (itemId: number) =>
+      request(`/v1/items/${itemId}/progress`, itemProgressResponseSchema, { auth: true }),
+
+    /* favorites */
+    listFavorites: () =>
+      request("/v1/favorites", favoriteListResponseSchema, { auth: true }),
+    getFavorite: (itemId: number) =>
+      request(`/v1/favorites/${itemId}`, favoriteResponseSchema, { auth: true }),
+    addFavorite: (itemId: number) =>
+      request(`/v1/favorites/${itemId}`, favoriteResponseSchema, {
+        method: "PUT",
+        auth: true,
+      }),
+    removeFavorite: (itemId: number) =>
+      request(`/v1/favorites/${itemId}`, favoriteResponseSchema, {
+        method: "DELETE",
+        auth: true,
+      }),
+
+    /* lists (подборки) */
+    listLists: () => request("/v1/lists", userListListResponseSchema, { auth: true }),
+    createList: (input: UserListCreate) => {
+      userListCreateSchema.parse(input);
+      return request("/v1/lists", userListResponseSchema, {
+        method: "POST",
+        body: input,
+        auth: true,
+      });
+    },
+    getList: (listId: number) =>
+      request(`/v1/lists/${listId}`, userListDetailResponseSchema, { auth: true }),
+    updateList: (listId: number, patch: UserListUpdate) => {
+      userListUpdateSchema.parse(patch);
+      return request(`/v1/lists/${listId}`, userListResponseSchema, {
+        method: "PATCH",
+        body: patch,
+        auth: true,
+      });
+    },
+    deleteList: (listId: number) =>
+      request(`/v1/lists/${listId}`, { parse: (v) => v as { ok: boolean } }, {
+        method: "DELETE",
+        auth: true,
+      }),
+    addToList: (listId: number, itemId: number) =>
+      request(`/v1/lists/${listId}/items/${itemId}`, userListDetailResponseSchema, {
+        method: "PUT",
+        auth: true,
+      }),
+    removeFromList: (listId: number, itemId: number) =>
+      request(`/v1/lists/${listId}/items/${itemId}`, userListDetailResponseSchema, {
+        method: "DELETE",
+        auth: true,
+      }),
+
+    /* history */
+    listHistory: (opts?: { limit?: number; offset?: number }) =>
+      request("/v1/history", historyListResponseSchema, {
+        query: { limit: opts?.limit, offset: opts?.offset },
+        auth: true,
+      }),
+    clearHistory: () =>
+      request("/v1/history", { parse: (v) => v as { ok: boolean; removed: number } }, {
+        method: "DELETE",
+        auth: true,
+      }),
+    deleteHistoryEntry: (mediaId: number) =>
+      request(`/v1/history/${mediaId}`, { parse: (v) => v as { ok: boolean } }, {
+        method: "DELETE",
+        auth: true,
+      }),
 
     /* social */
     getItemSocial: (itemId: number) =>

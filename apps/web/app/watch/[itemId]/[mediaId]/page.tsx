@@ -29,7 +29,9 @@ function nextEpisode(item: ItemDetail, mediaId: number): PlayerNext | null {
   const order = episodeOrder(item);
   const idx = order.findIndex((e) => e.mediaId === mediaId);
   if (idx < 0 || idx + 1 >= order.length) return null;
-  return order[idx + 1]!;
+  // itemId кладём рядом с mediaId: плеер строит маршрут /watch/[itemId]/[mediaId],
+  // иначе «Следующая серия» ведёт в 404.
+  return { itemId: item.id, ...order[idx + 1]! };
 }
 
 /** Страница просмотра: плеер + навигация по эпизодам. */

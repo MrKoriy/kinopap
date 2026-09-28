@@ -24,6 +24,9 @@ export function WatchClient({
   const [links, setLinks] = React.useState<MediaLinks | null>(null);
   const [failed, setFailed] = React.useState(false);
   const [elapsed, setElapsed] = React.useState(0);
+  const [playbackStarted, setPlaybackStarted] = React.useState(false);
+  // Прогрев следующей серии — один раз на пару (itemId, mediaId).
+  const prefetchedNext = React.useRef<string | null>(null);
 
   // Пока идёт поиск — считаем секунды и показываем стадию: резолвер
   // сначала ищет релизы в rutor (до ~6с), потом прогревает торрент
@@ -57,6 +60,45 @@ export function WatchClient({
     setLinks(null);
     load();
   }, [load]);
+
+  // Предподключение к origin медиа: TCP/TLS-хендшейк стартует, пока React
+  // ещё монтирует плеер, — первый сегмент идёт без задержки на соединение.
+  React.useEffect(() => {
+    if (!links) return;
+    const url = links.files[0]?.urls.hls ?? links.files[0]?.urls.http;
+    if (!url) return;
+    let origin: string;
+    try {
+      origin = new URL(url).origin;
+    } catch {
+      return;
+    }
+    const add = (rel: string, crossOrigin: boolean) => {
+      // Дедуп: компонент монтируется заново при клиентской навигации, а
+      // <link> живёт в <head> до перезагрузки — второй раз не добавляем.
+      if (document.head.querySelector(`link[data-zal-preconnect="${origin}"][rel="${rel}"]`)) {
+        return;
+      }
+      const link = document.createElement("link");
+      link.rel = rel;
+      link.href = origin;
+      link.dataset.zalPreconnect = origin;
+      if (crossOrigin) link.crossOrigin = "anonymous";
+      document.head.appendChild(link);
+    };
+    add("preconnect", true);
+    add("dns-prefetch", false);
+  }, [links]);
+
+  // Следующая серия: греем media-links, пока играет текущая, — «Следующая
+  // серия» открывается мгновенно, без повторного резолва торрента.
+  React.useEffect(() => {
+    if (!playbackStarted || !next) return;
+    const key = `${item.id}:${next.mediaId}`;
+    if (prefetchedNext.current === key) return;
+    prefetchedNext.current = key;
+    void api.getMediaLinks(item.id, next.mediaId).catch(() => {});
+  }, [playbackStarted, next, api, item.id]);
 
   if (failed) {
     return (
@@ -92,7 +134,15 @@ export function WatchClient({
 
   return (
     <>
-      <Player links={links} title={item.title} next={next} />
+      {/* key по media: при переходе на следующую серию плеер пересоздаётся,
+          а не переиспользует состояние автоплея/резюме прошлой серии. */}
+      <Player
+        key={`${item.id}:${mediaId}`}
+        links={links}
+        title={item.title}
+        next={next}
+        onPlaybackStart={() => setPlaybackStarted(true)}
+      />
 
       {/* Панель быстрого запуска во внешнем плеере */}
       {links.files[0]?.urls.http && (

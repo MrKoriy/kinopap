@@ -11,6 +11,7 @@ import {
   type WarmRelease,
 } from "@zal/api-client";
 import {
+  applyEnrichment,
   type Db,
   episodes,
   getItem,
@@ -29,7 +30,7 @@ import {
   shortcutItems,
   similarItems,
 } from "@zal/db";
-import { StreamResolver } from "@zal/ingest";
+import { pickTrailer, StreamResolver } from "@zal/ingest";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -75,6 +76,38 @@ interface TmdbHit {
   posterSmall: string | null;
   posterMedium: string | null;
   posterBig: string | null;
+  /** YouTube-ключ трейлера и ссылка — заполняются, когда TMDb их отдал. */
+  trailerId: string | null;
+  trailerUrl: string | null;
+}
+
+interface TmdbVideoRow {
+  key?: string;
+  site?: string;
+  type?: string;
+  official?: boolean;
+}
+
+/**
+ * Трейлер тайтла: официальный YouTube-трейлер, при отсутствии — тизер.
+ * Сначала русская дорожка: локализованных трейлеров меньше, но если он есть —
+ * он полезнее для зрителя.
+ */
+async function tmdbTrailer(
+  config: Config,
+  kind: "movie" | "tv",
+  tmdbId: number,
+): Promise<{ id: string; url: string } | null> {
+  for (const language of ["ru-RU", "en-US"]) {
+    const data = await tmdbGet<{ results?: TmdbVideoRow[] }>(
+      config,
+      `/${kind}/${tmdbId}/videos`,
+      language,
+    );
+    const key = pickTrailer(data?.results ?? []);
+    if (key) return { id: key, url: `https://www.youtube.com/watch?v=${key}` };
+  }
+  return null;
 }
 
 /** Поиск метаданных в официальном TMDb API (ключ — только из env). */
@@ -114,6 +147,8 @@ async function tmdbLookup(
       posterSmall: null,
       posterMedium: null,
       posterBig: null,
+      trailerId: null,
+      trailerUrl: null,
     };
     const dateStr = String(hit.release_date ?? hit.first_air_date ?? "");
     if (dateStr.length >= 4) {
@@ -128,6 +163,18 @@ async function tmdbLookup(
       out.posterSmall = `https://image.tmdb.org/t/p/w185${p}`;
       out.posterMedium = `https://image.tmdb.org/t/p/w500${p}`;
       out.posterBig = `https://image.tmdb.org/t/p/original${p}`;
+    }
+    // Трейлер — отдельным запросом: search/multi его не отдаёт. Ошибку
+    // глотаем, трейлер не повод не показать карточку.
+    const tmdbId = Number(hit.id);
+    if (Number.isFinite(tmdbId) && tmdbId > 0) {
+      const kind: "movie" | "tv" =
+        hit.media_type === "tv" || hit.first_air_date ? "tv" : "movie";
+      const trailer = await tmdbTrailer(config, kind, tmdbId).catch(() => null);
+      if (trailer) {
+        out.trailerId = trailer.id;
+        out.trailerUrl = trailer.url;
+      }
     }
     return out;
   } catch {
@@ -156,11 +203,15 @@ interface TmdbEpisode {
   thumbnailUrl: string | null;
 }
 
-async function tmdbGet<T>(config: Config, path: string): Promise<T | null> {
+async function tmdbGet<T>(
+  config: Config,
+  path: string,
+  language = "ru-RU",
+): Promise<T | null> {
   if (!config.tmdbApiKey) return null;
   const url = new URL(`https://api.themoviedb.org/3${path}`);
   url.searchParams.set("api_key", config.tmdbApiKey);
-  url.searchParams.set("language", "ru-RU");
+  url.searchParams.set("language", language);
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
     if (!res.ok) return null;
@@ -285,8 +336,20 @@ async function hydrateSerialSeasons(
         }
       }
     }
-    if (inserted) hydrateMissedAt.delete(tmdbId);
-    else hydrateMissedAt.set(tmdbId, Date.now());
+    if (inserted) {
+      hydrateMissedAt.delete(tmdbId);
+      // Трейлер тянем один раз вместе с сезонами: у сериалов из заливки его
+      // тоже не было, а карточка без трейлера — половина карточки.
+      const trailer = await tmdbTrailer(config, "tv", tmdbId).catch(() => null);
+      if (trailer) {
+        await applyEnrichment(db, itemId, {
+          trailerId: trailer.id,
+          trailerUrl: trailer.url,
+        }).catch(() => undefined);
+      }
+    } else {
+      hydrateMissedAt.set(tmdbId, Date.now());
+    }
     return inserted;
   })();
 
@@ -389,6 +452,8 @@ export async function catalogRoutes(
             let posterSmall: string | null = null;
             let posterMedium: string | null = null;
             let posterBig: string | null = null;
+            let trailerId: string | null = null;
+            let trailerUrl: string | null = null;
 
             const tmdb = await tmdbLookup(config, title, year);
             if (tmdb) {
@@ -400,6 +465,8 @@ export async function catalogRoutes(
               posterSmall = tmdb.posterSmall;
               posterMedium = tmdb.posterMedium;
               posterBig = tmdb.posterBig;
+              trailerId = tmdb.trailerId;
+              trailerUrl = tmdb.trailerUrl;
             }
 
             // Дедуп: тот же тайтл с тем же годом уже в каталоге — не плодим дубли.
@@ -425,6 +492,8 @@ export async function catalogRoutes(
                 posterSmall,
                 posterMedium,
                 posterBig,
+                trailerId,
+                trailerUrl,
               });
               result = await searchItems(db, {
                 q: queryTerm,

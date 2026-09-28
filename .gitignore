@@ -1,5 +1,7 @@
 node_modules/
 .freebuff/
+# Рабочие заметки агента (память проекта), не исходники — в публичный репо не едут.
+.workbuddy-ai/
 
 test-results/
 playwright-report/

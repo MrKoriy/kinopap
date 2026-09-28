@@ -18,7 +18,7 @@ import {
   type SortField,
   type SortSpec,
 } from "@zal/api-client";
-import { and, desc, eq, inArray, or, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, or, type SQL, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   audioTracks,
@@ -591,6 +591,68 @@ export async function listGenres(
 
 export async function listCountries(db: Db) {
   return db.select().from(countries).orderBy(countries.title);
+}
+
+/* ---------- Бэкфилл трейлеров ---------- */
+
+export interface TrailerBackfillRow {
+  id: number;
+  type: ItemType;
+  title: string;
+  year: number | null;
+  tmdbId: number;
+}
+
+/**
+ * Очередь бэкфилла трейлеров: тайтлы с TMDb id, но без ссылки на ролик.
+ * Курсор — по id (afterId), чтобы обход не сдвигался при записи в те же
+ * строки: запись трейлера выводит строку из выборки, и offset «съедал» бы
+ * следующий тайтл.
+ */
+export async function listItemsMissingTrailer(
+  db: Db,
+  opts: { limit?: number; afterId?: number } = {},
+): Promise<TrailerBackfillRow[]> {
+  const rows = await db
+    .select({
+      id: items.id,
+      type: items.type,
+      title: items.title,
+      year: items.year,
+      tmdbId: items.tmdbId,
+    })
+    .from(items)
+    .where(
+      and(
+        isNotNull(items.tmdbId),
+        isNull(items.trailerUrl),
+        gt(items.id, opts.afterId ?? 0),
+      ),
+    )
+    .orderBy(items.id)
+    .limit(opts.limit ?? 200);
+  return rows as TrailerBackfillRow[];
+}
+
+/** Сколько тайтлов ещё ждут трейлер — прогресс бэкфилла. */
+export async function countItemsMissingTrailer(db: Db): Promise<number> {
+  const rows = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(items)
+    .where(and(isNotNull(items.tmdbId), isNull(items.trailerUrl)));
+  return rows[0]?.n ?? 0;
+}
+
+/** Точечная запись трейлера (бэкфилл, ленивая гидратация). */
+export async function setItemTrailer(
+  db: Db,
+  itemId: number,
+  trailer: { id: string | null; url: string | null },
+): Promise<void> {
+  await db
+    .update(items)
+    .set({ trailerId: trailer.id, trailerUrl: trailer.url, updatedAt: new Date() })
+    .where(eq(items.id, itemId));
 }
 
 export type { SortDir };

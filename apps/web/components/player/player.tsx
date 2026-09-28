@@ -2,6 +2,8 @@
 
 import type { AudioTrack, MediaLinks, SpriteMetaDto } from "@zal/api-client";
 import type HlsJs from "hls.js";
+import { Volume2 } from "lucide-react";
+import { useRouter } from "next/navigation";
 /**
  * Плеер «Зал»: hls.js + собственный UI. Аудиодорожки, субтитры со сдвигом,
  * резюме просмотра, пропуск интро, автоследующая серия, хоткеи, PiP.
@@ -19,6 +21,8 @@ import {
 import { PlayerControls } from "./controls";
 
 export interface PlayerNext {
+  /** Тайтл, к которому принадлежит серия — нужен для маршрута /watch/[itemId]/[mediaId]. */
+  itemId: number;
   mediaId: number;
   label: string;
 }
@@ -27,6 +31,8 @@ export interface PlayerProps {
   links: MediaLinks;
   title: string;
   next?: PlayerNext | null;
+  /** Первое реальное воспроизведение: watch-страница греет следующую серию. */
+  onPlaybackStart?: () => void;
 }
 
 interface SubtitleTrack {
@@ -41,12 +47,14 @@ const PROGRESS_INTERVAL_MS = 10_000;
 /** Минимум просмотра, чтобы считать позицию осмысленной (резюме тоже с 5с). */
 const MIN_REPORT_SECONDS = 5;
 
-export function Player({ links, title, next }: PlayerProps) {
+export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
   const { api, isAuthed } = useAuth();
+  const router = useRouter();
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
   const containerRef = React.useRef<HTMLDivElement | null>(null);
   const hlsRef = React.useRef<HlsJs | null>(null);
-  const resumeDone = React.useRef(false);
+  // mediaId, для которого резюме уже применено (per-media, не per-mount).
+  const resumeDone = React.useRef<number | null>(null);
 
   const [playing, setPlaying] = React.useState(false);
   const [currentTime, setCurrentTime] = React.useState(0);
@@ -71,6 +79,9 @@ export function Player({ links, title, next }: PlayerProps) {
   // HTTP-стрим: картинка и звук родными кодеками есть не у всех браузеров,
   // но это лучше, чем чёрный экран.
   const [directFallback, setDirectFallback] = React.useState(false);
+  // Автоплей заблокирован политикой браузера — играем без звука и показываем
+  // кнопку «Включить звук», чтобы пользователь не остался с тишиной без выхода.
+  const [soundBlocked, setSoundBlocked] = React.useState(false);
 
   const activeFile = links.files[activeFileIndex] ?? links.files[0];
   // Дубляж zero-storage: каждая дорожка — персональный HLS-мастер
@@ -121,6 +132,51 @@ export function Player({ links, title, next }: PlayerProps) {
     };
   }, [api, lazyAudios.length, links.audios.length, links.itemId, links.mediaId]);
 
+  /* ---------- Автозапуск: играем сами, звук — если браузер разрешит ---------- */
+  // Одна попытка на media: смена качества/дубляжа перезагружает манифест и не
+  // должна превращаться в повторный автоплей после ручной паузы пользователя.
+  const autoplayForMedia = React.useRef<number | null>(null);
+  const playbackStartNotified = React.useRef(false);
+  // Резюме приходит отдельным запросом позже манифеста. Если стартовать
+  // сразу, зритель увидит начало фильма и только потом прыжок на сохранённую
+  // позицию — поэтому автоплей ждёт ответа по прогрессу (см. эффект ниже).
+  const resumeSettled = React.useRef<number | null>(null);
+  const onPlaybackStartRef = React.useRef(onPlaybackStart);
+  onPlaybackStartRef.current = onPlaybackStart;
+
+  const tryAutoplay = React.useCallback(() => {
+    const video = videoRef.current;
+    if (!video || autoplayForMedia.current === links.mediaId) return;
+    // Авторизованный ждёт, пока позиция будет применена (или запрос упадёт).
+    if (isAuthed && resumeSettled.current !== links.mediaId) return;
+    autoplayForMedia.current = links.mediaId;
+    void video.play().then(
+      () => setSoundBlocked(false),
+      (err: unknown) => {
+        // NotAllowedError — политика автоплея со звуком. Один раз пробуем без
+        // звука и даём кнопку включения; прочие сбои не наш случай.
+        const name = err instanceof Error ? err.name : "";
+        if (name !== "NotAllowedError") return;
+        video.muted = true;
+        setMuted(true);
+        void video.play().then(
+          () => setSoundBlocked(true),
+          () => {},
+        );
+      },
+    );
+  }, [links.mediaId, isAuthed]);
+  const tryAutoplayRef = React.useRef(tryAutoplay);
+  tryAutoplayRef.current = tryAutoplay;
+
+  const unmute = React.useCallback(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.muted = false;
+    setMuted(false);
+    setSoundBlocked(false);
+  }, []);
+
   /* ---------- Инициализация потока (HLS или прямой HTTP Range) ---------- */
   const activeAudioRef = React.useRef(0);
   activeAudioRef.current = activeAudio;
@@ -160,12 +216,18 @@ export function Player({ links, title, next }: PlayerProps) {
           // Оптимистичная стартовая оценка канала (4 Мбит/с) — иначе ABR
           // после старта держит 480p и повышает качество медленно.
           abrEwmaDefaultEstimate: 4_000_000,
+          // Старт без зонда канала: тянем первый фрагмент сразу, а не ждём
+          // замера скорости — на торрент-стриме это экономит секунды.
+          startFragPrefetch: true,
+          testBandwidth: false,
         });
         hlsRef.current = hls;
         hls.loadSource(streamUrl);
         hls.attachMedia(video);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
           setIsBuffering(false);
+          // Манифест готов — можно играть (резюме доведёт позицию после ответа API).
+          tryAutoplayRef.current();
           // После смены качества дорожка сбрасывается на дефолтную —
           // восстанавливаем выбранную пользователем.
           if (hls && hls.audioTracks.length > 1 && activeAudioRef.current > 0) {
@@ -232,6 +294,7 @@ export function Player({ links, title, next }: PlayerProps) {
       // Safari или прямой HTTP Range-стрим (TorrServer / MP4)
       video.src = streamUrl;
       video.load();
+      tryAutoplayRef.current();
     })();
 
     return () => {
@@ -286,12 +349,18 @@ export function Player({ links, title, next }: PlayerProps) {
     const onMeta = () => {
       setDuration(video.duration || 0);
       setIsBuffering(false);
+      // Прямой HTTP-стрим узнаёт о готовности только здесь — пробуем play.
+      tryAutoplayRef.current();
     };
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
     const onPlaying = () => {
       setIsBuffering(false);
       setError(null);
+      if (!playbackStartNotified.current) {
+        playbackStartNotified.current = true;
+        onPlaybackStartRef.current?.();
+      }
     };
     const onWaiting = () => setIsBuffering(true);
     const onCanPlay = () => setIsBuffering(false);
@@ -336,8 +405,12 @@ export function Player({ links, title, next }: PlayerProps) {
   /* ---------- Резюме: стартуем с сохранённой позиции ---------- */
   React.useEffect(() => {
     const video = videoRef.current;
-    if (!video || !isAuthed || resumeDone.current) return;
-    resumeDone.current = true;
+    // Per-media: при клиентской навигации на следующую серию плеер может
+    // пережить смену источника и обязан заново применить резюме.
+    if (!video || !isAuthed || resumeDone.current === links.mediaId) return;
+    resumeDone.current = links.mediaId;
+    // Гость резюме не ждёт — снимаем «стоп» с автоплея сразу.
+    resumeSettled.current = links.mediaId;
     void api
       .getProgress(links.mediaId)
       .then(({ progress }) => {
@@ -350,7 +423,12 @@ export function Player({ links, title, next }: PlayerProps) {
           video.currentTime = progress.positionSeconds;
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        // Позиция известна (или запрос упал) — теперь можно играть.
+        resumeSettled.current = links.mediaId;
+        tryAutoplayRef.current();
+      });
   }, [api, isAuthed, links.mediaId]);
 
   /* ---------- Прогресс: пишем периодически и на паузе ---------- */
@@ -657,6 +735,7 @@ export function Player({ links, title, next }: PlayerProps) {
         onClick={togglePlay}
         playsInline
         preload="auto"
+        poster={links.posterUrl ?? undefined}
         aria-label={title}
         data-testid="player-video"
       />
@@ -690,6 +769,20 @@ export function Player({ links, title, next }: PlayerProps) {
         </button>
       )}
 
+      {/* Автоплей без звука: политика браузера не дала играть со звуком —
+          даём явную кнопку, чтобы не оставить пользователя в тишине. */}
+      {soundBlocked && muted && (
+        <button
+          type="button"
+          onClick={unmute}
+          className="absolute right-4 top-4 inline-flex items-center gap-2 rounded-full bg-white/90 px-4 py-2 text-sm font-semibold text-black transition hover:bg-white"
+          data-testid="unmute-overlay"
+        >
+          <Volume2 className="h-4 w-4" />
+          Включить звук
+        </button>
+      )}
+
       {/* Следующая серия */}
       {nearEnd && (
         <div
@@ -702,7 +795,9 @@ export function Player({ links, title, next }: PlayerProps) {
             className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
             onClick={() => {
               reportProgress();
-              window.location.assign(`/watch/${next!.mediaId}`);
+              // Маршрут /watch/[itemId]/[mediaId]: без itemId ссылка ведёт в 404.
+              // router.push — клиентская навигация вместо полной перезагрузки.
+              router.push(`/watch/${next!.itemId}/${next!.mediaId}`);
             }}
           >
             {next!.label}

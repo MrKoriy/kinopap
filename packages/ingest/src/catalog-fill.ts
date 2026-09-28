@@ -60,8 +60,24 @@ const MATRIX_DECADES: Array<[number, number]> = [
   [2000, 2009],
   [2010, 2019],
   [2020, 2029],
-];  /** Страны, чьи каталоги заметно отличаются от англоязычного «верха». */
+];
+
+/** Страны, чьи каталоги заметно отличаются от англоязычного «верха». */
 const DEFAULT_COUNTRIES = ["KR", "JP", "IN", "CN", "FR", "DE", "ES", "IT", "BR", "MX"];
+
+/**
+ * Глубина discover по умолчанию, когда спека не задала страницы явно.
+ *
+ * Держим на потолке схемы (`packages/db/src/repos/discovery.ts`: yearPages ≤ 10,
+ * genrePages ≤ 5, countryPages ≤ 5) — это и есть «потолок 15–20к» из шапки.
+ * Операторский вход (`bin/fill-catalog.sh`) задаёт те же числа явно и умеет
+ * опускать их через FILL_* — этот дефолт нужен только прямым вызовам fillCatalog.
+ */
+export const DEFAULT_FILL_PAGES = {
+  yearPages: 10,
+  genrePages: 5,
+  countryPages: 5,
+} as const;
 
 export interface FillSpec {
   /** Годы массового fill: discover по году, сортировка по популярности. */
@@ -285,7 +301,7 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
   // Годы: основа объёма. discover по популярности за год, глубина — yearPages.
   if (spec.years?.length) {
     for (const year of spec.years) {
-      for (let p = 1; p <= (spec.yearPages ?? 5); p++) {
+      for (let p = 1; p <= (spec.yearPages ?? DEFAULT_FILL_PAGES.yearPages); p++) {
         for (const [kind, minVotes] of [
           ["movie", minVotesMovie],
           ["tv", minVotesTv],
@@ -311,7 +327,7 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
           const minVotes = kind === "movie" ? minVotesMovie : minVotesTv;
           const yearFrom = kind === "movie" ? "primary_release_date.gte" : "first_air_date.gte";
           const yearTo = kind === "movie" ? "primary_release_date.lte" : "first_air_date.lte";
-          for (let p = 1; p <= (spec.genrePages ?? 2); p++) {
+          for (let p = 1; p <= (spec.genrePages ?? DEFAULT_FILL_PAGES.genrePages); p++) {
             const data = await tmdb.get<{ results?: Array<Record<string, unknown>> }>(
               `/discover/${kind}?sort_by=popularity.desc&include_adult=false&with_genres=${genreId}&${yearFrom}=${from}-01-01&${yearTo}=${to}-12-31&vote_count.gte=${minVotes}&page=${p}`,
             );
@@ -351,7 +367,7 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
   // Страны: Корея, Япония, Индия и т.д. — заметно другой каталог.
   if (spec.countries?.length) {
     for (const country of spec.countries) {
-      for (let p = 1; p <= (spec.countryPages ?? 3); p++) {
+      for (let p = 1; p <= (spec.countryPages ?? DEFAULT_FILL_PAGES.countryPages); p++) {
         for (const kind of ["movie", "tv"] as const) {
           const minVotes = kind === "movie" ? minVotesMovie : minVotesTv;
           const data = await tmdb.get<{ results?: Array<Record<string, unknown>> }>(

@@ -410,6 +410,8 @@ export interface Enrichment {
   posterSmall?: string | null;
   posterMedium?: string | null;
   posterBig?: string | null;
+  /** YouTube-ключ ролика (TMDb videos[].key) — из него строим embed. */
+  trailerId?: string | null;
   trailerUrl?: string | null;
   genres?: string[];
   countries?: string[];
@@ -433,6 +435,7 @@ export async function applyEnrichment(
       ...(e.posterSmall !== undefined ? { posterSmall: e.posterSmall } : {}),
       ...(e.posterMedium !== undefined ? { posterMedium: e.posterMedium } : {}),
       ...(e.posterBig !== undefined ? { posterBig: e.posterBig } : {}),
+      ...(e.trailerId !== undefined ? { trailerId: e.trailerId } : {}),
       ...(e.trailerUrl !== undefined ? { trailerUrl: e.trailerUrl } : {}),
       updatedAt: new Date(),
     })

@@ -33,6 +33,29 @@ async function openPlayer(page: Page): Promise<void> {
   await expect(page.getByTestId("player")).toBeVisible();
 }
 
+/**
+ * Контракт: воспроизведение стартует само (автоплей), без клика по play.
+ * Даём короткое окно на разгон; если таймлайн стоит (среда запретила
+ * автоплей) — клик по play как запасной путь. Тесты ниже всё равно упадут,
+ * если плеер так и не поехал: ожидания currentTime остаются жёсткими.
+ */
+async function expectAutoplay(page: Page): Promise<void> {
+  const started = await page
+    .waitForFunction(
+      () => (document.querySelector("video")?.currentTime ?? 0) > 0.1,
+      undefined,
+      { timeout: 8_000 },
+    )
+    .then(() => true)
+    .catch(() => false);
+  if (!started) await page.getByTestId("play-toggle").click();
+
+  // Автоплей со звуком мог быть запрещён — плеер играет без звука с кнопкой
+  // «Включить звук». Включаем её, как сделал бы живой пользователь.
+  const unmute = page.getByTestId("unmute-overlay");
+  if (await unmute.isVisible().catch(() => false)) await unmute.click();
+}
+
 test("каталог → плеер → прогресс → резюме", async ({ page }) => {
   await loginUi(page);
 
@@ -92,7 +115,7 @@ test("каталог → плеер → прогресс → резюме", asyn
   });
   test.skip(!canDecode, "браузер без H.264 — воспроизведение покрыто webkit-проектом");
 
-  await page.getByTestId("play-toggle").click();
+  await expectAutoplay(page);
   await page.waitForFunction(
     () => (document.querySelector("video")?.currentTime ?? 0) > 5.5,
     undefined,
@@ -176,7 +199,7 @@ test("дубляж переключается, воспроизведение п
     { timeout: 20_000 },
   );
 
-  await page.getByTestId("play-toggle").click();
+  await expectAutoplay(page);
   await page.waitForFunction(
     () => (document.querySelector("video")?.currentTime ?? 0) > 1,
     undefined,
@@ -231,7 +254,7 @@ test("звук реально меняется (частотный анализ)
     };
   });
 
-  await page.getByTestId("play-toggle").click();
+  await expectAutoplay(page);
   await page.evaluate(() => {
     const w = window as unknown as { __audio?: { analyser: AnalyserNode } };
     const a = w.__audio;

@@ -5,11 +5,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 // next/link тянет роутер Next — в компонентных тестах он не нужен.
 vi.mock("next/link", () => ({
-  default: ({ href, children, ...rest }: React.ComponentProps<"a">) => (
-    <a href={typeof href === "string" ? href : "#"} {...rest}>
-      {children}
-    </a>
-  ),
+  default: ({
+    href,
+    prefetch,
+    children,
+    ...rest
+  }: React.ComponentProps<"a"> & { prefetch?: boolean }) => {
+    // prefetch — проп next/link, в DOM-атрибут <a> его отдавать нельзя.
+    void prefetch;
+    return (
+      <a href={typeof href === "string" ? href : "#"} {...rest}>
+        {children}
+      </a>
+    );
+  },
 }));
 
 // ItemDetailView дергает useAuth для тихого прогрева стримов, Comments —

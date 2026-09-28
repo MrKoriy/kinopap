@@ -16,6 +16,7 @@ import { catalogRoutes } from "./routes/catalog";
 import { discoveryRoutes } from "./routes/discovery";
 import { docsRoutes } from "./routes/docs";
 import { ingestRoutes } from "./routes/ingest";
+import { profileRoutes } from "./routes/profile";
 import { progressRoutes } from "./routes/progress";
 import { socialRoutes } from "./routes/social";
 
@@ -108,6 +109,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
         queue: opts.queue ?? noopIngestQueue,
       });
       await progressRoutes(scope, { db: opts.db, config: opts.config });
+      await profileRoutes(scope, { db: opts.db, config: opts.config });
       await socialRoutes(scope, { db: opts.db, config: opts.config });
     },
     { prefix: "/v1" },

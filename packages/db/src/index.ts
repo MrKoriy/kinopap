@@ -5,6 +5,7 @@ export * from "./repos/catalog";
 export * from "./repos/dedupe";
 export * from "./repos/discovery";
 export * from "./repos/ingest";
+export * from "./repos/profile";
 export * from "./repos/progress";
 export * from "./repos/publish";
 export * from "./repos/social";

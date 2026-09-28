@@ -20,6 +20,7 @@ export default function RootLayout() {
         <Stack.Screen name="index" options={{ title: "Зал." }} />
         <Stack.Screen name="search" options={{ title: "Поиск" }} />
         <Stack.Screen name="subscriptions" options={{ title: "Мои подписки" }} />
+        <Stack.Screen name="profile" options={{ title: "Профиль" }} />
         <Stack.Screen name="login" options={{ title: "Вход" }} />
         <Stack.Screen name="item/[id]" options={{ title: "Тайтл" }} />
         <Stack.Screen

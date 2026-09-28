@@ -124,7 +124,16 @@ export function ContinueWatching() {
 
   return (
     <section className="mb-10" data-testid="continue-rail">
-      <h2 className="mb-4 text-xl font-semibold text-white">Продолжить смотреть</h2>
+      <div className="mb-4 flex items-baseline justify-between">
+        <h2 className="text-xl font-semibold text-white">Продолжить смотреть</h2>
+        <Link
+          href="/profile"
+          className="text-sm text-muted transition hover:text-white"
+          data-testid="continue-all-history"
+        >
+          Вся история →
+        </Link>
+      </div>
       <div className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {entries.map((e) => (
           <Card key={`${e.progress.itemId}-${e.progress.mediaId}`} entry={e} />

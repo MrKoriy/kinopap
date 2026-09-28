@@ -1,13 +1,25 @@
 "use client";
 
-import type { Episode, ItemDetail, ItemSummary, MediaPart } from "@zal/api-client";
+import type {
+  Episode,
+  ItemDetail,
+  ItemProgressDto,
+  ItemSummary,
+  MediaPart,
+  Season,
+} from "@zal/api-client";
 import { tokens } from "@zal/ui";
 import { Link, useLocalSearchParams } from "expo-router";
-/** Карточка тайтла: инфо, голос/подписка, сезоны/эпизоды, комментарии. */
+/**
+ * Карточка тайтла: инфо, голос/подписка, трейлер, сезоны/эпизоды, комментарии.
+ * Сериал открывается одним сезоном (чипы), у серии видно, начата ли она и
+ * досмотрена ли, а главная кнопка ведёт в последнюю начатую серию.
+ */
 import * as React from "react";
 import {
   ActivityIndicator,
   Image,
+  Linking,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -20,14 +32,25 @@ import { ItemCard } from "../../components/item-card";
 import { useTvFocus } from "../../components/tv-focus";
 import { useAuth } from "../../lib/auth";
 import { formatDuration } from "../../lib/format";
+import { trailerTarget } from "../../lib/trailer";
+import {
+  pickDefaultSeason,
+  primaryPlay,
+  progressByMedia,
+  type WatchState,
+  watchStateOf,
+} from "../../lib/watch-state";
 
 export default function ItemScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const itemId = Number(id);
-  const { api } = useAuth();
+  const { api, user } = useAuth();
   const focusWatch = useTvFocus();
   const [item, setItem] = React.useState<ItemDetail | null>(null);
   const [missing, setMissing] = React.useState(false);
+  const [progress, setProgress] = React.useState<ItemProgressDto | null>(null);
+  // null — сезон выбран автоматически (прогресс/первый); явный выбор важнее.
+  const [pickedSeasonId, setPickedSeasonId] = React.useState<number | null>(null);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -45,6 +68,35 @@ export default function ItemScreen() {
       cancelled = true;
     };
   }, [api, itemId]);
+
+  // Прогресс — только для авторизованного: у гостя его попросту нет, а запрос
+  // к защищённому эндпоинту гонял бы refresh вхолостую.
+  React.useEffect(() => {
+    if (!user) {
+      setProgress(null);
+      return;
+    }
+    let cancelled = false;
+    api.getItemProgress(itemId).then(
+      (res) => {
+        if (!cancelled) setProgress(res.progress);
+      },
+      () => {},
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [api, itemId, user]);
+
+  const seasons = item?.seasons ?? [];
+  const byMedia = React.useMemo(() => progressByMedia(progress), [progress]);
+  const autoSeasonId = React.useMemo(
+    () => pickDefaultSeason(seasons, progress),
+    [seasons, progress],
+  );
+  const activeSeason =
+    seasons.find((s) => s.id === (pickedSeasonId ?? autoSeasonId)) ?? seasons[0] ?? null;
+  const play = item ? primaryPlay(item, progress) : null;
 
   if (missing) {
     return (
@@ -94,10 +146,11 @@ export default function ItemScreen() {
 
       {item.plot && <Text style={styles.plot}>{item.plot}</Text>}
 
-      {/* Фильм из одной части: без этой кнопки фильм было не запустить.
-          У сериала и многочастевого фильма пуск — ниже, в списке. */}
-      {item.media && item.media.length === 1 && (
-        <Link href={`/watch/${item.id}/${item.media[0]!.id}`} asChild>
+      {/* Главная кнопка. Одночастевый фильм: без неё фильм было не запустить.
+          Сериал и многочастевый фильм ведут в resumeMediaId, иначе в первую
+          серию — раньше у них пуска не было вообще. */}
+      {play && (
+        <Link href={`/watch/${item.id}/${play.mediaId}`} asChild>
           <Pressable
             testID="watch-button"
             // См. item-card: Link asChild ждёт плоский style.
@@ -106,25 +159,40 @@ export default function ItemScreen() {
             hasTVPreferredFocus
             {...focusWatch.props}
           >
-            <Text style={styles.watchText}>Смотреть</Text>
+            <Text style={styles.watchText}>{play.label}</Text>
           </Pressable>
         </Link>
       )}
 
+      <TrailerButton item={item} />
+
       <Similar itemId={item.id} />
 
-      {/* Сериалы: сезоны и эпизоды */}
-      {item.seasons && item.seasons.length > 0 && (
+      {/* Сериалы: чипы сезонов + серии выбранного сезона */}
+      {seasons.length > 0 && (
         <View style={styles.section}>
-          {item.seasons.map((season) => (
-            <View key={season.id} style={styles.season}>
-              <Text style={styles.seasonTitle}>
-                {season.title ?? `Сезон ${season.number}`}
-              </Text>
-              {season.episodes.map((ep) => (
-                <EpisodeRow key={ep.id} itemId={item.id} ep={ep} />
-              ))}
-            </View>
+          <Text style={styles.seasonTitle}>Сезоны</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.chips}
+          >
+            {seasons.map((season) => (
+              <SeasonChip
+                key={season.id}
+                season={season}
+                active={season.id === activeSeason?.id}
+                onSelect={() => setPickedSeasonId(season.id)}
+              />
+            ))}
+          </ScrollView>
+          {activeSeason?.episodes.map((ep) => (
+            <EpisodeRow
+              key={ep.id}
+              itemId={item.id}
+              ep={ep}
+              state={watchStateOf(ep.mediaId != null ? byMedia.get(ep.mediaId) : undefined)}
+            />
           ))}
         </View>
       )}
@@ -143,8 +211,41 @@ export default function ItemScreen() {
   );
 }
 
+/** Чип сезона — отдельный компонент ради фокуса пульта. */
+function SeasonChip({
+  season,
+  active,
+  onSelect,
+}: {
+  season: Season;
+  active: boolean;
+  onSelect: () => void;
+}) {
+  const focus = useTvFocus();
+  return (
+    <Pressable
+      testID={`season-chip-${season.number}`}
+      style={[styles.chip, active && styles.chipActive, focus.ring]}
+      onPress={onSelect}
+      accessibilityRole="button"
+      aria-selected={active}
+      {...focus.props}
+    >
+      <Text style={styles.chipText}>{season.title ?? `Сезон ${season.number}`}</Text>
+    </Pressable>
+  );
+}
+
 /** Строка эпизода: Link asChild требует плоский style, фокус — для пульта. */
-function EpisodeRow({ itemId, ep }: { itemId: number; ep: Episode }) {
+function EpisodeRow({
+  itemId,
+  ep,
+  state,
+}: {
+  itemId: number;
+  ep: Episode;
+  state: WatchState;
+}) {
   const focus = useTvFocus();
   return (
     <Link
@@ -156,18 +257,30 @@ function EpisodeRow({ itemId, ep }: { itemId: number; ep: Episode }) {
       asChild
     >
       <Pressable
+        testID="episode-row"
         style={StyleSheet.flatten([styles.epRow, !ep.mediaId && styles.epOff, focus.ring])}
         disabled={!ep.mediaId}
         accessibilityRole="button"
         {...focus.props}
       >
+        {ep.thumbnailUrl && (
+          <Image source={{ uri: ep.thumbnailUrl }} style={styles.epThumb} resizeMode="cover" />
+        )}
         <Text style={styles.epNumber}>{ep.number}</Text>
-        <Text style={styles.epTitle} numberOfLines={1}>
-          {ep.title ?? `Серия ${ep.number}`}
-        </Text>
+        <View style={styles.epBody}>
+          <Text style={styles.epTitle} numberOfLines={1}>
+            {ep.title ?? `Серия ${ep.number}`}
+          </Text>
+          {state.kind === "progress" && (
+            <View style={styles.progressTrack}>
+              <View style={[styles.progressFill, { width: `${state.progress * 100}%` }]} />
+            </View>
+          )}
+        </View>
         {ep.runtime > 0 && (
           <Text style={styles.muted}>{formatDuration(ep.runtime)}</Text>
         )}
+        {state.kind === "done" && <Text style={styles.doneMark}>✓</Text>}
       </Pressable>
     </Link>
   );
@@ -183,12 +296,38 @@ function PartRow({ itemId, part }: { itemId: number; part: MediaPart }) {
         accessibilityRole="button"
         {...focus.props}
       >
+        {part.thumbnailUrl && (
+          <Image source={{ uri: part.thumbnailUrl }} style={styles.epThumb} resizeMode="cover" />
+        )}
         <Text style={styles.epNumber}>{part.partNumber}</Text>
         <Text style={styles.epTitle} numberOfLines={1}>
           {part.title ?? `Часть ${part.partNumber}`}
         </Text>
       </Pressable>
     </Link>
+  );
+}
+
+/**
+ * Трейлер открывается внешним YouTube-приложением/браузером: в приложении
+ * нет WebView, а встраивать плеер в нативный экран нечем. Если ролика нет —
+ * кнопка честно предлагает поиск, а не открывает пустой URL.
+ */
+function TrailerButton({ item }: { item: ItemDetail }) {
+  const focus = useTvFocus();
+  const target = trailerTarget(item);
+  return (
+    <Pressable
+      testID="trailer-button"
+      style={[styles.trailerButton, focus.ring]}
+      onPress={() => {
+        if (target.url) void Linking.openURL(target.url);
+      }}
+      accessibilityRole="button"
+      {...focus.props}
+    >
+      <Text style={styles.trailerText}>{target.label}</Text>
+    </Pressable>
   );
 }
 
@@ -283,14 +422,33 @@ const styles = StyleSheet.create({
     marginTop: tokens.space.lg,
     gap: tokens.space.xs,
   },
-  season: {
-    marginBottom: tokens.space.md,
-  },
   seasonTitle: {
     color: tokens.color.text,
     fontSize: tokens.fontSize.md,
     fontWeight: "700",
     marginBottom: tokens.space.xs,
+  },
+  chips: {
+    flexDirection: "row",
+    gap: tokens.space.sm,
+    paddingBottom: tokens.space.xs,
+  },
+  chip: {
+    borderRadius: tokens.radius.full,
+    backgroundColor: tokens.color.surface,
+    borderWidth: 1,
+    borderColor: tokens.color.border,
+    paddingHorizontal: tokens.space.md,
+    paddingVertical: tokens.space.xs,
+  },
+  chipActive: {
+    backgroundColor: tokens.color.accent,
+    borderColor: tokens.color.accent,
+  },
+  chipText: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.sm,
+    fontWeight: "600",
   },
   watchButton: {
     marginTop: tokens.space.md,
@@ -304,6 +462,21 @@ const styles = StyleSheet.create({
     fontSize: tokens.fontSize.md,
     fontWeight: "700",
   },
+  trailerButton: {
+    marginTop: tokens.space.sm,
+    alignSelf: "flex-start",
+    borderRadius: tokens.radius.full,
+    borderWidth: 1,
+    borderColor: tokens.color.border,
+    backgroundColor: tokens.color.surface,
+    paddingHorizontal: tokens.space.md,
+    paddingVertical: tokens.space.sm,
+  },
+  trailerText: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.sm,
+    fontWeight: "600",
+  },
   epRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -315,6 +488,12 @@ const styles = StyleSheet.create({
   epOff: {
     opacity: 0.5,
   },
+  epThumb: {
+    width: 64,
+    height: 36,
+    borderRadius: tokens.radius.sm,
+    backgroundColor: tokens.color.surfaceHover,
+  },
   epNumber: {
     color: tokens.color.accent,
     fontSize: tokens.fontSize.sm,
@@ -322,9 +501,28 @@ const styles = StyleSheet.create({
     minWidth: 24,
     textAlign: "center",
   },
+  epBody: {
+    flex: 1,
+    gap: tokens.space.xs,
+  },
   epTitle: {
     flex: 1,
     color: tokens.color.text,
     fontSize: tokens.fontSize.sm,
+  },
+  progressTrack: {
+    height: 3,
+    borderRadius: tokens.radius.full,
+    backgroundColor: tokens.color.surfaceHover,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: tokens.color.accent,
+  },
+  doneMark: {
+    color: tokens.color.success,
+    fontSize: tokens.fontSize.md,
+    fontWeight: "700",
   },
 });

@@ -44,7 +44,13 @@ export default function HomeScreen() {
     Record<ShortcutKind, ItemSummary[]>
   >({ fresh: [], hot: [], popular: [] });
   const [loading, setLoading] = React.useState(true);
-  const focusNav = [useTvFocus(), useTvFocus(), useTvFocus(), useTvFocus()];
+  const focusNav = [
+    useTvFocus(),
+    useTvFocus(),
+    useTvFocus(),
+    useTvFocus(),
+    useTvFocus(),
+  ];
 
   React.useEffect(() => {
     let cancelled = false;
@@ -91,14 +97,23 @@ export default function HomeScreen() {
         >
           <Text style={styles.navText}>Подписки</Text>
         </Pressable>
+        <Pressable
+          testID="profile-link"
+          style={[styles.navButton, focusNav[2]!.ring]}
+          onPress={() => router.push("/profile")}
+          accessibilityRole="button"
+          {...focusNav[2]!.props}
+        >
+          <Text style={styles.navText}>Профиль</Text>
+        </Pressable>
         {ready && !user && (
           <Link href="/login" asChild>
             <Pressable
               testID="login-link"
               // См. item-card: Link asChild требует плоский style, не массив.
-              style={StyleSheet.flatten([styles.loginButton, focusNav[2]!.ring])}
+              style={StyleSheet.flatten([styles.loginButton, focusNav[3]!.ring])}
               accessibilityRole="button"
-              {...focusNav[2]!.props}
+              {...focusNav[3]!.props}
             >
               <Text style={styles.loginText}>Войти</Text>
             </Pressable>
@@ -107,10 +122,10 @@ export default function HomeScreen() {
         {user && (
           <Pressable
             testID="logout-button"
-            style={[styles.navButton, focusNav[3]!.ring]}
+            style={[styles.navButton, focusNav[4]!.ring]}
             onPress={() => void logout()}
             accessibilityRole="button"
-            {...focusNav[3]!.props}
+            {...focusNav[4]!.props}
           >
             <Text style={styles.navText}>Выйти ({user.name})</Text>
           </Pressable>

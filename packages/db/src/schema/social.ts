@@ -42,6 +42,31 @@ export const watchProgress = pgTable(
   ],
 );
 
+/**
+ * Сохранённое («Смотреть позже»): личный список тайтлов без подписки на
+ * обновления. Отдельно от подписок — подписка это про уведомления о новых
+ * сериях, закладка — про «вернусь к этому».
+ */
+export const favorites = pgTable(
+  "favorites",
+  {
+    id: serial("id").primaryKey(),
+    profileId: integer("profile_id")
+      .notNull()
+      .references(() => profiles.id, { onDelete: "cascade" }),
+    itemId: integer("item_id")
+      .notNull()
+      .references(() => items.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("favorites_profile_item_uq").on(t.profileId, t.itemId),
+    // Лента «Сохранённое» — свежие сверху.
+    index("favorites_profile_created_idx").on(t.profileId, t.createdAt),
+    index("favorites_item_idx").on(t.itemId),
+  ],
+);
+
 /** Подписка на сериал (in_watchlist у kino.pub): ждём новые серии. */
 export const subscriptions = pgTable(
   "subscriptions",

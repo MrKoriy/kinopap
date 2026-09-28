@@ -11,7 +11,7 @@
 import { type Db, itemGenres, items, media } from "@zal/db";
 import { eq, sql } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
-import { defaultFillYears, type FillProgress, fillCatalog } from "../src";
+import { DEFAULT_FILL_PAGES, defaultFillYears, type FillProgress, fillCatalog } from "../src";
 import { createTestDb } from "./helpers";
 
 interface MockState {
@@ -201,5 +201,84 @@ describe("fillCatalog", () => {
   it("defaultFillYears перекрывает диапазон", () => {
     const years = defaultFillYears(2020, 2023);
     expect(years).toEqual([2020, 2021, 2022, 2023]);
+  });
+
+  it("дефолтная глубина discover — на потолке схемы (10/5/5)", () => {
+    // Значения синхронизированы с bin/fill-catalog.sh: если оператор не задал
+    // страницы явно, спека обязана дать именно столько запросов на источник.
+    expect(DEFAULT_FILL_PAGES).toEqual({ yearPages: 10, genrePages: 5, countryPages: 5 });
+  });
+
+  it("большая спека (дефолтные yearPages) дедупится и повтор идемпотентен", async () => {
+    const db = await createTestDb();
+    await seedLocalGenres(db);
+    const { fetch: fetchFn, state } = makeFetch();
+
+    // Спека без yearPages — берётся DEFAULT_FILL_PAGES.yearPages.
+    const spec = { years: [2001], genreMatrix: false, lists: false };
+    const first = await fillCatalog({
+      db,
+      apiKey: "test-key",
+      fetch: fetchFn,
+      requestIntervalMs: 0,
+      spec,
+    });
+
+    // Мок отдаёт на каждую страницу одни и те же 2 фильма + 1 сериал: глубина
+    // в 10 страниц не должна дать 30 строк — дедуп по tmdbId схлопывает их в 3.
+    const moviePages = state.calls.filter(
+      (c) => c.startsWith("/3/discover/movie") && c.includes("primary_release_year=2001"),
+    );
+    const tvPages = state.calls.filter(
+      (c) => c.startsWith("/3/discover/tv") && c.includes("first_air_date_year=2001"),
+    );
+    expect(moviePages.length).toBe(DEFAULT_FILL_PAGES.yearPages);
+    expect(tvPages.length).toBe(DEFAULT_FILL_PAGES.yearPages);
+    expect(first.added).toBe(3);
+    expect(await count(db, items)).toBe(3);
+
+    const second = await fillCatalog({
+      db,
+      apiKey: "test-key",
+      fetch: fetchFn,
+      requestIntervalMs: 0,
+      spec,
+    });
+    expect(second.added).toBe(0);
+    expect(second.skipped).toBe(3);
+    expect(await count(db, items)).toBe(3);
+  });
+
+  it("429 от TMDb ретраится и не роняет fill (пейсинг не тронут)", async () => {
+    const db = await createTestDb();
+    await seedLocalGenres(db);
+    const { fetch: inner } = makeFetch();
+
+    // Первый запрос к discover/movie отдаёт 429 — клиент обязан подождать и
+    // повторить, а не проглотить страницу.
+    let rateLimited = 0;
+    const fetchFn = (async (input: Parameters<typeof fetch>[0]) => {
+      const url = new URL(String(input));
+      if (
+        url.pathname === "/3/discover/movie" &&
+        url.searchParams.get("primary_release_year") === "2001" &&
+        rateLimited === 0
+      ) {
+        rateLimited += 1;
+        return new Response("{}", { status: 429, headers: { "content-type": "application/json" } });
+      }
+      return inner(input);
+    }) as typeof fetch;
+
+    const summary = await fillCatalog({
+      db,
+      apiKey: "test-key",
+      fetch: fetchFn,
+      requestIntervalMs: 0,
+      spec: { years: [2001], yearPages: 1, genreMatrix: false, lists: false },
+    });
+
+    expect(rateLimited).toBe(1);
+    expect(summary.added).toBe(3);
   });
 });

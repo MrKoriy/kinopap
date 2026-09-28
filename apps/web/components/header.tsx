@@ -89,9 +89,13 @@ export function Header() {
                 </span>
               )}
             </Link>
-            <span className="text-sm text-white" data-testid="header-user">
+            <Link
+              href="/profile"
+              className="text-sm text-white transition hover:text-accent"
+              data-testid="header-user"
+            >
               {user.name ?? user.email}
-            </span>
+            </Link>
             <button
         type="button"
               className="text-sm text-muted transition hover:text-white"
@@ -102,13 +106,22 @@ export function Header() {
             </button>
           </div>
         ) : (
-          <Link
-            href="/login"
-            className="rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-accent-hover"
-            data-testid="login-link"
-          >
-            Войти
-          </Link>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/profile"
+              className="text-sm text-muted transition hover:text-white"
+              data-testid="profile-link"
+            >
+              Профиль
+            </Link>
+            <Link
+              href="/login"
+              className="rounded-full bg-accent px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-accent-hover"
+              data-testid="login-link"
+            >
+              Войти
+            </Link>
+          </div>
         )}
       </div>
     </header>
