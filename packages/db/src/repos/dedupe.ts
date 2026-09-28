@@ -258,8 +258,15 @@ export async function mergeCatalogDuplicates(
     try {
       await mergePair(db, victimId, targetId);
       merged += 1;
-    } catch {
+      console.log(
+        `dedupe: #${victimId} "${pair.title}" (${pair.year ?? "?"}) -> #${targetId}`,
+      );
+    } catch (err) {
       // Гонка/уникальный конфликт: пара остаётся как есть, fill не роняем.
+      console.warn(
+        `dedupe: merge failed #${pair.victimId} ~ #${pair.targetId} "${pair.title}":`,
+        String(err).slice(0, 200),
+      );
     }
   }
   return { candidates: pairs.length, merged, pairs };
