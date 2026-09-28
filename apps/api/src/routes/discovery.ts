@@ -1,251 +1,121 @@
 /**
- * Discovery: наполнение каталога из официального TMDb API.
- * Тренды недели + популярное (кино и сериалы), массовый fill по годам
- * (discover) и импорт коллекций — целые франшизы («Форсаж», «Миньоны»)
- * со всеми частями. Дедуп против локального каталога. Запускает
- * владелец/админ — POST /v1/discover.
- * Просмотр таких тайтлов — zero-storage: media-links резолвит стримы на лету.
+ * Discovery: наполнение каталога из официционного TMDb API.
+ *
+ * Сбор, дедуп и запись живут в `@zal/ingest` (fillCatalog) и выполняются
+ * фоновой джобой в воркере: 15–20к тайтлов — это ~1500 запросов к TMDb и
+ * минуты работы, которые одиночный HTTP-запрос не переживает (nginx режет
+ * по таймауту, а rate limit /discover — 40 за 10 минут).
+ *
+ * Здесь только: авторизация (owner/admin), валидация спеки, постановка
+ * задачи и отчёт о прогрессе. Без Redis (dev/тесты) fill выполняется
+ * синхронно — поведение прошлого релиза сохранено.
  */
 
-import { type Db, genres, itemGenres, items, media } from "@zal/db";
-import { and, eq, or, sql } from "drizzle-orm";
-import type { FastifyInstance } from "fastify";
+import type { Db } from "@zal/db";
+import {
+  DEFAULT_COUNTRIES,
+  type FillProgress,
+  type FillSpec,
+  type FillSummary,
+  fillCatalog,
+} from "@zal/ingest";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
-import { forbidden, parseOrThrow } from "../lib/http";
+import { type CatalogFillQueue, noopCatalogFillQueue } from "../ingest-queue";
+import { badRequest, forbidden, notFound, parseOrThrow } from "../lib/http";
+import type { AccessPayload } from "../plugins/auth";
 
 const discoverBodySchema = z.object({
-  /** Тренды + популярное (старый режим, страницы 1..5). */
+  /** Старый режим: тренды + популярное (страницы 1..5). */
   pages: z.coerce.number().int().min(1).max(5).optional(),
-  /** Имена коллекций TMDb: импортируются все части (до 50 имён за вызов). */
-  collections: z.array(z.string().min(1).max(120)).max(50).optional(),
+  /** Имена коллекций TMDb: импортируются все части (до 150 имён за вызов). */
+  collections: z.array(z.string().min(1).max(120)).max(150).optional(),
   /** Годы для массового fill: discover по году выпуска, по популярности. */
-  years: z.array(z.coerce.number().int().min(1950).max(2035)).max(80).optional(),
-  /** Страниц discover на год. */
-  yearPages: z.coerce.number().int().min(1).max(10).default(3),
+  years: z.array(z.coerce.number().int().min(1950).max(2035)).max(90).optional(),
+  /** Страниц discover на год (20 тайтлов на страницу). */
+  yearPages: z.coerce.number().int().min(1).max(10).optional(),
+  /** Порог голосов TMDb: ниже — уже не « кино », а случайные строки. */
+  minVotes: z.coerce.number().int().min(0).max(500).optional(),
+  /** Жанровая матрица (хвост) — включается по умолчанию вместе с годами. */
+  genreMatrix: z.coerce.boolean().optional(),
+  genrePages: z.coerce.number().int().min(1).max(5).optional(),
+  /** Discover по странам происхождения (KR/JP/IN/…). */
+  countries: z.array(z.string().length(2)).max(30).optional(),
+  countryPages: z.coerce.number().int().min(1).max(5).optional(),
+  /** top_rated + trending + популярное. */
+  lists: z.coerce.boolean().optional(),
+  /** Импорт каталога AniLibria (по умолчанию включён). */
+  anime: z.coerce.boolean().optional(),
+  /** Сколько аниме-релизов импортировать за прогон. */
+  animeLimit: z.coerce.number().int().min(1).max(5000).optional(),
+  /** Склейка дублей после заливки (по умолчанию включена). */
+  dedupe: z.coerce.boolean().optional(),
 });
 
-/** TMDb (ru) → локальные названия жанров из сида. */
-const GENRE_ALIASES: Record<string, string> = {
-  "Боевик": "Боевик",
-  "Приключения": "Приключения",
-  "Анимация": "Мультфильм",
-  "Комедия": "Комедия",
-  "Преступление": "Криминал",
-  "Документальный": "Документальный",
-  "Драма": "Драма",
-  "Семья": "Семейный",
-  "Фэнтези": "Фэнтези",
-  "История": "Исторический",
-  "Ужасы": "Ужасы",
-  "Музыка": "Мюзикл",
-  "Детектив": "Детектив",
-  "Романтика": "Мелодрама",
-  "Фантастика": "Фантастика",
-  "Триллер": "Триллер",
-  "Война": "Военный",
-  "Вестерн": "Вестерн",
-  "Аниме": "Аниме",
-  "Мультфильм": "Мультфильм",
-  "Криминал": "Криминал",
-};
+type DiscoverBody = z.infer<typeof discoverBodySchema>;
 
-interface TmdbEntry {
-  tmdbId: number;
-  type: "movie" | "serial";
-  title: string;
-  originalTitle: string | null;
-  year: number | null;
-  plot: string | null;
-  rating: number;
-  votes: number;
-  runtime: number | null;
-  posterSmall: string | null;
-  posterMedium: string | null;
-  posterBig: string | null;
-  genreIds: number[];
-}
+/** Тело запроса → спека fill-джобы. */
+export function buildFillSpec(body: DiscoverBody): FillSpec {
+  // Пустое тело — ошибка клиента, а не «заливай всё»: anime по умолчанию
+  // включается только когда запрос хоть что-то явно запросил.
+  if (Object.keys(body).length === 0) {
+    throw badRequest(
+      "empty_discover",
+      "Укажи хотя бы один источник: years, collections, pages или anime",
+    );
+  }
+  const spec: FillSpec = {};
 
-async function tmdbGet(config: Config, path: string): Promise<unknown | null> {
-  const url = new URL(`https://api.themoviedb.org/3${path}`);
-  url.searchParams.set("api_key", config.tmdbApiKey!);
-  url.searchParams.set("language", "ru-RU");
-  const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
-  if (!res.ok) return null;
-  return res.json();
-}
-
-function mapEntry(
-  raw: Record<string, unknown>,
-  type: "movie" | "serial",
-): TmdbEntry | null {
-  const tmdbId = typeof raw.id === "number" ? raw.id : null;
-  const title = String(raw.title ?? raw.name ?? "").trim();
-  const posterPath = raw.poster_path ? String(raw.poster_path) : null;
-  const votes = typeof raw.vote_count === "number" ? raw.vote_count : 0;
-  if (!tmdbId || !title || !posterPath || votes < 30) return null;
-
-  const date = String(raw.release_date ?? raw.first_air_date ?? "");
-  const year = date.length >= 4 ? parseInt(date.slice(0, 4), 10) : null;
-  const runtimeRaw =
-    type === "movie"
-      ? raw.runtime
-      : Array.isArray(raw.episode_run_time)
-        ? raw.episode_run_time[0]
-        : null;
-
-  const voteAvg = typeof raw.vote_average === "number" ? raw.vote_average : 0;
-
-  return {
-    tmdbId,
-    type,
-    title,
-    originalTitle: raw.original_title ?? raw.original_name
-      ? String(raw.original_title ?? raw.original_name)
-      : null,
-    year: year && year > 1900 ? year : null,
-    plot: raw.overview ? String(raw.overview) : null,
-    rating: voteAvg > 0 ? Math.round(voteAvg * 10) / 10 : 0,
-    votes,
-    runtime: typeof runtimeRaw === "number" && runtimeRaw > 0 ? runtimeRaw * 60 : null,
-    posterSmall: `https://image.tmdb.org/t/p/w185${posterPath}`,
-    posterMedium: `https://image.tmdb.org/t/p/w500${posterPath}`,
-    posterBig: `https://image.tmdb.org/t/p/original${posterPath}`,
-    genreIds: Array.isArray(raw.genre_ids)
-      ? raw.genre_ids.filter((g): g is number => typeof g === "number")
-      : [],
-  };
-}
-
-/** Детали фильма из коллекции: genres[] вместо genre_ids, runtime на месте. */
-function mapDetail(raw: Record<string, unknown>): TmdbEntry | null {
-  const entry = mapEntry(raw, "movie");
-  if (!entry) return null;
-  const gs = Array.isArray(raw.genres)
-    ? raw.genres
-        .map((g) => (typeof g === "object" && g ? (g as { id?: unknown }).id : null))
-        .filter((id): id is number => typeof id === "number")
-    : [];
-  return { ...entry, genreIds: gs };
-}
-
-async function collectEntries(
-  config: Config,
-  pages: number,
-): Promise<TmdbEntry[]> {
-  const byKey = new Map<string, TmdbEntry>();
-  const push = (e: TmdbEntry | null) => {
-    if (e) byKey.set(`${e.type}:${e.tmdbId}`, e);
-  };
-
-  const lists: string[] = ["/trending/movie/week", "/trending/tv/week"];
-  for (let p = 1; p <= pages; p++) {
-    lists.push(`/movie/popular?page=${p}`, `/tv/popular?page=${p}`);
+  if (body.years?.length) {
+    spec.years = body.years;
+    spec.yearPages = body.yearPages ?? 5;
+    spec.genreMatrix = body.genreMatrix ?? true;
+    spec.genrePages = body.genrePages ?? 2;
+    spec.lists = body.lists ?? true;
+    spec.countries = body.countries ?? [...DEFAULT_COUNTRIES];
+    spec.countryPages = body.countryPages ?? 3;
+  } else if (body.pages) {
+    spec.lists = true;
   }
 
-  for (const path of lists) {
-    try {
-      const data = (await tmdbGet(config, path)) as
-        | { results?: Array<Record<string, unknown>> }
-        | null;
-      const isTv = path.includes("/tv");
-      for (const raw of data?.results ?? []) {
-        push(mapEntry(raw, isTv ? "serial" : "movie"));
-      }
-    } catch {
-      // Один недоступный список не должен ронять весь discovery.
-    }
+  if (body.collections?.length) spec.collections = body.collections;
+  if (body.minVotes != null) {
+    spec.minVotesMovie = body.minVotes;
+    spec.minVotesTv = Math.max(0, Math.round(body.minVotes * 0.6));
   }
-  return [...byKey.values()];
+  // Аниме по умолчанию всегда: AniLibria даёт мгновенный HLS без торрентов.
+  spec.anime = body.anime ?? true;
+  if (body.animeLimit != null) spec.animeLimit = body.animeLimit;
+  // Склейка дублей тоже по умолчанию: заливка не должна плодить вариации.
+  spec.dedupe = body.dedupe ?? true;
+
+  const hasTmdbSource =
+    !!spec.years?.length || !!spec.collections?.length || spec.lists === true;
+  if (!hasTmdbSource && !spec.anime) {
+    throw badRequest(
+      "empty_discover",
+      "Укажи хотя бы один источник: years, collections, pages или anime",
+    );
+  }
+  return spec;
 }
 
-/** Массовый fill: discover по годам, популярность, кино + сериалы. */
-async function collectYearEntries(
-  config: Config,
-  years: number[],
-  pagesPerYear: number,
-): Promise<TmdbEntry[]> {
-  const byKey = new Map<string, TmdbEntry>();
-  const push = (e: TmdbEntry | null) => {
-    if (e) byKey.set(`${e.type}:${e.tmdbId}`, e);
-  };
-
-  for (const year of years) {
-    for (let p = 1; p <= pagesPerYear; p++) {
-      const paths = [
-        `/discover/movie?sort_by=popularity.desc&include_adult=false&primary_release_year=${year}&vote_count.gte=80&page=${p}`,
-        `/discover/tv?sort_by=popularity.desc&include_adult=false&first_air_date_year=${year}&vote_count.gte=30&page=${p}`,
-      ];
-      for (const path of paths) {
-        try {
-          const data = (await tmdbGet(config, path)) as
-            | { results?: Array<Record<string, unknown>> }
-            | null;
-          const isTv = path.includes("/tv");
-          for (const raw of data?.results ?? []) {
-            push(mapEntry(raw, isTv ? "serial" : "movie"));
-          }
-        } catch {
-          // Пропущенная страница года не роняет весь fill.
-        }
-      }
-    }
+async function requireFillAccess(request: FastifyRequest): Promise<void> {
+  await request.jwtVerify();
+  const user = request.user as AccessPayload;
+  if (user.typ !== "access") throw forbidden("Access token required");
+  if (request.user.role !== "owner" && request.user.role !== "admin") {
+    throw forbidden("Discovery is available to owner/admin only");
   }
-  return [...byKey.values()];
-}
-
-/**
- * Коллекции TMDb: по имени («Форсаж») находим collection и импортируем
- * все части. Топ результатов поиска даёт устойчивость к опечаткам.
- */
-async function collectCollectionEntries(
-  config: Config,
-  names: string[],
-): Promise<{ entries: TmdbEntry[]; found: string[]; missing: string[] }> {
-  const byKey = new Map<string, TmdbEntry>();
-  const push = (e: TmdbEntry | null) => {
-    if (e) byKey.set(`${e.type}:${e.tmdbId}`, e);
-  };
-  const found: string[] = [];
-  const missing: string[] = [];
-
-  for (const name of names) {
-    try {
-      const search = (await tmdbGet(
-        config,
-        `/search/collection?query=${encodeURIComponent(name)}`,
-      )) as { results?: Array<{ id?: number; name?: string }> } | null;
-      const collectionId = search?.results?.[0]?.id;
-      if (!collectionId) {
-        missing.push(name);
-        continue;
-      }
-      found.push(name);
-
-      const details = (await tmdbGet(config, `/collection/${collectionId}`)) as
-        | { name?: string; parts?: Array<Record<string, unknown>> }
-        | null;
-      for (const part of details?.parts ?? []) {
-        const partId = typeof part.id === "number" ? part.id : null;
-        if (!partId) continue;
-        // Части коллекции без жанров — тянем полные детали фильма.
-        const full = (await tmdbGet(config, `/movie/${partId}`)) as
-          | Record<string, unknown>
-          | null;
-        push(full ? mapDetail(full) : mapEntry(part, "movie"));
-      }
-    } catch {
-      missing.push(name);
-    }
-  }
-  return { entries: [...byKey.values()], found, missing };
 }
 
 export async function discoveryRoutes(
   app: FastifyInstance,
-  deps: { db: Db; config: Config },
+  deps: { db: Db; config: Config; catalogQueue?: CatalogFillQueue },
 ): Promise<void> {
   const { db, config } = deps;
+  const queue = deps.catalogQueue ?? noopCatalogFillQueue;
 
   app.post(
     "/discover",
@@ -254,148 +124,52 @@ export async function discoveryRoutes(
       config: { rateLimit: { max: 40, timeWindow: "10 minutes" } },
     },
     async (request) => {
-      if (request.user.role !== "owner" && request.user.role !== "admin") {
-        throw forbidden("Discovery is available to owner/admin only");
-      }
+      await requireFillAccess(request);
       if (!config.tmdbApiKey) {
         throw forbidden("TMDB_API_KEY is not configured on the server");
       }
-
       const body = parseOrThrow(discoverBodySchema, request.body ?? {});
+      const spec = buildFillSpec(body);
 
-      const sources: string[] = [];
-      const entries: TmdbEntry[] = [];
-      let collectionsInfo: { found: string[]; missing: string[] } | null = null;
-
-      if (body.collections?.length) {
-        const res = await collectCollectionEntries(config, body.collections);
-        entries.push(...res.entries);
-        collectionsInfo = { found: res.found, missing: res.missing };
-        sources.push(`collections:${res.found.length}`);
-      }
-      if (body.years?.length) {
-        const res = await collectYearEntries(config, body.years, body.yearPages);
-        entries.push(...res);
-        sources.push(`years:${body.years.length}`);
-      }
-      // Старый режим (тренды/популярное) — только без явных источников,
-      // чтобы массовые импорты не тащили лишнее.
-      if (body.pages && !body.collections?.length && !body.years?.length) {
-        entries.push(...(await collectEntries(config, body.pages)));
-        sources.push("trending+popular");
-      }
-      if (entries.length === 0) {
-        return { added: 0, updated: 0, skipped: 0, total: 0, sources, collections: collectionsInfo };
-      }
-
-      // Дедуп внутри одного вызова (годы и коллекции пересекаются).
-      const byKey = new Map<string, TmdbEntry>();
-      for (const e of entries) byKey.set(`${e.type}:${e.tmdbId}`, e);
-
-      // Локальные жанры + карта TMDb genre_id → локальный genre_id.
-      const genreRows = await db.select().from(genres);
-      const byTitle = new Map(genreRows.map((g) => [g.title, g.id]));
-      const tmdbGenreIds = new Map<number, number | null>();
-      for (const kind of ["movie", "tv"] as const) {
-        try {
-          const list = (await tmdbGet(config, `/genre/${kind}/list`)) as
-            | { genres?: Array<{ id?: number; name?: string }> }
-            | null;
-          for (const g of list?.genres ?? []) {
-            if (typeof g.id !== "number") continue;
-            const local = byTitle.get(GENRE_ALIASES[g.name ?? ""] ?? g.name ?? "");
-            tmdbGenreIds.set(g.id, local ?? null);
-          }
-        } catch {
-          // Без жанровых связей discovery всё равно валиден.
-        }
-      }
-
-      let added = 0;
-      let updated = 0;
-      let skipped = 0;
-
-      for (const e of byKey.values()) {
-        // Дедуп: по tmdbId либо по (title, year).
-        const dup = await db
-          .select({ id: items.id, poster: items.posterMedium })
-          .from(items)
-          .where(
-            or(
-              eq(items.tmdbId, e.tmdbId),
-              e.year != null
-                ? and(sql`${items.title} ilike ${e.title}`, eq(items.year, e.year))
-                : sql`${items.title} ilike ${e.title}`,
-            ),
-          )
-          .limit(1);
-
-        const existing = dup[0];
-        if (existing) {
-          // Уже в каталоге, но без постера (битые URL сида) — чиним метаданные.
-          if (!existing.poster && e.posterMedium) {
-            await db
-              .update(items)
-              .set({
-                posterSmall: e.posterSmall,
-                posterMedium: e.posterMedium,
-                posterBig: e.posterBig,
-                plot: e.plot,
-                originalTitle: e.originalTitle,
-                rating: e.rating > 0 ? e.rating : undefined,
-                tmdbId: e.tmdbId,
-                updatedAt: new Date(),
-              })
-              .where(eq(items.id, existing.id));
-            updated++;
-          } else {
-            skipped++;
-          }
-          continue;
-        }
-
-        const [inserted] = await db
-          .insert(items)
-          .values({
-            type: e.type,
-            title: e.title,
-            originalTitle: e.originalTitle,
-            year: e.year,
-            plot: e.plot,
-            rating: e.rating,
-            quality: 1080,
-            posterSmall: e.posterSmall,
-            posterMedium: e.posterMedium,
-            posterBig: e.posterBig,
-            tmdbId: e.tmdbId,
-          })
-          .returning({ id: items.id });
-        if (!inserted) continue;
-
-        const genreIds = [...new Set(e.genreIds.map((g) => tmdbGenreIds.get(g) ?? null).filter((g): g is number => g != null))];
-        for (const gid of genreIds) {
-          await db
-            .insert(itemGenres)
-            .values({ itemId: inserted.id, genreId: gid })
-            .onConflictDoNothing();
-        }
-
-        await db.insert(media).values({
-          itemId: inserted.id,
-          title: e.title,
-          runtime: e.runtime ?? 0,
+      // Без Redis (dev/тесты) — считаем прямо в запросе, как раньше.
+      if (queue === noopCatalogFillQueue) {
+        const summary = await fillCatalog({
+          db,
+          apiKey: config.tmdbApiKey ?? "",
+          spec,
+          anilibriaBaseUrl: config.anilibriaUrl,
+          onProgress: (p: FillProgress) => {
+            console.log(
+              `discover: ${p.phase} fetched=${p.fetched} added=${p.added} total=${p.total}`,
+            );
+          },
         });
-        added++;
+        return { queued: false, summary };
       }
 
-      return {
-        added,
-        updated,
-        skipped,
-        total: byKey.size,
-        sources,
-        collections: collectionsInfo,
-      };
+      const { jobId } = await queue.enqueue({ kind: "catalog-fill", spec });
+      return { queued: true, jobId };
+    },
+  );
+
+  /** Прогресс и результат фонового fill: { job: "<id>" }. */
+  app.get(
+    "/discover/status",
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+    },
+    async (request) => {
+      await requireFillAccess(request);
+      const q = parseOrThrow(
+        z.object({ job: z.string().min(1).max(64) }),
+        request.query ?? {},
+      );
+      const status = await queue.status(q.job);
+      if (!status) throw notFound(`Catalog fill job ${q.job} not found`);
+      return status;
     },
   );
 }
+
+export type { FillProgress, FillSpec, FillSummary };

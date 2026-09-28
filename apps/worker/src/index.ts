@@ -1,5 +1,7 @@
 import { createDb, createPool, reconcileStaleIngestJobs } from "@zal/db";
+import { fillCatalog } from "@zal/ingest";
 import { Redis } from "ioredis";
+import { createCatalogWorker } from "./catalog";
 import { makeWorkerDeps } from "./deps";
 import { createTranscoderWorker } from "./worker";
 
@@ -40,10 +42,42 @@ const connection = new Redis(redisUrl, { maxRetriesPerRequest: null });
 const worker = createTranscoderWorker(connection, deps);
 console.log("worker: started, waiting for ingest/transcode jobs");
 
+// Очередь наполнения каталога — своя соединение и свой воркер: fill идёт
+// минутами и не должен задерживать транскод.
+const catalogConnection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+const tmdbApiKey = process.env.TMDB_API_KEY;
+const catalogWorker = createCatalogWorker(catalogConnection, {
+  runCatalogFill: (spec, onProgress) => {
+    if (!tmdbApiKey) {
+      return Promise.reject(new Error("TMDB_API_KEY is required for catalog fill"));
+    }
+    let lastLog = 0;
+    const logged = (p: Parameters<typeof onProgress>[0]) => {
+      const now = Date.now();
+      if (now - lastLog > 15_000 || p.phase === "done") {
+        lastLog = now;
+        console.log(
+          `catalog-fill: ${p.phase} fetched=${p.fetched} added=${p.added} ` +
+            `skipped=${p.skipped} total=${p.total}`,
+        );
+      }
+      onProgress(p);
+    };
+    return fillCatalog({
+      db,
+      apiKey: tmdbApiKey,
+      spec,
+      onProgress: logged,
+      anilibriaBaseUrl: process.env.ANILIBRIA_URL,
+    });
+  },
+});
+console.log("worker: catalog-fill queue ready");
+
 async function shutdown(signal: string): Promise<void> {
   console.log(`worker: ${signal}, closing`);
-  await worker.close();
-  await connection.quit();
+  await Promise.allSettled([worker.close(), catalogWorker.close()]);
+  await Promise.allSettled([connection.quit(), catalogConnection.quit()]);
   process.exit(0);
 }
 

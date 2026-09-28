@@ -1,10 +1,25 @@
-import { createDb, createPool, purgeStaleRefreshTokens, runMigrations } from "@zal/db";
-import { TorrServerConnector } from "@zal/ingest";
+import {
+  createDb,
+  createPool,
+  purgeStaleRefreshTokens,
+  purgeStaleSources,
+  runMigrations,
+} from "@zal/db";
+import {
+  type FillProgress,
+  type FillSummary,
+  TorrServerConnector,
+} from "@zal/ingest";
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { buildApp } from "./app";
 import { loadConfig } from "./config";
-import type { IngestJobPayload, IngestQueue } from "./ingest-queue";
+import {
+  type CatalogFillQueue,
+  type IngestJobPayload,
+  type IngestQueue,
+  noopCatalogFillQueue,
+} from "./ingest-queue";
 
 const config = loadConfig();
 
@@ -18,6 +33,9 @@ const db = createDb(pool);
 {
   const purged = await purgeStaleRefreshTokens(db);
   if (purged > 0) console.log(`auth: purged ${purged} stale refresh tokens`);
+  // Кэш резолва живёт 6 часов — старое в БД держать незачем.
+  const stale = await purgeStaleSources(db, 6 * 60 * 60 * 1000);
+  if (stale > 0) console.log(`resolve: purged ${stale} stale media_sources`);
 }
 
 // TorrServer: прогрев настроек буфера (read-ahead, кэш). Best-effort —
@@ -66,7 +84,67 @@ if (process.env.REDIS_URL) {
   }
 }
 
-const app = await buildApp({ db, config, queue: ingestQueue, logger: true });
+// Очередь наполнения каталога. Своя от транскода: fill идёт минутами и не
+// должен задерживать ingest. Без Redis роут выполняет fill синхронно.
+let catalogQueue: CatalogFillQueue = noopCatalogFillQueue;
+if (process.env.REDIS_URL) {
+  try {
+    const redis = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: null,
+      lazyConnect: true,
+    });
+    await redis.connect();
+    const fillQueue = new Queue("catalog", { connection: redis });
+    catalogQueue = {
+      async enqueue(payload) {
+        const job = await fillQueue.add("fill", payload, {
+          removeOnComplete: 20,
+          removeOnFail: 20,
+          attempts: 1,
+        });
+        return { jobId: String(job.id) };
+      },
+      async status(jobId) {
+        const job = await fillQueue.getJob(jobId);
+        if (!job) return null;
+        const state = await job.getState();
+        const mapped =
+          state === "active"
+            ? "active"
+            : state === "completed"
+              ? "completed"
+              : state === "failed"
+                ? "failed"
+                : state === "unknown"
+                  ? "unknown"
+                  : "queued";
+        // BullMQ отдаёт progress числом (по умолчанию 0) — наш прогресс объектом.
+        const progress =
+          typeof job.progress === "object" && job.progress !== null
+            ? (job.progress as FillProgress)
+            : null;
+        return {
+          jobId,
+          state: mapped,
+          progress,
+          result: (job.returnvalue as FillSummary | null) ?? null,
+          error: job.failedReason ?? null,
+        };
+      },
+    };
+    console.log("redis: catalog-fill queue ready");
+  } catch (_err) {
+    console.warn("redis: unavailable, catalog fill runs inline");
+  }
+}
+
+const app = await buildApp({
+  db,
+  config,
+  queue: ingestQueue,
+  catalogQueue,
+  logger: true,
+});
 await app.listen({ port: config.port, host: "0.0.0.0" });
 console.log(`api: listening on :${config.port}`);
 

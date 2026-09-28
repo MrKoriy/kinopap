@@ -22,13 +22,94 @@ export interface AnilibriaRelease {
   year: number;
   episodes: AnilibriaEpisode[];
   posterUrl?: string;
+  plot?: string | null;
+}
+
+export interface AnilibriaCatalogRelease {
+  id: number;
+  title: string;
+  englishTitle: string | null;
+  year: number | null;
+  posterUrl: string | null;
+  plot: string | null;
+}
+
+export interface AnilibriaCatalogPage {
+  releases: AnilibriaCatalogRelease[];
+  /** 0 — источник не сообщил (тогда листинг стопаем по пустой странице). */
+  totalPages: number;
+}
+
+function absPoster(poster: unknown): string | null {
+  const src = (poster as { optimized?: { src?: unknown } } | undefined)?.optimized?.src;
+  if (typeof src !== "string" || !src) return null;
+  return src.startsWith("http") ? src : `https://anilibria.top${src}`;
 }
 
 export class AnilibriaConnector {
   private readonly baseUrl: string;
+  private readonly fetchFn: typeof fetch;
 
-  constructor(baseUrl = "https://anilibria.top/api/v1") {
+  constructor(baseUrl = "https://anilibria.top/api/v1", fetchFn?: typeof fetch) {
     this.baseUrl = baseUrl.replace(/\/$/, "");
+    this.fetchFn = fetchFn ?? fetch;
+  }
+
+  /**
+   * Страница каталога: листинг релизов для импорта в каталог.
+   * Формат пагинации у источника плавает — читаем всё, что похоже на число
+   * страниц, и откатываемся на «до первой пустой».
+   */
+  async listReleases(page: number, limit = 50): Promise<AnilibriaCatalogPage> {
+    const url = `${this.baseUrl}/anime/catalog/releases?page=${page}&limit=${limit}`;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await this.fetchFn(url, {
+        signal: controller.signal,
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      if (!res.ok) return { releases: [], totalPages: 0 };
+      const json = (await res.json()) as unknown;
+      const obj: Record<string, unknown> = Array.isArray(json)
+        ? {}
+        : ((json ?? {}) as Record<string, unknown>);
+      const data = Array.isArray(json)
+        ? json
+        : Array.isArray(obj.data)
+          ? obj.data
+          : [];
+      const pag = (obj.pagination ?? {}) as Record<string, unknown>;
+      const rawTotal = pag.total_pages ?? pag.pages ?? pag.last_page ?? obj.last_page;
+      const totalPages = typeof rawTotal === "number" ? rawTotal : Number(rawTotal ?? 0) || 0;
+
+      return {
+        releases: data.flatMap((raw) => {
+          const item = raw as Record<string, unknown>;
+          const id = typeof item.id === "number" ? item.id : null;
+          const name = item.name as { main?: unknown; english?: unknown } | undefined;
+          const title = String(name?.main ?? "").trim();
+          if (!id || !title) return [];
+          const year = typeof item.year === "number" ? item.year : null;
+          const description = item.description ?? item.plot;
+          return [
+            {
+              id,
+              title,
+              englishTitle: name?.english ? String(name.english) : null,
+              year: year && year > 1900 ? year : null,
+              posterUrl: absPoster(item.poster),
+              plot: description ? String(description) : null,
+            } satisfies AnilibriaCatalogRelease,
+          ];
+        }),
+        totalPages,
+      };
+    } catch {
+      return { releases: [], totalPages: 0 };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   async search(query: string): Promise<AnilibriaRelease[]> {
@@ -37,7 +118,7 @@ export class AnilibriaConnector {
     const timeout = setTimeout(() => controller.abort(), 6000);
 
     try {
-      const res = await fetch(url, {
+      const res = await this.fetchFn(url, {
         signal: controller.signal,
         headers: { "User-Agent": "Mozilla/5.0" },
       });
@@ -66,7 +147,7 @@ export class AnilibriaConnector {
     const timeout = setTimeout(() => controller.abort(), 8000);
 
     try {
-      const res = await fetch(url, {
+      const res = await this.fetchFn(url, {
         signal: controller.signal,
         headers: { "User-Agent": "Mozilla/5.0" },
       });
@@ -93,7 +174,8 @@ export class AnilibriaConnector {
         englishTitle: data.name?.english ?? undefined,
         year: data.year ?? 0,
         episodes,
-        posterUrl: data.poster?.optimized?.src ? `https://anilibria.top${data.poster.optimized.src}` : undefined,
+        posterUrl: absPoster(data.poster) ?? undefined,
+        plot: data.description ?? data.plot ?? null,
       };
     } catch {
       return null;
