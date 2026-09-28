@@ -135,6 +135,169 @@ async function tmdbLookup(
   }
 }
 
+/**
+ * Ленивая гидрация сезонов для сериалов из заливки: fill создаёт item без
+ * эпизодов (TMDb discover не отдаёт их состав), и карточка выходила без
+ * выбора серий — только «Смотреть». При первом открытии карточки сезоны и
+ * эпизоды подтягиваются с TMDb и навсегда остаются в БД.
+ *
+ * Сбои источника кэшируются на 10 минут, чтобы битый сериал не долбил TMDb
+ * на каждом открытии; одинаковые запросы делятся в полёте.
+ */
+const HYDRATE_RETRY_MS = 10 * 60 * 1000;
+const hydrateMissedAt = new Map<number, number>();
+const hydratePending = new Map<string, Promise<boolean>>();
+
+interface TmdbEpisode {
+  number: number;
+  title: string | null;
+  /** Секунды — в таком виде runtime хранится у эпизодов аниме. */
+  runtime: number;
+  thumbnailUrl: string | null;
+}
+
+async function tmdbGet<T>(config: Config, path: string): Promise<T | null> {
+  if (!config.tmdbApiKey) return null;
+  const url = new URL(`https://api.themoviedb.org/3${path}`);
+  url.searchParams.set("api_key", config.tmdbApiKey);
+  url.searchParams.set("language", "ru-RU");
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return null;
+    return (await res.json()) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function tmdbShowSeasons(
+  config: Config,
+  tmdbId: number,
+): Promise<Array<{ number: number; title: string | null }>> {
+  const data = await tmdbGet<{ seasons?: Array<Record<string, unknown>> }>(
+    config,
+    `/tv/${tmdbId}`,
+  );
+  return (data?.seasons ?? [])
+    .filter((s) => Number(s.season_number) > 0 && Number(s.episode_count) > 0)
+    .map((s) => ({
+      number: Number(s.season_number),
+      title: typeof s.name === "string" && s.name ? s.name : null,
+    }));
+}
+
+async function tmdbSeasonEpisodes(
+  config: Config,
+  tmdbId: number,
+  seasonNumber: number,
+): Promise<TmdbEpisode[]> {
+  const data = await tmdbGet<{ episodes?: Array<Record<string, unknown>> }>(
+    config,
+    `/tv/${tmdbId}/season/${seasonNumber}`,
+  );
+  return (data?.episodes ?? [])
+    .filter((e) => Number(e.episode_number) > 0)
+    .map((e) => ({
+      number: Number(e.episode_number),
+      title: typeof e.name === "string" && e.name ? e.name : null,
+      runtime: (Number(e.runtime) || 0) * 60,
+      thumbnailUrl:
+        typeof e.still_path === "string" && e.still_path
+          ? `https://image.tmdb.org/t/p/w300${e.still_path}`
+          : null,
+    }));
+}
+
+async function hydrateSerialSeasons(
+  db: Db,
+  config: Config,
+  itemId: number,
+  tmdbId: number,
+): Promise<boolean> {
+  if (!tmdbId) return false;
+  const missAt = hydrateMissedAt.get(tmdbId);
+  if (missAt && Date.now() - missAt < HYDRATE_RETRY_MS) return false;
+
+  const key = `${itemId}:${tmdbId}`;
+  const pending = hydratePending.get(key);
+  if (pending) return pending;
+
+  const run = (async () => {
+    const seasonList = await tmdbShowSeasons(config, tmdbId);
+    if (seasonList.length === 0) {
+      hydrateMissedAt.set(tmdbId, Date.now());
+      return false;
+    }
+    let inserted = false;
+    // Сезоны пачками по 4: у длинных сериалов десятки сезонов, а TMDb
+    // любит 429 при десятках параллельных запросов.
+    for (let i = 0; i < seasonList.length; i += 4) {
+      const chunk = seasonList.slice(i, i + 4);
+      const episodeLists = await Promise.all(
+        chunk.map((s) => tmdbSeasonEpisodes(config, tmdbId, s.number)),
+      );
+      for (let j = 0; j < chunk.length; j++) {
+        const meta = chunk[j]!;
+        const eps = episodeLists[j] ?? [];
+        if (eps.length === 0) continue;
+
+        const [seasonRow] = await db
+          .insert(seasons)
+          .values({ itemId, number: meta.number, title: meta.title })
+          .onConflictDoNothing({ target: [seasons.itemId, seasons.number] })
+          .returning({ id: seasons.id });
+        const seasonId =
+          seasonRow?.id ??
+          (
+            await db
+              .select({ id: seasons.id })
+              .from(seasons)
+              .where(
+                and(eq(seasons.itemId, itemId), eq(seasons.number, meta.number)),
+              )
+              .limit(1)
+          )[0]?.id;
+        if (!seasonId) continue;
+
+        const newEps = await db
+          .insert(episodes)
+          .values(
+            eps.map((e) => ({
+              seasonId,
+              number: e.number,
+              title: e.title,
+              runtime: e.runtime,
+              thumbnailUrl: e.thumbnailUrl,
+            })),
+          )
+          .onConflictDoNothing()
+          .returning({ id: episodes.id, number: episodes.number, title: episodes.title });
+        if (newEps.length > 0) {
+          inserted = true;
+          await db.insert(media).values(
+            newEps.map((e) => ({
+              itemId,
+              episodeId: e.id,
+              title: e.title ?? `Серия ${e.number}`,
+              runtime: eps.find((x) => x.number === e.number)?.runtime ?? 0,
+            })),
+          );
+        }
+      }
+    }
+    if (inserted) hydrateMissedAt.delete(tmdbId);
+    else hydrateMissedAt.set(tmdbId, Date.now());
+    return inserted;
+  })();
+
+  hydratePending.set(key, run);
+  try {
+    return await run;
+  } finally {
+    hydratePending.delete(key);
+  }
+}
+
 export async function catalogRoutes(
   app: FastifyInstance,
   deps: { db: Db; config: Config },
@@ -312,8 +475,19 @@ export async function catalogRoutes(
 
   app.get("/items/:id", async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
-    const item = await getItem(db, id);
+    let item = await getItem(db, id);
     if (!item) throw notFound(`Item ${id} not found`);
+
+    // Сериал без эпизодов (заливка из TMDb) — дотягиваем сезоны лениво.
+    if (item.type === "serial" && item.seasons && item.seasons.length === 0) {
+      const hydrated = await hydrateSerialSeasons(
+        db,
+        config,
+        item.id,
+        item.tmdb.id ?? 0,
+      );
+      if (hydrated) item = (await getItem(db, id)) ?? item;
+    }
     return item;
   });
 

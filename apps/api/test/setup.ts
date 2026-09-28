@@ -7,7 +7,9 @@ import { buildApp } from "../src/app";
 import { loadConfig } from "../src/config";
 import type { IngestQueue } from "../src/ingest-queue";
 
-export async function createTestApp(opts: { queue?: IngestQueue } = {}) {
+export async function createTestApp(
+  opts: { queue?: IngestQueue; env?: Record<string, string> } = {},
+) {
   const client = new PGlite({ extensions: { pg_trgm } });
   const db = drizzle(client, { schema });
   await migrate(db, { migrationsFolder: migrationsDir });
@@ -17,6 +19,7 @@ export async function createTestApp(opts: { queue?: IngestQueue } = {}) {
     JWT_SECRET: "test-secret-0123456789abcdef-0123456789",
     MEDIA_BASE_URL: "http://cdn.test/m",
     CORS_ORIGIN: "*",
+    ...opts.env,
   });
 
   const app = await buildApp({ db, config, queue: opts.queue });
