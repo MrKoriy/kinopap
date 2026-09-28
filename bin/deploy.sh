@@ -133,6 +133,23 @@ pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -1
 # --- миграции + сид (владелец/инвайты/жанры; идемпотентно) ---
 pnpm db:setup 2>&1 | tail -2
 
+# --- кэш media_sources: выкидываем ссылки с зашитым хостом ---
+# Разрешённые ссылки лежат в БД до 6 часов и хранятся целиком, вместе с URL,
+# которые строятся из TORRSERVER_PUBLIC_URL на момент резолва. Пока адрес был
+# абсолютным, в кэше оседали http://<ip>/gst/... — на HTTPS-странице браузер их
+# блокирует, и фильм не играет, хотя конфиг уже правильный. Сейчас ссылки
+# относительные, поэтому строка с «http://» в кэше — по определению протухшая.
+# Чистим до перезапуска API: иначе L1 в памяти подхватит старые строки обратно.
+STALE=$(docker exec kinopap-postgres psql -U zal -d zal -tAc \
+  "select count(*) from media_sources where files::text like '%http://%';" | tr -d '[:space:]')
+if [ "\${STALE:-0}" != "0" ]; then
+  docker exec kinopap-postgres psql -U zal -d zal -q -c \
+    "delete from media_sources where files::text like '%http://%';" >/dev/null
+  echo "  кэш ссылок: вычищено протухших записей — \$STALE"
+else
+  echo "  кэш ссылок: чисто"
+fi
+
 # --- веб-сборка: NEXT_PUBLIC_API_URL инлайнится в бандл при билде ---
 # Пустое значение — намеренно: адрес API берётся из origin окна, поэтому один и
 # тот же бандл работает и по http://<ip>, и по https://<имя>.
@@ -178,6 +195,21 @@ if grep -rq "$PUBLIC_URL" apps/web/.next/static/ 2>/dev/null; then
   echo "ЕСТЬ ($PUBLIC_URL в бандле) — на HTTPS-странице запросы заблокируются"
 else
   echo "нет"
+fi
+# И то же в ответе API: ссылки на потоки тоже обязаны быть относительными.
+# Бандл проверки мало — адрес потока приходит из ответа, а не из сборки.
+PAIR=\$(docker exec kinopap-postgres psql -U zal -d zal -tAc \\
+  "select item_id || ':' || id from media order by item_id limit 1;" | tr -d '[:space:]')
+if [ -n "\$PAIR" ]; then
+  BODY=\$(curl -s --max-time 90 "$PUBLIC_URL/v1/items/\${PAIR%%:*}/media-links?mid=\${PAIR##*:}")
+  ABS=\$(printf '%s' "\$BODY" | grep -o 'http://[^"]*' | wc -l | tr -d '[:space:]')
+  FILES=\$(printf '%s' "\$BODY" | grep -o '"quality"' | wc -l | tr -d '[:space:]')
+  echo -n "  ссылки API:       "
+  if [ "\${ABS:-0}" = "0" ]; then
+    echo "относительные (раздач \$FILES)"
+  else
+    echo "АБСОЛЮТНЫХ \$ABS — на HTTPS браузер их заблокирует"
+  fi
 fi
 pm2 ls | grep kinopap
 REMOTE
