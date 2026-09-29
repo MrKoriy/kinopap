@@ -5,7 +5,13 @@
  * refresh сам не прошёл (раньше истёкший access = молчаливый разлогон
  * каждые 15 минут, а UI продолжал показывать живую сессию).
  */
-import { type ApiClient, ApiError, createApiClient, type User } from "@zal/api-client";
+import {
+  type ApiClient,
+  ApiError,
+  createApiClient,
+  createTokenRefresher,
+  type User,
+} from "@zal/api-client";
 import { createSession, type Session, type TokenStorage } from "./session";
 
 export const API_URL = process.env.EXPO_PUBLIC_API_URL ?? "http://localhost:3001";
@@ -18,35 +24,21 @@ export interface MobileApi {
 /** Клиент с хранилищем токенов и refresh-флоу. */
 export function createMobileApi(storage: TokenStorage): MobileApi {
   const session = createSession(storage);
-  let refreshInFlight: Promise<boolean> | null = null;
 
   const api = createApiClient({
     baseUrl: API_URL,
-    onUnauthorized: async () => {
-      const tokens = await session.load();
-      if (!tokens?.refreshToken) {
+    // Политика мобилы: refresh-токен лежит в Keychain, поэтому он идёт в теле
+    // запроса, а обновлённая пара сохраняется обратно. Сам single-flight и
+    // порядок «ротация → новый access → повтор» — в @zal/api-client, общие с
+    // вебом (см. packages/api-client/src/refresh.ts).
+    onUnauthorized: createTokenRefresher(() => api, {
+      loadRefreshToken: async () => (await session.load())?.refreshToken,
+      saveTokens: (tokens) => session.save(tokens),
+      onSessionLost: async () => {
         await session.save(null);
         api.setToken(null);
-        return;
-      }
-      if (!refreshInFlight) {
-        refreshInFlight = (async () => {
-          try {
-            const res = await api.refresh({ refreshToken: tokens.refreshToken });
-            await session.save(res.tokens);
-            api.setToken(res.tokens.accessToken);
-            return true;
-          } catch {
-            await session.save(null);
-            api.setToken(null);
-            return false;
-          } finally {
-            refreshInFlight = null;
-          }
-        })();
-      }
-      await refreshInFlight;
-    },
+      },
+    }),
   });
   return { api, session };
 }

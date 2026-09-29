@@ -3,6 +3,7 @@
 import {
   type ApiClient,
   createApiClient,
+  createTokenRefresher,
   type Tokens,
   type User,
 } from "@zal/api-client";
@@ -50,31 +51,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(null);
     };
 
-    // Single-flight: несколько параллельных 401 дожидаются одного refresh.
-    let refreshInFlight: Promise<boolean> | null = null;
-
+    // Single-flight и порядок «ротация → новый access → повтор» живут в
+    // @zal/api-client: там же они покрыты тестами, и там же ими пользуется
+    // мобила. Здесь остаётся только политика веба — токен в httpOnly-cookie,
+    // поэтому тело запроса ротации пустое, а сохранять нечего.
     const client = createApiClient({
       baseUrl: API_URL,
       // httpOnly-cookie с refresh-токеном ходит с каждым auth-запросом.
       credentials: "include",
-      onUnauthorized: async () => {
-        if (!refreshInFlight) {
-          refreshInFlight = (async () => {
-            try {
-              // Пустое тело: токен в куке.
-              const res = await client.refresh();
-              client.setToken(res.tokens.accessToken);
-              return true;
-            } catch {
-              clearSession();
-              return false;
-            } finally {
-              refreshInFlight = null;
-            }
-          })();
-        }
-        await refreshInFlight;
-      },
+      onUnauthorized: createTokenRefresher(() => client, { onSessionLost: clearSession }),
     });
     return client;
   }, []);

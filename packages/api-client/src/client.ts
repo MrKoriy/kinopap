@@ -89,8 +89,16 @@ export interface ApiClientOptions {
   fetch?: typeof fetch;
   /** Веб: "include" — httpOnly-cookie с refresh-токеном ходит с запросами. */
   credentials?: "include" | "same-origin" | "omit";
-  /** Вызывается при 401 от защищённого запроса — шанс сделать refresh. */
-  onUnauthorized?: () => Promise<void>;
+  /**
+   * Вызывается при 401 от защищённого запроса — шанс сделать refresh.
+   *
+   * `false` означает «сессия кончилась»: повторять запрос не нужно, он всё
+   * равно получит 401, и клиент падает с исходным телом ошибки. `undefined`
+   * (или `true`) сохраняет прежнее поведение — повтор после обработчика,
+   * потому что старый контракт не давал способа сообщить о провале. Готовый
+   * обработчик собирает `createTokenRefresher` из `./refresh`.
+   */
+  onUnauthorized?: () => Promise<boolean | undefined>;
 }
 
 /** CatalogFilters → query-строка (формат API 1.3). */
@@ -157,8 +165,12 @@ export function createApiClient(opts: ApiClientOptions) {
     });
 
     if (res.status === 401 && init.auth && init.retryOn401 !== false && opts.onUnauthorized) {
-      await opts.onUnauthorized();
-      return request(path, schema, { ...init, retryOn401: false });
+      // Явный отказ от повтора экономит запрос: после неудачной ротации второй
+      // заход гарантированно получает тот же 401, и вызывающий ждал бы лишний
+      // круг до сети ради того же ApiError.
+      if ((await opts.onUnauthorized()) !== false) {
+        return request(path, schema, { ...init, retryOn401: false });
+      }
     }
 
     const json: unknown = await res.json().catch(() => ({}));
