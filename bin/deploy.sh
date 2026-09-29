@@ -96,16 +96,21 @@ fi
 
 echo "==> 1/6: релиз $TS — код на сервер"
 ssh "$SERVER" "mkdir -p '$RELEASES_DIR/$TS'"
-# media/ исключён намеренно: это MEDIA_ROOT, рабочий каталог сервера. Локально
-# его нет, и без --exclude rsync --delete вычистил бы оттуда всё залитое.
-# .env исключён тоже: он общий для всех релизов и лежит в $APP_DIR; в релизе
-# появится симлинком (см. шаг 2), иначе docker compose искал бы его в каталоге
-# compose-файла, то есть в релизе.
-# .workbuddy-ai — заметки агента, на сервере не нужны.
+# Ведущий слэш у части шаблонов — не косметика. Без него --exclude совпадает с
+# ЛЮБЫМ компонентом пути, и «--exclude media» выбрасывал из деплоя
+# packages/ingest/src/media/ — probe.ts, assets.ts, ladder.ts, transcode.ts.
+# На старой раскладке это не всплывало: rsync --delete исключённое не удаляет,
+# поэтому файлы просто оставались на сервере с прошлого раза — и отстали на двое
+# суток. Живой API и воркер всё это время импортировали их из /opt/kinopap.
+# Свежий каталог релиза такое не прощает: сборка падает на «Cannot find module».
+# Якорь нужен всему, что про корень репозитория, а не про вложенный каталог с
+# таким же именем: /media, /data, /bin, /.env.
+# Без якоря остаются те, что обязаны совпадать на любой глубине: node_modules,
+# .next, .turbo, .expo, dist, coverage, ios, android и прочий вывод сборки.
 rsync -az --delete \
   --exclude node_modules --exclude .next --exclude .turbo --exclude .expo \
-  --exclude .env --exclude data --exclude bin --exclude .git \
-  --exclude media --exclude .workbuddy-ai \
+  --exclude /.env --exclude /data --exclude /bin --exclude .git \
+  --exclude /media --exclude .workbuddy-ai \
   --exclude test-results --exclude dist-e2e --exclude dist --exclude coverage \
   --exclude ios --exclude android \
   ./ "$SERVER:$RELEASES_DIR/$TS/"
@@ -338,19 +343,46 @@ cd "\$RELEASE"
 # самодостаточен, и «docker compose» руками внутри current ведёт себя так же,
 # как в деплое, а не «работает, пока кто-то помнит про set -a».
 ln -sfn $APP_DIR/.env "\$RELEASE/.env"
-pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -1
+
+# Несобранный релиз убираем за собой: в current он не попал, но это 1.2 ГБ
+# node_modules и .next, а уборка держит три свежих релиза и такую мелочь не
+# заметит — она лежала бы до четвёртого удачного деплоя. Логи не трогаем.
+fail() {
+  echo "ОШИБКА: \$1" >&2
+  rm -rf "\$RELEASE"
+  exit 1
+}
+
+# Вывод пишем в файл, а не в «| tail -N»: при падении хвост нужно показать
+# целиком, а не две строки. Первый же деплой в новой раскладке упал на сборке
+# web, и «tail -2» оставил от диагностики одну строку
+# ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL — настоящая причина (десять «Cannot find
+# module» в packages/ingest/src/media) была видна только при ручном прогоне.
+if ! pnpm install --frozen-lockfile --prefer-offline > /tmp/kinopap-install.log 2>&1; then
+  tail -30 /tmp/kinopap-install.log >&2
+  fail "pnpm install упал (полный лог: /tmp/kinopap-install.log)"
+fi
+tail -1 /tmp/kinopap-install.log
 
 # Миграции обязаны быть аддитивными: до переключения симлинка на этом же коде
 # продолжает работать прежний релиз, и удалённая колонка уронит живой сайт.
 # Обратной совместимости здесь не на чем стоять — её обеспечивает только
 # порядок «сначала добавили, потом убрали в следующем релизе».
-pnpm db:setup 2>&1 | tail -2
+if ! pnpm db:setup > /tmp/kinopap-db-setup.log 2>&1; then
+  tail -30 /tmp/kinopap-db-setup.log >&2
+  fail "миграции/сид упали (полный лог: /tmp/kinopap-db-setup.log)"
+fi
+tail -2 /tmp/kinopap-db-setup.log
 
 # NEXT_PUBLIC_API_URL инлайнится в бандл при билде. Пустое значение — намеренно:
 # адрес API берётся из origin окна, поэтому один и тот же бандл работает и по
 # http://<ip>, и по https://<имя>.
-NEXT_PUBLIC_API_URL="" INTERNAL_API_URL="$API_INTERNAL" \
-  pnpm --filter @zal/web build 2>&1 | tail -2
+if ! NEXT_PUBLIC_API_URL="" INTERNAL_API_URL="$API_INTERNAL" \
+     pnpm --filter @zal/web build > /tmp/kinopap-web-build.log 2>&1; then
+  tail -40 /tmp/kinopap-web-build.log >&2
+  fail "сборка web упала (полный лог: /tmp/kinopap-web-build.log)"
+fi
+tail -2 /tmp/kinopap-web-build.log
 REMOTE
 
 echo "==> 3/6: переключение current и последовательный перезапуск"
@@ -383,6 +415,13 @@ if ! $APP_DIR/bin/restart-apps.sh; then
     $APP_DIR/bin/restart-apps.sh || true
   else
     echo "  предыдущего релиза нет — откатывать некуда" >&2
+    # Это бывает только на первом деплое: старый код ещё лежит в $APP_DIR вместе
+    # со своим ecosystem-файлом (cwd = $APP_DIR). Он и есть путь назад.
+    if [ -f "$APP_DIR/ecosystem.config.cjs" ]; then
+      echo "  прежний код цел в $APP_DIR, вернуть так:" >&2
+      echo "    pm2 delete kinopap-api kinopap-worker kinopap-web" >&2
+      echo "    pm2 start $APP_DIR/ecosystem.config.cjs" >&2
+    fi
   fi
   exit 1
 fi

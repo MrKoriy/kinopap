@@ -615,12 +615,22 @@ const TOP_TITLES: MovieSeed[] = [
   }
 ];
 
+/**
+ * Строка подключения без пароля — для логов. Пароль в выводе деплоя не нужен
+ * никому: лог остаётся на сервере, попадает в переписку и в отчёты.
+ */
+export function redactPassword(url: string): string {
+  return url.replace(/\/\/[^:@/]*:[^@/]*@/, "//***:***@");
+}
+
 export async function seedCatalog() {
   // Дефолт только для локальной разработки; пароль намеренно не боевой.
   const databaseUrl = process.env.DATABASE_URL ?? "postgres://zal:dev@localhost:5432/zal";
   const pool = createPool(databaseUrl);
   const customDb = createDb(pool);
-  console.log("Seeding extensive catalog into", databaseUrl);
+  // Пароль из строки не печатаем: этот вывод уходит в лог деплоя, а лог читают
+  // и люди, и агенты. Раньше в него попадал DATABASE_URL целиком.
+  console.log("Seeding extensive catalog into", redactPassword(databaseUrl));
   if (!TMDB_KEY) {
     console.warn("TMDB_API_KEY не задан: постеры/описания берутся из сид-констант");
   }
