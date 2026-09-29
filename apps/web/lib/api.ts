@@ -43,13 +43,24 @@ export class ApiUnavailableError extends Error {
  *
  * `revalidate: 0` — всегда свежо: media-links (протухшие ссылки из прошлых
  * сборок нельзя отдавать в плеер) и поиск.
+ *
+ * `timeoutMs` — потолок ожидания: повисший API не должен держать
+ * SSR/ISR-рендер бесконечно (у серверного fetch таймаута по умолчанию
+ * нет). Прерывание уходит в тот же ApiUnavailableError, что и обрыв сети.
  */
-async function getJson(path: string, revalidate = 30): Promise<unknown> {
+async function getJson(
+  path: string,
+  revalidate = 30,
+  timeoutMs = 15_000,
+): Promise<unknown> {
+  const signal = AbortSignal.timeout(timeoutMs);
   let res: Response;
   try {
     res = await fetch(
       `${API_BASE}${path}`,
-      revalidate > 0 ? { next: { revalidate } } : { cache: "no-store" },
+      revalidate > 0
+        ? { next: { revalidate }, signal }
+        : { cache: "no-store", signal },
     );
   } catch {
     throw new ApiUnavailableError(0, path);
@@ -158,14 +169,16 @@ export async function fetchSimilar(id: number): Promise<ItemPage> {
   );
 }
 
-/** null — пары item/media нет (404). Сбой — исключение. */
+/** null — пары item/media нет (404). Сбой — исключение. Холодный резолв
+ *  ходит в rutor/AniLibria/TorrServer и может занять десятки секунд —
+ *  таймаут здесь щедрее дефолтного. */
 export async function fetchMediaLinks(
   itemId: number,
   mediaId: number,
 ): Promise<MediaLinks | null> {
   try {
     return mediaLinksSchema.parse(
-      await getJson(`/v1/items/${itemId}/media-links${qs({ mid: mediaId })}`, 0),
+      await getJson(`/v1/items/${itemId}/media-links${qs({ mid: mediaId })}`, 0, 45_000),
     );
   } catch (err) {
     if (err instanceof ApiUnavailableError && err.status === 404) return null;

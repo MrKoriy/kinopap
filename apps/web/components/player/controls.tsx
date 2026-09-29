@@ -25,7 +25,6 @@ export interface EpisodeGroupOption {
 
 export interface PlayerControlsProps {
   playing: boolean;
-  currentTime: number;
   duration: number;
   /**
    * Уже скачанные отрезки в долях длительности (0 — начало, 1 — конец).
@@ -67,6 +66,18 @@ export interface PlayerControlsProps {
   onFullscreen(): void;
 }
 
+/**
+ * Текущая позиция воспроизведения. Обновляется ~4 раза в секунду от
+ * timeupdate, поэтому живёт в контексте, а не в props: мемоизированное
+ * дерево контролов не ререндерится целиком — подписаны только seek-бар
+ * и счётчик времени.
+ */
+export const PlayerTimeContext = React.createContext(0);
+
+export function usePlayerTime(): number {
+  return React.useContext(PlayerTimeContext);
+}
+
 /** Контекст закрытия меню: MenuItem закрывает, служебные кнопки (сдвиг) — нет. */
 const MenuCloseContext = React.createContext<() => void>(() => {});
 
@@ -79,6 +90,198 @@ const MenuCloseContext = React.createContext<() => void>(() => {});
  * заплатить эту цену ни за что.
  */
 const SEEK_EPSILON_SECONDS = 2;
+
+/** Seek-бар со спрайт-превью. Единственный подписчик 4Гц-потока времени
+ * (плюс TimeLabel) — остальное дерево контролов от него изолировано. */
+function Seekbar({
+  duration,
+  buffered,
+  sprites,
+  spriteUrl,
+  scrubPreview,
+  onScrubTime,
+  onSeek,
+}: {
+  duration: number;
+  buffered?: BufferedSegment[];
+  sprites: SpriteMetaDto | null;
+  spriteUrl: string | null;
+  scrubPreview?: React.ReactNode;
+  onScrubTime?(time: number | null): void;
+  onSeek(time: number): void;
+}) {
+  const currentTime = usePlayerTime();
+
+  const barRef = React.useRef<HTMLDivElement | null>(null);
+  const [hoverTime, setHoverTime] = React.useState<number | null>(null);
+  const [hoverX, setHoverX] = React.useState(0);
+  // Позиция под указателем во время перетаскивания. Пока она есть, полоса
+  // рисуется по ней, а не по текущему времени: пользователь должен видеть,
+  // куда отпустит, ещё до того как отпустил.
+  const [dragTime, setDragTime] = React.useState<number | null>(null);
+
+  const dragging = dragTime != null;
+  const displayTime = dragTime ?? currentTime;
+  const ratio = duration > 0 ? displayTime / duration : 0;
+
+  /** Время под указателем или null, если длительность ещё неизвестна. */
+  const timeAt = (clientX: number): number | null => {
+    const bar = barRef.current;
+    if (!bar || !duration) return null;
+    const rect = bar.getBoundingClientRect();
+    const r = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return r * duration;
+  };
+
+  // Указатель, а не мышь: полоса должна одинаково работать и пальцем. На
+  // touch-экране mouse-событий нет вовсе, поэтому превью кадра и позиция под
+  // пальцем раньше просто не появлялись — работал один onClick.
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const bar = barRef.current;
+    const t = timeAt(e.clientX);
+    if (!bar || t == null) return;
+    setHoverTime(t);
+    setHoverX(e.clientX - bar.getBoundingClientRect().left);
+    onScrubTime?.(t);
+    if (dragging) setDragTime(t);
+  };
+
+  const onPointerLeave = () => {
+    // Во время перетаскивания превью не убираем: с захватом указателя
+    // pointerleave приходит, едва курсор уйдёт за полосу, а перетаскивание
+    // продолжается — и превью исчезло бы на середине жеста.
+    if (dragging) return;
+    setHoverTime(null);
+    onScrubTime?.(null);
+  };
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const t = timeAt(e.clientX);
+    if (t == null) return;
+    const bar = e.currentTarget;
+    // Захват указателя: без него pointermove перестаёт приходить, стоит увести
+    // курсор за пределы полосы, и перетаскивание обрывается на полпути.
+    // Проверка на наличие метода — jsdom, в котором идут тесты, его не имеет.
+    if (typeof bar.setPointerCapture === "function") {
+      bar.setPointerCapture(e.pointerId);
+    }
+    setDragTime(t);
+    setHoverTime(t);
+    onScrubTime?.(t);
+  };
+
+  const endDrag = (clientX: number, commit: boolean) => {
+    setDragTime(null);
+    setHoverTime(null);
+    onScrubTime?.(null);
+    if (!commit) return;
+    const t = timeAt(clientX);
+    if (t == null) return;
+    // Перемотка на торрент-стриме дорога: она рвёт текущую загрузку и заново
+    // поднимает gst. Отпустить ползунок там же, где он и был, — не повод
+    // платить за это.
+    if (Math.abs(t - currentTime) < SEEK_EPSILON_SECONDS) return;
+    onSeek(t);
+  };
+
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const bar = e.currentTarget;
+    if (
+      typeof bar.hasPointerCapture === "function" &&
+      bar.hasPointerCapture(e.pointerId)
+    ) {
+      bar.releasePointerCapture(e.pointerId);
+    }
+    endDrag(e.clientX, true);
+  };
+
+  // Жест отменён системой (жест назад, звонок) — перематывать не за что.
+  const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    endDrag(e.clientX, false);
+  };
+
+  const tile =
+    hoverTime != null && sprites
+      ? spriteTileScaledFor(hoverTime, sprites, 192, 108)
+      : null;
+
+  return (
+    <div
+      ref={barRef}
+      className="group relative mb-2 h-1.5 cursor-pointer rounded-full bg-white/20"
+      onPointerMove={onPointerMove}
+      onPointerLeave={onPointerLeave}
+      onPointerDown={onPointerDown}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerCancel}
+      data-testid="seekbar"
+    >
+      {/* Буфер: что уже скачано. Под полосой прогресса и над фоном, поэтому
+          виден только впереди неё — как на YouTube. pointer-events-none
+          обязателен: иначе сегменты перехватывают нажатие, и перетаскивание
+          срывается ровно там, где буфер есть, то есть почти всегда. */}
+      {(buffered ?? []).map((seg) => (
+        <div
+          key={`${seg.start}-${seg.end}`}
+          className="pointer-events-none absolute inset-y-0 bg-white/40"
+          style={{
+            left: `${seg.start * 100}%`,
+            width: `${(seg.end - seg.start) * 100}%`,
+          }}
+          data-testid="buffer-segment"
+          data-start={seg.start}
+          data-end={seg.end}
+        />
+      ))}
+      <div
+        className="absolute inset-y-0 left-0 rounded-full bg-accent"
+        style={{ width: `${ratio * 100}%` }}
+        data-testid="seek-progress"
+      />
+      <div
+        className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white opacity-0 transition group-hover:opacity-100"
+        style={{ left: `${ratio * 100}%` }}
+      />
+
+      {/* Превью кадра под курсором */}
+      {hoverTime != null && (
+        <div
+          className="pointer-events-none absolute bottom-full mb-3 -translate-x-1/2 rounded-lg border border-border bg-black p-1"
+          style={{ left: Math.max(48, Math.min(hoverX, (barRef.current?.clientWidth ?? 0) - 48)) }}
+          data-testid="scrub-preview"
+        >
+          {tile && spriteUrl ? (
+            <div
+              className="h-[108px] w-[192px] rounded"
+              style={{
+                backgroundImage: `url(${spriteUrl})`,
+                backgroundPosition: tile.backgroundPosition,
+                backgroundSize: tile.backgroundSize,
+              }}
+            />
+          ) : scrubPreview ? (
+            <div className="h-[108px] w-[192px] overflow-hidden rounded">
+              {scrubPreview}
+            </div>
+          ) : (
+            <div className="h-[108px] w-[192px] rounded bg-surface-2" />
+          )}
+          <p className="mt-1 text-center text-xs text-white">{formatDuration(hoverTime)}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Счётчик времени: второй подписчик 4Гц-потока. */
+function TimeLabel({ duration }: { duration: number }) {
+  const currentTime = usePlayerTime();
+  return (
+    <span className="w-28 text-xs tabular-nums text-white/80">
+      {formatDuration(currentTime)} / {formatDuration(duration)}
+    </span>
+  );
+}
 
 function Menu({
   label,
@@ -215,7 +418,10 @@ function EpisodesMenu({
               <button
                 key={e.mediaId}
                 type="button"
-                className={`block w-full rounded-lg px-3 py-2 text-left text-sm transition ${
+                // Сериалы бывают по 1600 серий: content-visibility выкидывает
+                // кнопки вне вьюпорта из layout/paint, иначе открытое меню
+                // монтирует их все разом.
+                className={`block w-full rounded-lg px-3 py-2 text-left text-sm transition [contain-intrinsic-size:auto_40px] [content-visibility:auto] ${
                   e.mediaId === activeMediaId
                     ? "bg-accent text-white"
                     : "text-white/80 hover:bg-white/10"
@@ -239,10 +445,14 @@ function EpisodesMenu({
   );
 }
 
-export function PlayerControls(props: PlayerControlsProps) {
+/**
+ * Контрол-бар. Мемоизирован: перерисовывается только на смену состояния
+ * (пауз/громкость/меню/смена дорожек), но не на 4Гц-тик timeupdate —
+ * позиция въезжает через PlayerTimeContext только в Seekbar и TimeLabel.
+ */
+export const PlayerControls = React.memo(function PlayerControls(props: PlayerControlsProps) {
   const {
     playing,
-    currentTime,
     duration,
     volume,
     muted,
@@ -258,18 +468,6 @@ export function PlayerControls(props: PlayerControlsProps) {
     isFullscreen,
   } = props;
 
-  const barRef = React.useRef<HTMLDivElement | null>(null);
-  const [hoverTime, setHoverTime] = React.useState<number | null>(null);
-  const [hoverX, setHoverX] = React.useState(0);
-  // Позиция под указателем во время перетаскивания. Пока она есть, полоса
-  // рисуется по ней, а не по текущему времени: пользователь должен видеть,
-  // куда отпустит, ещё до того как отпустил.
-  const [dragTime, setDragTime] = React.useState<number | null>(null);
-
-  const dragging = dragTime != null;
-  const displayTime = dragTime ?? currentTime;
-  const ratio = duration > 0 ? displayTime / duration : 0;
-
   // У фильма с единственной частью выбирать нечего: меню показываем только
   // когда серий действительно больше одной.
   const episodeCount = (props.episodeGroups ?? []).reduce(
@@ -277,154 +475,18 @@ export function PlayerControls(props: PlayerControlsProps) {
     0,
   );
 
-  /** Время под указателем или null, если длительность ещё неизвестна. */
-  const timeAt = (clientX: number): number | null => {
-    const bar = barRef.current;
-    if (!bar || !duration) return null;
-    const rect = bar.getBoundingClientRect();
-    const r = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    return r * duration;
-  };
-
-  // Указатель, а не мышь: полоса должна одинаково работать и пальцем. На
-  // touch-экране mouse-событий нет вовсе, поэтому превью кадра и позиция под
-  // пальцем раньше просто не появлялись — работал один onClick.
-  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-    const bar = barRef.current;
-    const t = timeAt(e.clientX);
-    if (!bar || t == null) return;
-    setHoverTime(t);
-    setHoverX(e.clientX - bar.getBoundingClientRect().left);
-    props.onScrubTime?.(t);
-    if (dragging) setDragTime(t);
-  };
-
-  const onPointerLeave = () => {
-    // Во время перетаскивания превью не убираем: с захватом указателя
-    // pointerleave приходит, едва курсор уйдёт за полосу, а перетаскивание
-    // продолжается — и превью исчезло бы на середине жеста.
-    if (dragging) return;
-    setHoverTime(null);
-    props.onScrubTime?.(null);
-  };
-
-  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    const t = timeAt(e.clientX);
-    if (t == null) return;
-    const bar = e.currentTarget;
-    // Захват указателя: без него pointermove перестаёт приходить, стоит увести
-    // курсор за пределы полосы, и перетаскивание обрывается на полпути.
-    // Проверка на наличие метода — jsdom, в котором идут тесты, его не имеет.
-    if (typeof bar.setPointerCapture === "function") {
-      bar.setPointerCapture(e.pointerId);
-    }
-    setDragTime(t);
-    setHoverTime(t);
-    props.onScrubTime?.(t);
-  };
-
-  const endDrag = (clientX: number, commit: boolean) => {
-    setDragTime(null);
-    setHoverTime(null);
-    props.onScrubTime?.(null);
-    if (!commit) return;
-    const t = timeAt(clientX);
-    if (t == null) return;
-    // Перемотка на торрент-стриме дорога: она рвёт текущую загрузку и заново
-    // поднимает gst. Отпустить ползунок там же, где он и был, — не повод
-    // платить за это.
-    if (Math.abs(t - currentTime) < SEEK_EPSILON_SECONDS) return;
-    props.onSeek(t);
-  };
-
-  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
-    const bar = e.currentTarget;
-    if (
-      typeof bar.hasPointerCapture === "function" &&
-      bar.hasPointerCapture(e.pointerId)
-    ) {
-      bar.releasePointerCapture(e.pointerId);
-    }
-    endDrag(e.clientX, true);
-  };
-
-  // Жест отменён системой (жест назад, звонок) — перематывать не за что.
-  const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
-    endDrag(e.clientX, false);
-  };
-
-  const tile =
-    hoverTime != null && sprites
-      ? spriteTileScaledFor(hoverTime, sprites, 192, 108)
-      : null;
-
   return (
     <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/95 via-black/60 to-transparent px-4 pb-3 pt-12">
       {/* Seek-бар со спрайт-превью */}
-      <div
-        ref={barRef}
-        className="group relative mb-2 h-1.5 cursor-pointer rounded-full bg-white/20"
-        onPointerMove={onPointerMove}
-        onPointerLeave={onPointerLeave}
-        onPointerDown={onPointerDown}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerCancel}
-        data-testid="seekbar"
-      >
-        {/* Буфер: что уже скачано. Под полосой прогресса и над фоном, поэтому
-            виден только впереди неё — как на YouTube. pointer-events-none
-            обязателен: иначе сегменты перехватывают нажатие, и перетаскивание
-            срывается ровно там, где буфер есть, то есть почти всегда. */}
-        {(props.buffered ?? []).map((seg) => (
-          <div
-            key={`${seg.start}-${seg.end}`}
-            className="pointer-events-none absolute inset-y-0 bg-white/40"
-            style={{
-              left: `${seg.start * 100}%`,
-              width: `${(seg.end - seg.start) * 100}%`,
-            }}
-            data-testid="buffer-segment"
-            data-start={seg.start}
-            data-end={seg.end}
-          />
-        ))}
-        <div
-          className="absolute inset-y-0 left-0 rounded-full bg-accent"
-          style={{ width: `${ratio * 100}%` }}
-          data-testid="seek-progress"
-        />
-        <div
-          className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white opacity-0 transition group-hover:opacity-100"
-          style={{ left: `${ratio * 100}%` }}
-        />
-
-        {/* Превью кадра под курсором */}
-        {hoverTime != null && (
-          <div
-            className="pointer-events-none absolute bottom-full mb-3 -translate-x-1/2 rounded-lg border border-border bg-black p-1"
-            style={{ left: Math.max(48, Math.min(hoverX, (barRef.current?.clientWidth ?? 0) - 48)) }}
-            data-testid="scrub-preview"
-          >
-            {tile && spriteUrl ? (
-              <div
-                className="h-[108px] w-[192px] rounded"
-                style={{
-                  backgroundImage: `url(${spriteUrl})`,
-                  backgroundPosition: tile.backgroundPosition,
-                  backgroundSize: tile.backgroundSize,
-                }}
-              />
-            ) : props.scrubPreview ? (
-              <div className="h-[108px] w-[192px] overflow-hidden rounded">
-                {props.scrubPreview}
-              </div>
-            ) : (
-              <div className="h-[108px] w-[192px] rounded bg-surface-2" />
-            )}
-            <p className="mt-1 text-center text-xs text-white">{formatDuration(hoverTime)}</p>
-          </div>
-        )}
-      </div>
+      <Seekbar
+        duration={duration}
+        buffered={props.buffered}
+        sprites={sprites}
+        spriteUrl={spriteUrl}
+        scrubPreview={props.scrubPreview}
+        onScrubTime={props.onScrubTime}
+        onSeek={props.onSeek}
+      />
 
       <div className="flex items-center gap-2 text-white">
         <button
@@ -446,9 +508,7 @@ export function PlayerControls(props: PlayerControlsProps) {
           )}
         </button>
 
-        <span className="w-28 text-xs tabular-nums text-white/80">
-          {formatDuration(currentTime)} / {formatDuration(duration)}
-        </span>
+        <TimeLabel duration={duration} />
 
         {/* Громкость */}
         <div className="flex items-center gap-1.5">
@@ -610,4 +670,4 @@ export function PlayerControls(props: PlayerControlsProps) {
       </div>
     </div>
   );
-}
+});

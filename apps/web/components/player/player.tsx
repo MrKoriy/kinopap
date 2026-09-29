@@ -1,6 +1,7 @@
 "use client";
 
 import type { AudioTrack, MediaLinks, SpriteMetaDto } from "@zal/api-client";
+import { pollMediaTracks } from "@zal/shared";
 import type HlsJs from "hls.js";
 import { useRouter } from "next/navigation";
 /**
@@ -25,7 +26,7 @@ import {
   type PlayerEpisodeGroup,
   resolveStreamUrl,
 } from "@/lib/player-logic";
-import { PlayerControls } from "./controls";
+import { PlayerControls, PlayerTimeContext } from "./controls";
 import {
   useBufferedRanges,
   usePlayerHotkeys,
@@ -42,6 +43,7 @@ import {
   SubtitleOverlay,
   UnmuteOverlay,
 } from "./overlays";
+import { useStreamSetup } from "./stream-init";
 
 export interface PlayerProps {
   links: MediaLinks;
@@ -146,37 +148,13 @@ export function Player({
   React.useEffect(() => {
     // У ингест-тайтлов дорожки уже в media-links — второй раз не спрашиваем.
     if (links.audios.length > 0 || lazyAudios.length > 0) return;
-    let cancelled = false;
-    let attempt = 0;
-    let timer = 0;
-
-    const load = () => {
-      void (async () => {
-        try {
-          const res = await api.getMediaTracks(links.itemId, links.mediaId);
-          if (cancelled) return;
-          if (res.audios.length > 0) {
-            setLazyAudios(res.audios);
-            return;
-          }
-        } catch {
-          // Фоновая дорожка: сбой не должен дёргать уже играющий плеер.
-        }
-        // Прогрев ещё едет — пробуем ещё пару раз, потом сдаёмся.
-        if (!cancelled && attempt < 2) {
-          attempt += 1;
-          timer = window.setTimeout(load, 8_000);
-        }
-      })();
-    };
-
-    // Ставим после старта воспроизведения: gst-проба читает ту же голову
-    // файла, что и первый сегмент, и не должна с ним конкурировать.
-    timer = window.setTimeout(load, 4_000);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
+    // Лестница таймингов общая с мобильным клиентом (@zal/shared):
+    // 4с до первой пробы (gst читает ту же голову файла, что и первый
+    // сегмент) → 2 ретрая с шагом 8с, пока прогрев едет.
+    return pollMediaTracks(
+      () => api.getMediaTracks(links.itemId, links.mediaId),
+      (audios) => setLazyAudios(audios),
+    );
   }, [api, lazyAudios.length, links.audios.length, links.itemId, links.mediaId]);
 
   /* ---------- Автозапуск: играем сами, звук — если браузер разрешит ---------- */
@@ -298,142 +276,23 @@ export function Player({
     setSourceEpoch((n) => n + 1);
   }, []);
 
-  React.useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !streamUrl) return;
-
-    // sourceEpoch — ручной триггер «Попробовать снова»: индекс раздачи при этом
-    // может не измениться, поэтому эффект слушает и его. Читаем явно, иначе
-    // линтер считает зависимость лишней.
-    void sourceEpoch;
-
-    setError(null);
-    setIsBuffering(true);
-    gstRetryRef.current = 0;
-
-    const isHls = !directFallback && (streamUrl.includes(".m3u8") || Boolean(activeFile?.urls.hls));
-    // MSE доступен → грузим hls.js динамически; нативный HLS (iOS Safari)
-    // играет напрямую, не скачивая ~150КБ библиотеки.
-    const canMse = typeof MediaSource !== "undefined";
-
-    let cancelled = false;
-    let hls: HlsJs | null = null;
-
-    void (async () => {
-      if (isHls && canMse) {
-        const { default: Hls } = await import("hls.js");
-        if (cancelled) return;
-        hls = new Hls({
-          enableWorker: true,
-          // Буфер: цель — 90 секунд вперёд, потолок — 5 минут, назад минута.
-          //
-          // Раньше здесь стояло 30/120, а комментарий обещал «вперёд до 2
-          // минут» — то есть числа и текст противоречили друг другу, и прав
-          // был код. Для торрент-раздачи 30 секунд мало: скорость прихода
-          // сегментов плавает вместе с сидами, и короткий буфер выбирается
-          // в ноль на каждом провале канала — плеер встаёт на «буферизацию».
-          // 90 секунд покрывают такие провалы, а потолок в 5 минут нужен,
-          // чтобы на быстром канале hls.js не растягивал буфер бесконечно:
-          // это память и лишний трафик вперёд по фильму.
-          maxBufferLength: 90,
-          maxMaxBufferLength: 300,
-          backBufferLength: 60,
-          // Оптимистичная стартовая оценка канала (4 Мбит/с) — иначе ABR
-          // после старта держит 480p и повышает качество медленно.
-          abrEwmaDefaultEstimate: 4_000_000,
-          // Старт без зонда канала: тянем первый фрагмент сразу, а не ждём
-          // замера скорости — на торрент-стриме это экономит секунды.
-          startFragPrefetch: true,
-          testBandwidth: false,
-        });
-        hlsRef.current = hls;
-        hls.loadSource(streamUrl);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-          setIsBuffering(false);
-          // Манифест готов — можно играть (резюме доведёт позицию после ответа API).
-          tryAutoplayRef.current();
-          // После смены качества дорожка сбрасывается на дефолтную —
-          // восстанавливаем выбранную пользователем.
-          if (hls && hls.audioTracks.length > 1 && activeAudioRef.current > 0) {
-            hls.audioTrack = activeAudioRef.current;
-          }
-          // Встроенные субтитры gst-HLS: треков с прямыми VTT-урлами нет,
-          // подменяем список дорожек манифеста и включаем выбранную.
-          if (hls && hls.subtitleTracks.length > 0) {
-            setSubtitles((cur) => {
-              if (cur.some((t) => t.url != null)) return cur;
-              return hls!.subtitleTracks.map((t, i) => ({
-                index: i,
-                label: t.name || t.lang?.toUpperCase() || `Трек ${i + 1}`,
-                url: null,
-                cues: [],
-              }));
-            });
-            if (activeSubtitleRef.current != null && hls.subtitleTracks[activeSubtitleRef.current]) {
-              hls.subtitleTrack = activeSubtitleRef.current;
-            }
-          }
-        });
-        hls.on(Hls.Events.ERROR, (_e, data) => {
-          if (!data.fatal || !hls) return;
-          // Транзиентные сбои — норма для торрента-стрима: один блып не должен
-          // вешать плеер до перезагрузки страницы.
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            // Манифест недоступен (gst-транскодер не успел прогреть торрент) —
-            // даём ему пару ретраев с паузой, потом падаем на прямой стрим.
-            const manifestGone =
-              data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
-              data.details === Hls.ErrorDetails.MANIFEST_LOAD_TIMEOUT ||
-              data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR;
-            if (manifestGone) {
-              gstRetryRef.current += 1;
-              if (gstRetryRef.current <= 2) {
-                setIsBuffering(true);
-                // Первый ретрай скоро (тёплый торрент уже есть в кэше),
-                // второй позже — холодным пиром нужно время на подключение.
-                const delay = gstRetryRef.current === 1 ? 2_000 : 4_000;
-                window.setTimeout(() => {
-                  if (hls && hlsRef.current === hls) hls.loadSource(streamUrl);
-                }, delay);
-                return;
-              }
-              if (!directFallback && activeFile?.urls.http) {
-                setDirectFallback(true);
-                return;
-              }
-              // gst не собрал манифест и прямого стрима нет либо он уже не
-              // сработал — раздача мёртвая, берём следующую. Раньше здесь был
-              // hls.startLoad(), то есть бесконечный перезаход в тот же URL.
-              abandonRef.current();
-              return;
-            }
-            hls.startLoad();
-            return;
-          }
-          if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-            hls.recoverMediaError();
-            return;
-          }
-          setIsBuffering(false);
-          setError(`Ошибка воспроизведения HLS: ${data.details}`);
-        });
-        return;
-      }
-
-      // Safari или прямой HTTP Range-стрим (TorrServer / MP4)
-      video.src = streamUrl;
-      video.load();
-      tryAutoplayRef.current();
-    })();
-
-    return () => {
-      cancelled = true;
-      hls?.destroy();
-      hlsRef.current = null;
-      video.removeAttribute("src");
-    };
-  }, [streamUrl, activeFile, directFallback, sourceEpoch, setSubtitles]);
+  useStreamSetup({
+    videoRef,
+    hlsRef,
+    streamUrl,
+    activeFile,
+    directFallback,
+    sourceEpoch,
+    setError,
+    setIsBuffering,
+    setDirectFallback,
+    setSubtitles,
+    gstRetryRef,
+    tryAutoplayRef,
+    activeAudioRef,
+    activeSubtitleRef,
+    abandonRef,
+  });
 
   /* ---------- События видео ---------- */
   React.useEffect(() => {
@@ -674,16 +533,33 @@ export function Player({
   });
 
   /* ---------- Автоскрытие контролов ---------- */
-  // Раньше currentTime был в deps: таймаут пересоздавался на каждом
-  // timeupdate (~4 раза в секунду) и никогда не срабатывал.
+  // Таймер взводится при каждом показе контролов. Раньше deps был только
+  // [playing]: таймаут ставился один раз на переход play, и после первого
+  // скрытия mousemove показывал контролы уже навсегда. Заодно клик мыши
+  // в момент t=2.9s перевзводит таймер, а не прячет контролы через 0.1s.
+  const hideTimerRef = React.useRef<number | null>(null);
+  const clearHideTimer = React.useCallback(() => {
+    if (hideTimerRef.current !== null) {
+      window.clearTimeout(hideTimerRef.current);
+      hideTimerRef.current = null;
+    }
+  }, []);
+  const armHideTimer = React.useCallback(() => {
+    clearHideTimer();
+    hideTimerRef.current = window.setTimeout(() => {
+      setControlsVisible(false);
+    }, 3000);
+  }, [clearHideTimer]);
+
   React.useEffect(() => {
     if (!playing) {
+      clearHideTimer();
       setControlsVisible(true);
       return;
     }
-    const id = window.setTimeout(() => setControlsVisible(false), 3000);
-    return () => window.clearTimeout(id);
-  }, [playing]);
+    armHideTimer();
+    return clearHideTimer;
+  }, [playing, armHideTimer, clearHideTimer]);
 
   React.useEffect(() => {
     const onFs = () => setIsFullscreen(!!document.fullscreenElement);
@@ -698,16 +574,22 @@ export function Player({
     onScrubTime: handleScrubTime,
   } = useScrubPreview(sprites, activeFile);
 
-  const scrubPreview = previewSrc ? (
-    <video
-      ref={previewVideoRef}
-      src={previewSrc}
-      muted
-      playsInline
-      preload="metadata"
-      className="h-full w-full object-cover"
-    />
-  ) : null;
+  // Мемоизация: эти пропсы идут в React.memo(PlayerControls) — без неё
+  // свежие массивы/ноды на каждом ререндере сводили мемоизацию на нет.
+  const scrubPreview = React.useMemo(
+    () =>
+      previewSrc ? (
+        <video
+          ref={previewVideoRef}
+          src={previewSrc}
+          muted
+          playsInline
+          preload="metadata"
+          className="h-full w-full object-cover"
+        />
+      ) : null,
+    [previewSrc, previewVideoRef],
+  );
 
   const activeCueList = activeCues(cues, currentTime, shiftMs);
   const introVisible = isIntroVisible(currentTime, links.intro);
@@ -717,11 +599,38 @@ export function Player({
   // относительный путь бесполезен — там нужен полный адрес.
   const externalStreamUrl = absoluteStreamUrl(streamUrl);
 
+  // Опции для контролов — стабильные массивы под React.memo.
+  const audioTrackOptions = React.useMemo(
+    () =>
+      audios.map((a, i) => ({
+        index: i,
+        label: `${a.type.toUpperCase()}${a.author.title ? ` · ${a.author.title}` : ""} (${a.lang})`,
+      })),
+    [audios],
+  );
+  const subtitleOptions = React.useMemo(
+    () => subtitles.map((s) => ({ index: s.index, label: s.label })),
+    [subtitles],
+  );
+  const qualityOptions = React.useMemo(
+    () =>
+      links.files.map((f, i) => ({
+        index: i,
+        // Помечаем уже отброшенные раздачи, чтобы выбор качества не был
+        // лотереей: пользователь видит, какие не заиграли, и не тыкает в них.
+        label: deadFiles.includes(i) ? `${f.quality} · не заиграла` : f.quality,
+      })),
+    [links.files, deadFiles],
+  );
+
   return (
     <div
       ref={containerRef}
       className="relative w-full overflow-hidden rounded-[var(--radius-card)] bg-black select-none"
-      onMouseMove={() => setControlsVisible(true)}
+      onMouseMove={() => {
+        setControlsVisible(true);
+        if (playing) armHideTimer();
+      }}
       data-testid="player"
     >
       <video
@@ -774,49 +683,44 @@ export function Player({
       )}
 
       <div className={controlsVisible ? "block" : "hidden"}>
-        <PlayerControls
-          playing={playing}
-          currentTime={currentTime}
-          duration={duration}
-          buffered={buffered}
-          volume={volume}
-          muted={muted}
-          playbackRate={playbackRate}
-          speeds={SPEEDS}
-          shiftMs={shiftMs}
-          audioTracks={audios.map((a, i) => ({
-            index: i,
-            label: `${a.type.toUpperCase()}${a.author.title ? ` · ${a.author.title}` : ""} (${a.lang})`,
-          }))}
-          activeAudio={activeAudio}
-          subtitles={subtitles.map((s) => ({ index: s.index, label: s.label }))}
-          activeSubtitle={activeSubtitle}
-          qualities={links.files.map((f, i) => ({
-            index: i,
-            // Помечаем уже отброшенные раздачи, чтобы выбор качества не был
-            // лотереей: пользователь видит, какие не заиграли, и не тыкает в них.
-            label: deadFiles.includes(i) ? `${f.quality} · не заиграла` : f.quality,
-          }))}
-          activeQuality={activeFileIndex}
-          onQuality={changeQuality}
-          episodeGroups={episodeGroups}
-          activeEpisode={currentMediaId}
-          onEpisode={changeEpisode}
-          sprites={sprites}
-          spriteUrl={sprites?.url ?? null}
-          scrubPreview={scrubPreview}
-          onScrubTime={handleScrubTime}
-          isFullscreen={isFullscreen}
-          onTogglePlay={togglePlay}
-          onSeek={seek}
-          onVolume={changeVolume}
-          onRate={changeRate}
-          onAudio={changeAudio}
-          onSubtitle={changeSubtitle}
-          onShift={(delta) => setShiftMs((s) => s + delta)}
-          onPip={() => void togglePip()}
-          onFullscreen={() => void toggleFullscreen()}
-        />
+        {/* Позиция въезжает контекстом: 4Гц-тик timeupdate перерисовывает
+            только Seekbar и TimeLabel внутри мемоизированных контролов. */}
+        <PlayerTimeContext.Provider value={currentTime}>
+          <PlayerControls
+            playing={playing}
+            duration={duration}
+            buffered={buffered}
+            volume={volume}
+            muted={muted}
+            playbackRate={playbackRate}
+            speeds={SPEEDS}
+            shiftMs={shiftMs}
+            audioTracks={audioTrackOptions}
+            activeAudio={activeAudio}
+            subtitles={subtitleOptions}
+            activeSubtitle={activeSubtitle}
+            qualities={qualityOptions}
+            activeQuality={activeFileIndex}
+            onQuality={changeQuality}
+            episodeGroups={episodeGroups}
+            activeEpisode={currentMediaId}
+            onEpisode={changeEpisode}
+            sprites={sprites}
+            spriteUrl={sprites?.url ?? null}
+            scrubPreview={scrubPreview}
+            onScrubTime={handleScrubTime}
+            isFullscreen={isFullscreen}
+            onTogglePlay={togglePlay}
+            onSeek={seek}
+            onVolume={changeVolume}
+            onRate={changeRate}
+            onAudio={changeAudio}
+            onSubtitle={changeSubtitle}
+            onShift={shiftSubtitles}
+            onPip={() => void togglePip()}
+            onFullscreen={() => void toggleFullscreen()}
+          />
+        </PlayerTimeContext.Provider>
       </div>
     </div>
   );

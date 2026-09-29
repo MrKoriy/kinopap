@@ -12,6 +12,7 @@ import { Player } from "@/components/player/player";
 import { useAuth } from "@/lib/auth";
 import {
   absoluteStreamUrl,
+  externalPlayerLinks,
   nextEpisode,
   type PlayerEpisodeGroup,
 } from "@/lib/player-logic";
@@ -181,13 +182,13 @@ export function WatchClient({
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <a
-                href={`iina://weblink?url=${encodeURIComponent(externalStreamUrl)}`}
+                href={externalPlayerLinks(externalStreamUrl).iina}
                 className="rounded-full bg-accent px-4 py-2 text-xs font-semibold text-white transition hover:bg-accent-hover"
               >
                 Открыть в IINA (Mac)
               </a>
               <a
-                href={`vlc://${externalStreamUrl}`}
+                href={externalPlayerLinks(externalStreamUrl).vlc}
                 className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-xs font-semibold text-white transition hover:bg-white/10"
               >
                 Открыть в VLC

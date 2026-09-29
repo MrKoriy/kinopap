@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { fetchItem } from "@/lib/api";
@@ -7,6 +8,20 @@ import { WatchClient } from "./watch-client";
 // Страница просмотра всегда свежая: item рендерим сразу, media-links
 // клиент тянет сам (zero-storage резолв может занимать до ~10 секунд).
 export const dynamic = "force-dynamic";
+
+/** Плеер не индексируем: контент стриминга за логином. */
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ itemId: string; mediaId: string }>;
+}): Promise<Metadata> {
+  const { itemId } = await params;
+  const item = await fetchItem(Number(itemId));
+  return {
+    title: `${item?.title ?? "Просмотр"} — смотреть — Зал`,
+    robots: { index: false },
+  };
+}
 
 /** Страница просмотра: плеер с выбором серии и переходом к следующей. */
 export default async function WatchPage({

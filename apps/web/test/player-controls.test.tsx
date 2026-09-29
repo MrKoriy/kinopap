@@ -4,6 +4,7 @@ import {
   type EpisodeGroupOption,
   PlayerControls,
   type PlayerControlsProps,
+  PlayerTimeContext,
 } from "@/components/player/controls";
 
 afterEach(cleanup);
@@ -11,7 +12,6 @@ afterEach(cleanup);
 function base(over: Partial<PlayerControlsProps> = {}): PlayerControlsProps {
   return {
     playing: false,
-    currentTime: 0,
     duration: 100,
     volume: 1,
     muted: false,
@@ -38,6 +38,15 @@ function base(over: Partial<PlayerControlsProps> = {}): PlayerControlsProps {
   };
 }
 
+/** Контролы без прямого prop currentTime — позиция въезжает контекстом. */
+function renderControls(props: PlayerControlsProps, currentTime = 0) {
+  return render(
+    <PlayerTimeContext.Provider value={currentTime}>
+      <PlayerControls {...props} />
+    </PlayerTimeContext.Provider>,
+  );
+}
+
 const TWO_SEASONS: EpisodeGroupOption[] = [
   {
     heading: "Сезон 1",
@@ -54,29 +63,21 @@ const TWO_SEASONS: EpisodeGroupOption[] = [
 
 describe("меню выбора серии в плеере", () => {
   it("у фильма меню нет", () => {
-    render(<PlayerControls {...base()} />);
+    renderControls(base());
     expect(screen.queryByTestId("menu-серии")).toBeNull();
   });
 
   it("при единственной серии меню тоже нет — выбирать нечего", () => {
-    render(
-      <PlayerControls
-        {...base({
+    renderControls(base({
           episodeGroups: [{ heading: "Части", episodes: [{ mediaId: 501, label: "Часть 1", title: null }] }],
           activeEpisode: 501,
-        })}
-      />,
-    );
+        }));
     expect(screen.queryByTestId("menu-серии")).toBeNull();
   });
 
   it("показывает список и отдаёт mediaId выбранной серии", () => {
     const onEpisode = vi.fn();
-    render(
-      <PlayerControls
-        {...base({ episodeGroups: TWO_SEASONS, activeEpisode: 101, onEpisode })}
-      />,
-    );
+    renderControls(base({ episodeGroups: TWO_SEASONS, activeEpisode: 101, onEpisode }));
 
     fireEvent.click(screen.getByTestId("menu-серии"));
     fireEvent.click(screen.getByTestId("player-episode-102"));
@@ -86,11 +87,7 @@ describe("меню выбора серии в плеере", () => {
   });
 
   it("открывается на сезоне текущей серии, а не на первом", () => {
-    render(
-      <PlayerControls
-        {...base({ episodeGroups: TWO_SEASONS, activeEpisode: 201, onEpisode: () => {} })}
-      />,
-    );
+    renderControls(base({ episodeGroups: TWO_SEASONS, activeEpisode: 201, onEpisode: () => {} }));
 
     fireEvent.click(screen.getByTestId("menu-серии"));
 
@@ -101,11 +98,7 @@ describe("меню выбора серии в плеере", () => {
   });
 
   it("сезон переключается табом", () => {
-    render(
-      <PlayerControls
-        {...base({ episodeGroups: TWO_SEASONS, activeEpisode: 201, onEpisode: () => {} })}
-      />,
-    );
+    renderControls(base({ episodeGroups: TWO_SEASONS, activeEpisode: 201, onEpisode: () => {} }));
 
     fireEvent.click(screen.getByTestId("menu-серии"));
     const tabs = screen.getAllByTestId("player-season-tab");
@@ -118,11 +111,7 @@ describe("меню выбора серии в плеере", () => {
 
   it("клик по текущей серии не гоняет маршрут", () => {
     const onEpisode = vi.fn();
-    render(
-      <PlayerControls
-        {...base({ episodeGroups: TWO_SEASONS, activeEpisode: 101, onEpisode })}
-      />,
-    );
+    renderControls(base({ episodeGroups: TWO_SEASONS, activeEpisode: 101, onEpisode }));
 
     fireEvent.click(screen.getByTestId("menu-серии"));
     fireEvent.click(screen.getByTestId("player-episode-101"));
@@ -133,9 +122,7 @@ describe("меню выбора серии в плеере", () => {
   });
 
   it("одна группа — заголовков сезонов нет", () => {
-    render(
-      <PlayerControls
-        {...base({
+    renderControls(base({
           episodeGroups: [
             {
               heading: "Части",
@@ -147,9 +134,7 @@ describe("меню выбора серии в плеере", () => {
           ],
           activeEpisode: 501,
           onEpisode: () => {},
-        })}
-      />,
-    );
+        }));
 
     fireEvent.click(screen.getByTestId("menu-серии"));
     expect(screen.queryAllByTestId("player-season-tab")).toHaveLength(0);

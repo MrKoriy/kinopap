@@ -4,6 +4,7 @@ import type { SubtitleCue } from "@zal/shared";
 import { Volume2 } from "lucide-react";
 import * as React from "react";
 import type { PlayerEpisode } from "@/lib/player-logic";
+import { externalPlayerLinks } from "@/lib/player-logic";
 
 /**
  * Слои поверх видео: субтитры, интро, «включить звук», следующая серия,
@@ -176,13 +177,13 @@ export function PlaybackError({
           {streamUrl && (
             <>
               <a
-                href={`iina://weblink?url=${encodeURIComponent(streamUrl)}`}
+                href={externalPlayerLinks(streamUrl).iina}
                 className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover"
               >
                 Открыть в IINA (Mac)
               </a>
               <a
-                href={`vlc://${streamUrl}`}
+                href={externalPlayerLinks(streamUrl).vlc}
                 className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
               >
                 Открыть в VLC

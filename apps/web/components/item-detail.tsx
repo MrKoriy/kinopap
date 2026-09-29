@@ -1,7 +1,7 @@
 "use client";
 
 import type { Episode, ItemDetail, ItemProgressDto, ItemProgressEntry } from "@zal/api-client";
-import { primaryPlayLabel, resolveTrailer } from "@zal/shared";
+import { pluralRu, primaryPlayLabel, resolveTrailer } from "@zal/shared";
 import { Check, Film, Play, RotateCcw, X } from "lucide-react";
 import Link from "next/link";
 /**
@@ -20,15 +20,6 @@ import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { useOptionalAuth } from "@/lib/auth";
 import { formatDuration } from "@/lib/format";
-
-/** Русский счётчик: 1 дорожка / 2 дорожки / 5 дорожек. */
-function pluralRu(n: number, forms: [string, string, string]): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return forms[0];
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return forms[1];
-  return forms[2];
-}
 
 /** Последняя начатая серия — по ней выбираем активный сезон и точку resume. */
 function latestInProgress(progress: ItemProgressDto): ItemProgressEntry | null {
@@ -235,7 +226,7 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
     }
     if (item.quality) rows.push({ label: "Качество", value: `${item.quality}p` });
     if (item.langs > 0) {
-      const tracks = `${item.langs} ${pluralRu(item.langs, ["дорожка", "дорожки", "дорожек"])}`;
+      const tracks = `${item.langs} ${pluralRu(item.langs, "дорожка", "дорожки", "дорожек")}`;
       rows.push({ label: "Аудио", value: item.ac3 ? `${tracks} · AC3` : tracks });
     }
     if (item.countries.length > 0) {

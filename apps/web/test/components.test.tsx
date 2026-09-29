@@ -39,7 +39,7 @@ vi.mock("@/lib/auth", () => {
 
 import { ItemCard } from "@/components/item-card";
 import { ItemDetailView } from "@/components/item-detail";
-import { PlayerControls } from "@/components/player/controls";
+import { PlayerControls, PlayerTimeContext } from "@/components/player/controls";
 
 afterEach(cleanup);
 
@@ -74,10 +74,13 @@ function withRect(el: HTMLElement): HTMLElement {
   return el;
 }
 
-function makeControls(overrides: Partial<React.ComponentProps<typeof PlayerControls>> = {}) {
+function makeControls(
+  overrides: Partial<React.ComponentProps<typeof PlayerControls>> = {},
+  /** Позиция воспроизведения — въезжает контекстом, не пропом. */
+  currentTime = 30,
+) {
   const props: React.ComponentProps<typeof PlayerControls> = {
     playing: false,
-    currentTime: 30,
     duration: 120,
     volume: 1,
     muted: false,
@@ -108,7 +111,14 @@ function makeControls(overrides: Partial<React.ComponentProps<typeof PlayerContr
     onFullscreen: vi.fn(),
     ...overrides,
   };
-  return { props, ...render(<PlayerControls {...props} />) };
+  return {
+    props,
+    ...render(
+      <PlayerTimeContext.Provider value={currentTime}>
+        <PlayerControls {...props} />
+      </PlayerTimeContext.Provider>,
+    ),
+  };
 }
 
 describe("PlayerControls", () => {
@@ -167,7 +177,7 @@ describe("PlayerControls", () => {
   it("во время перетаскивания полоса идёт за указателем, а не за видео", () => {
     // Без этого перетаскивание слепое: пользователь ведёт палец, а полоса
     // стоит на месте, потому что видео ещё не перемотано.
-    makeControls({ currentTime: 30, duration: 120 });
+    makeControls({ duration: 120 });
     const bar = withRect(screen.getByTestId("seekbar"));
     expect(screen.getByTestId("seek-progress").style.width).toBe("25%"); // 30/120
 
@@ -177,7 +187,7 @@ describe("PlayerControls", () => {
   });
 
   it("после отпускания полоса возвращается к времени видео", () => {
-    makeControls({ currentTime: 30, duration: 120 });
+    makeControls({ duration: 120 });
     const bar = withRect(screen.getByTestId("seekbar"));
     fireEvent.pointerDown(bar, { clientX: 10, pointerId: 1 });
     fireEvent.pointerMove(bar, { clientX: 90, pointerId: 1 });
