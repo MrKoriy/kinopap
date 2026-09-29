@@ -4,7 +4,7 @@ import type { SpriteMetaDto } from "@zal/api-client";
 /** Контрол-бар плеера: seek со спрайт-превью, аудио, субтитры со сдвигом, скорость, PiP. */
 import * as React from "react";
 import { formatDuration } from "@/lib/format";
-import { spriteTileScaledFor } from "@/lib/player-logic";
+import { type BufferedSegment, spriteTileScaledFor } from "@/lib/player-logic";
 
 export interface TrackOption {
   index: number;
@@ -27,6 +27,11 @@ export interface PlayerControlsProps {
   playing: boolean;
   currentTime: number;
   duration: number;
+  /**
+   * Уже скачанные отрезки в долях длительности (0 — начало, 1 — конец).
+   * Пусто — полоса рисуется без серого буфера, как раньше.
+   */
+  buffered?: BufferedSegment[];
   volume: number;
   muted: boolean;
   playbackRate: number;
@@ -64,6 +69,16 @@ export interface PlayerControlsProps {
 
 /** Контекст закрытия меню: MenuItem закрывает, служебные кнопки (сдвиг) — нет. */
 const MenuCloseContext = React.createContext<() => void>(() => {});
+
+/**
+ * Порог, секунды, ниже которого перемотка не выполняется.
+ *
+ * Не «мёртвая зона для дрожания руки», а экономия: перемотка на торрент-стриме
+ * стоит дорого — gst пересобирает конвейер, и картинка встаёт на несколько
+ * секунд. Отпустить ползунок в полутора секундах от текущей позиции значит
+ * заплатить эту цену ни за что.
+ */
+const SEEK_EPSILON_SECONDS = 2;
 
 function Menu({
   label,
@@ -246,8 +261,14 @@ export function PlayerControls(props: PlayerControlsProps) {
   const barRef = React.useRef<HTMLDivElement | null>(null);
   const [hoverTime, setHoverTime] = React.useState<number | null>(null);
   const [hoverX, setHoverX] = React.useState(0);
+  // Позиция под указателем во время перетаскивания. Пока она есть, полоса
+  // рисуется по ней, а не по текущему времени: пользователь должен видеть,
+  // куда отпустит, ещё до того как отпустил.
+  const [dragTime, setDragTime] = React.useState<number | null>(null);
 
-  const ratio = duration > 0 ? currentTime / duration : 0;
+  const dragging = dragTime != null;
+  const displayTime = dragTime ?? currentTime;
+  const ratio = duration > 0 ? displayTime / duration : 0;
 
   // У фильма с единственной частью выбирать нечего: меню показываем только
   // когда серий действительно больше одной.
@@ -256,20 +277,80 @@ export function PlayerControls(props: PlayerControlsProps) {
     0,
   );
 
-  const onBarMove = (e: React.MouseEvent) => {
+  /** Время под указателем или null, если длительность ещё неизвестна. */
+  const timeAt = (clientX: number): number | null => {
     const bar = barRef.current;
-    if (!bar || !duration) return;
+    if (!bar || !duration) return null;
     const rect = bar.getBoundingClientRect();
-    const r = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    const t = r * duration;
+    const r = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return r * duration;
+  };
+
+  // Указатель, а не мышь: полоса должна одинаково работать и пальцем. На
+  // touch-экране mouse-событий нет вовсе, поэтому превью кадра и позиция под
+  // пальцем раньше просто не появлялись — работал один onClick.
+  const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const bar = barRef.current;
+    const t = timeAt(e.clientX);
+    if (!bar || t == null) return;
     setHoverTime(t);
-    setHoverX(e.clientX - rect.left);
+    setHoverX(e.clientX - bar.getBoundingClientRect().left);
+    props.onScrubTime?.(t);
+    if (dragging) setDragTime(t);
+  };
+
+  const onPointerLeave = () => {
+    // Во время перетаскивания превью не убираем: с захватом указателя
+    // pointerleave приходит, едва курсор уйдёт за полосу, а перетаскивание
+    // продолжается — и превью исчезло бы на середине жеста.
+    if (dragging) return;
+    setHoverTime(null);
+    props.onScrubTime?.(null);
+  };
+
+  const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const t = timeAt(e.clientX);
+    if (t == null) return;
+    const bar = e.currentTarget;
+    // Захват указателя: без него pointermove перестаёт приходить, стоит увести
+    // курсор за пределы полосы, и перетаскивание обрывается на полпути.
+    // Проверка на наличие метода — jsdom, в котором идут тесты, его не имеет.
+    if (typeof bar.setPointerCapture === "function") {
+      bar.setPointerCapture(e.pointerId);
+    }
+    setDragTime(t);
+    setHoverTime(t);
     props.onScrubTime?.(t);
   };
 
-  const onBarLeave = () => {
+  const endDrag = (clientX: number, commit: boolean) => {
+    setDragTime(null);
     setHoverTime(null);
     props.onScrubTime?.(null);
+    if (!commit) return;
+    const t = timeAt(clientX);
+    if (t == null) return;
+    // Перемотка на торрент-стриме дорога: она рвёт текущую загрузку и заново
+    // поднимает gst. Отпустить ползунок там же, где он и был, — не повод
+    // платить за это.
+    if (Math.abs(t - currentTime) < SEEK_EPSILON_SECONDS) return;
+    props.onSeek(t);
+  };
+
+  const onPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const bar = e.currentTarget;
+    if (
+      typeof bar.hasPointerCapture === "function" &&
+      bar.hasPointerCapture(e.pointerId)
+    ) {
+      bar.releasePointerCapture(e.pointerId);
+    }
+    endDrag(e.clientX, true);
+  };
+
+  // Жест отменён системой (жест назад, звонок) — перематывать не за что.
+  const onPointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    endDrag(e.clientX, false);
   };
 
   const tile =
@@ -283,18 +364,34 @@ export function PlayerControls(props: PlayerControlsProps) {
       <div
         ref={barRef}
         className="group relative mb-2 h-1.5 cursor-pointer rounded-full bg-white/20"
-        onMouseMove={onBarMove}
-        onMouseLeave={onBarLeave}
-        onClick={(e) => {
-          const rect = e.currentTarget.getBoundingClientRect();
-          const r = (e.clientX - rect.left) / rect.width;
-          props.onSeek(r * duration);
-        }}
+        onPointerMove={onPointerMove}
+        onPointerLeave={onPointerLeave}
+        onPointerDown={onPointerDown}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
         data-testid="seekbar"
       >
+        {/* Буфер: что уже скачано. Под полосой прогресса и над фоном, поэтому
+            виден только впереди неё — как на YouTube. pointer-events-none
+            обязателен: иначе сегменты перехватывают нажатие, и перетаскивание
+            срывается ровно там, где буфер есть, то есть почти всегда. */}
+        {(props.buffered ?? []).map((seg) => (
+          <div
+            key={`${seg.start}-${seg.end}`}
+            className="pointer-events-none absolute inset-y-0 bg-white/40"
+            style={{
+              left: `${seg.start * 100}%`,
+              width: `${(seg.end - seg.start) * 100}%`,
+            }}
+            data-testid="buffer-segment"
+            data-start={seg.start}
+            data-end={seg.end}
+          />
+        ))}
         <div
           className="absolute inset-y-0 left-0 rounded-full bg-accent"
           style={{ width: `${ratio * 100}%` }}
+          data-testid="seek-progress"
         />
         <div
           className="absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white opacity-0 transition group-hover:opacity-100"

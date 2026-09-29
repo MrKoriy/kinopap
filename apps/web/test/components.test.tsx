@@ -53,6 +53,27 @@ const sprites: SpriteMetaDto = {
   count: 6,
 };
 
+/**
+ * jsdom не считает раскладку: getBoundingClientRect у него всегда нулевой, и
+ * доля по clientX вышла бы NaN. Подменяем полосе прямоугольник 0..100 —
+ * тогда clientX читается прямо как процент.
+ */
+function withRect(el: HTMLElement): HTMLElement {
+  el.getBoundingClientRect = () =>
+    ({
+      left: 0,
+      width: 100,
+      top: 0,
+      height: 2,
+      right: 100,
+      bottom: 2,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return el;
+}
+
 function makeControls(overrides: Partial<React.ComponentProps<typeof PlayerControls>> = {}) {
   const props: React.ComponentProps<typeof PlayerControls> = {
     playing: false,
@@ -100,19 +121,103 @@ describe("PlayerControls", () => {
 
   it("кликом по seek-бару зовёт onSeek с временем", () => {
     const { props } = makeControls();
-    const bar = screen.getByTestId("seekbar");
-    bar.getBoundingClientRect = () =>
-      ({ left: 0, width: 100, top: 0, height: 2, right: 100, bottom: 2, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
-    fireEvent.click(bar, { clientX: 25 });
-    expect(props.onSeek).toHaveBeenCalledWith(30); // 25% от 120с
+    const bar = withRect(screen.getByTestId("seekbar"));
+    // Клик — это pointerdown + pointerup. Отдельного onClick у полосы нет
+    // намеренно: он сработал бы вторым и перемотал дважды.
+    // Точка выбрана заведомо далеко от currentTime (30 с) — иначе сработал бы
+    // порог SEEK_EPSILON_SECONDS, и тест проверял бы не клик, а порог.
+    fireEvent.pointerDown(bar, { clientX: 75, pointerId: 1 });
+    fireEvent.pointerUp(bar, { clientX: 75, pointerId: 1 });
+    expect(props.onSeek).toHaveBeenCalledWith(90); // 75% от 120с
+  });
+
+  it("перемотка не выполняется, если отпустили почти на месте", () => {
+    // currentTime = 30 с, отпускаем в 31.5 с. На торрент-стриме такая перемотка
+    // рвёт загрузку и поднимает gst заново — цена есть, результата нет.
+    const { props } = makeControls();
+    const bar = withRect(screen.getByTestId("seekbar"));
+    fireEvent.pointerDown(bar, { clientX: 26.25, pointerId: 1 });
+    fireEvent.pointerUp(bar, { clientX: 26.25, pointerId: 1 });
+    expect(props.onSeek).not.toHaveBeenCalled();
+  });
+
+  it("во время перетаскивания не мотает, а на отпускании — мотает один раз", () => {
+    // Перемотка на каждом pointermove пересобирала бы конвейер десятки раз за
+    // жест: перетаскивание стало бы неюзабельным.
+    const { props } = makeControls();
+    const bar = withRect(screen.getByTestId("seekbar"));
+    fireEvent.pointerDown(bar, { clientX: 10, pointerId: 1 });
+    fireEvent.pointerMove(bar, { clientX: 40, pointerId: 1 });
+    fireEvent.pointerMove(bar, { clientX: 70, pointerId: 1 });
+    expect(props.onSeek).not.toHaveBeenCalled();
+    fireEvent.pointerUp(bar, { clientX: 70, pointerId: 1 });
+    expect(props.onSeek).toHaveBeenCalledOnce();
+    expect(props.onSeek).toHaveBeenCalledWith(84); // 70% от 120с
+  });
+
+  it("отменённый жест не мотает", () => {
+    const { props } = makeControls();
+    const bar = withRect(screen.getByTestId("seekbar"));
+    fireEvent.pointerDown(bar, { clientX: 10, pointerId: 1 });
+    fireEvent.pointerMove(bar, { clientX: 80, pointerId: 1 });
+    fireEvent.pointerCancel(bar, { clientX: 80, pointerId: 1 });
+    expect(props.onSeek).not.toHaveBeenCalled();
+  });
+
+  it("во время перетаскивания полоса идёт за указателем, а не за видео", () => {
+    // Без этого перетаскивание слепое: пользователь ведёт палец, а полоса
+    // стоит на месте, потому что видео ещё не перемотано.
+    makeControls({ currentTime: 30, duration: 120 });
+    const bar = withRect(screen.getByTestId("seekbar"));
+    expect(screen.getByTestId("seek-progress").style.width).toBe("25%"); // 30/120
+
+    fireEvent.pointerDown(bar, { clientX: 10, pointerId: 1 });
+    fireEvent.pointerMove(bar, { clientX: 90, pointerId: 1 });
+    expect(screen.getByTestId("seek-progress").style.width).toBe("90%");
+  });
+
+  it("после отпускания полоса возвращается к времени видео", () => {
+    makeControls({ currentTime: 30, duration: 120 });
+    const bar = withRect(screen.getByTestId("seekbar"));
+    fireEvent.pointerDown(bar, { clientX: 10, pointerId: 1 });
+    fireEvent.pointerMove(bar, { clientX: 90, pointerId: 1 });
+    fireEvent.pointerUp(bar, { clientX: 90, pointerId: 1 });
+    // onSeek в тесте — заглушка, время видео не меняется. Полоса обязана
+    // вернуться к currentTime, а не залипнуть на месте отпускания.
+    expect(screen.getByTestId("seek-progress").style.width).toBe("25%");
+  });
+
+  it("рисует серые отрезки буфера по долям длительности", () => {
+    makeControls({
+      buffered: [
+        { start: 0.25, end: 0.5 },
+        { start: 0.75, end: 1 },
+      ],
+    });
+    const segs = screen.getAllByTestId("buffer-segment");
+    expect(segs).toHaveLength(2);
+    expect(segs[0]!.style.left).toBe("25%");
+    expect(segs[0]!.style.width).toBe("25%");
+    expect(segs[1]!.style.left).toBe("75%");
+    expect(segs[1]!.style.width).toBe("25%");
+  });
+
+  it("буфер не перехватывает нажатие по полосе", () => {
+    // Сегменты лежат поверх трека. Без pointer-events-none они бы съедали
+    // нажатие, и перемотка не работала бы ровно там, где буфер есть.
+    makeControls({ buffered: [{ start: 0, end: 1 }] });
+    expect(screen.getByTestId("buffer-segment").className).toContain("pointer-events-none");
+  });
+
+  it("без буфера сегментов нет", () => {
+    makeControls();
+    expect(screen.queryAllByTestId("buffer-segment")).toHaveLength(0);
   });
 
   it("скраб-превью берёт тайл из спрайта", () => {
     makeControls();
-    const bar = screen.getByTestId("seekbar");
-    bar.getBoundingClientRect = () =>
-      ({ left: 0, width: 100, top: 0, height: 2, right: 100, bottom: 2, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
-    fireEvent.mouseMove(bar, { clientX: 50 });
+    const bar = withRect(screen.getByTestId("seekbar"));
+    fireEvent.pointerMove(bar, { clientX: 50, pointerId: 1 });
     const preview = screen.getByTestId("scrub-preview");
     // 50% от 120с = 60с → тайл 5 (зажат по count=6): col=2, row=1.
     // Тайл 160×90 растянут в превью 192×108 (×1.2): позиция и размер

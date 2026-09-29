@@ -14,6 +14,8 @@ import { useAuth } from "@/lib/auth";
 import {
   absoluteStreamUrl,
   activeCues,
+  type BufferedSegment,
+  bufferedSegments,
   isIntroVisible,
   isNearEnd,
   nextAliveSource,
@@ -52,6 +54,14 @@ const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const PROGRESS_INTERVAL_MS = 10_000;
 /** Минимум просмотра, чтобы считать позицию осмысленной (резюме тоже с 5с). */
 const MIN_REPORT_SECONDS = 5;
+/**
+ * Как часто пересчитывать полосу буфера, мс.
+ *
+ * `progress` на быстром канале сыпется десятки раз в секунду, и каждый вызов —
+ * это `setState` и ре-рендер всего контрол-бара. Четырёх раз в секунду полосе
+ * хватает с запасом: она меняется на глазах, но не дёргается.
+ */
+const BUFFER_SNAPSHOT_MS = 250;
 
 export function Player({
   links,
@@ -71,6 +81,8 @@ export function Player({
   const [playing, setPlaying] = React.useState(false);
   const [currentTime, setCurrentTime] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
+  // Отрезки буфера в долях длительности — для серой полосы в контрол-баре.
+  const [buffered, setBuffered] = React.useState<BufferedSegment[]>([]);
   const [volume, setVolume] = React.useState(1);
   const [muted, setMuted] = React.useState(false);
   const [playbackRate, setPlaybackRate] = React.useState(1);
@@ -315,10 +327,18 @@ export function Player({
         if (cancelled) return;
         hls = new Hls({
           enableWorker: true,
-          // Буфер: вперед до 2 минут, позади минута — на хорошем канале
-          // hls.js должен напарываться вперёд, а не доигрывать по сегменту.
-          maxBufferLength: 30,
-          maxMaxBufferLength: 120,
+          // Буфер: цель — 90 секунд вперёд, потолок — 5 минут, назад минута.
+          //
+          // Раньше здесь стояло 30/120, а комментарий обещал «вперёд до 2
+          // минут» — то есть числа и текст противоречили друг другу, и прав
+          // был код. Для торрент-раздачи 30 секунд мало: скорость прихода
+          // сегментов плавает вместе с сидами, и короткий буфер выбирается
+          // в ноль на каждом провале канала — плеер встаёт на «буферизацию».
+          // 90 секунд покрывают такие провалы, а потолок в 5 минут нужен,
+          // чтобы на быстром канале hls.js не растягивал буфер бесконечно:
+          // это память и лишний трафик вперёд по фильму.
+          maxBufferLength: 90,
+          maxMaxBufferLength: 300,
           backBufferLength: 60,
           // Оптимистичная стартовая оценка канала (4 Мбит/с) — иначе ABR
           // после старта держит 480p и повышает качество медленно.
@@ -528,6 +548,53 @@ export function Player({
       video.removeEventListener("volumechange", onVolume);
     };
   }, []);
+
+  /* ---------- Буфер: серая полоса в контрол-баре ---------- */
+  // Отдельным эффектом от остальных событий видео, потому что слушателей у
+  // него свои: `progress` не участвует ни в одном другом состоянии.
+  React.useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    let lastAt = 0;
+    const snapshot = () => {
+      const now = performance.now();
+      // Троттлинг здесь, а не через debounce: нам нужен последний снимок, а не
+      // отложенный, иначе полоса отстаёт от видео на хвост задержки.
+      if (now - lastAt < BUFFER_SNAPSHOT_MS) return;
+      lastAt = now;
+
+      // `video.buffered` — живой TimeRanges: к моменту рендера в нём уже другие
+      // числа. Поэтому копируем в обычный массив прямо сейчас.
+      const ranges: { start: number; end: number }[] = [];
+      for (let i = 0; i < video.buffered.length; i += 1) {
+        ranges.push({ start: video.buffered.start(i), end: video.buffered.end(i) });
+      }
+      setBuffered(bufferedSegments(ranges, video.duration || 0));
+    };
+
+    video.addEventListener("progress", snapshot);
+    video.addEventListener("timeupdate", snapshot);
+    video.addEventListener("loadedmetadata", snapshot);
+    video.addEventListener("emptied", snapshot);
+    return () => {
+      video.removeEventListener("progress", snapshot);
+      video.removeEventListener("timeupdate", snapshot);
+      video.removeEventListener("loadedmetadata", snapshot);
+      video.removeEventListener("emptied", snapshot);
+    };
+  }, []);
+
+  // Смена источника — новый буфер. Без сброса от старой раздачи остаётся
+  // полоса, которой в новой нет, и она читается как «уже загружено».
+  React.useEffect(() => {
+    // Читаем явно: сбрасывать надо именно на смену источника, а линтер иначе
+    // считает зависимости лишними и предлагает их убрать — тогда эффект
+    // перестал бы срабатывать вовсе.
+    void streamUrl;
+    void sourceEpoch;
+    setBuffered([]);
+  }, [streamUrl, sourceEpoch]);
 
   /* ---------- Резюме: стартуем с сохранённой позиции ---------- */
   React.useEffect(() => {
@@ -1017,6 +1084,7 @@ export function Player({
           playing={playing}
           currentTime={currentTime}
           duration={duration}
+          buffered={buffered}
           volume={volume}
           muted={muted}
           playbackRate={playbackRate}

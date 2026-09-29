@@ -79,6 +79,65 @@ export function isNearEnd(timeSeconds: number, duration: number): boolean {
   return duration > 0 && duration - timeSeconds <= 10 && timeSeconds < duration;
 }
 
+/* ---------- Буфер воспроизведения ---------- */
+
+/** Отрезок буфера в долях длительности: 0 — начало, 1 — конец. */
+export interface BufferedSegment {
+  start: number;
+  end: number;
+}
+
+/**
+ * Готовые к отрисовке отрезки буфера.
+ *
+ * На вход идут пары в секундах, а не сам `TimeRanges`: это живой объект,
+ * который браузер меняет под нами, и в `useState` его класть нельзя — к
+ * моменту рендера в нём уже другие числа. Снимок делает вызывающий.
+ *
+ * Ноль отрезков и отрезок нулевой длины — не одно и то же, и оба законны.
+ * Первое значит «ни один фрагмент ещё не пришёл» (сразу после `load()`),
+ * второе — «дырка в буфере»; и то и другое должно дать пустую полосу, а не
+ * отрицательной ширины прямоугольник. Поэтому нулевые отрезки отбрасываются,
+ * а не зажимаются в точку.
+ *
+ * Доли зажимаются в [0,1] и считаются только при конечной положительной
+ * длительности: у прямого потока `duration` бывает 0 или Infinity, и без этой
+ * проверки ширина уехала бы в NaN или бесконечность.
+ *
+ * Соседние отрезки склеиваются. `buffered` у hls.js после перескока по
+ * скрабберу даёт рваный список, а два прямоугольника встык рисуются как один,
+ * но дают лишний узел и волосяной шов на стыке.
+ */
+export function bufferedSegments(
+  ranges: readonly { start: number; end: number }[],
+  duration: number,
+): BufferedSegment[] {
+  if (!(duration > 0) || !Number.isFinite(duration)) return [];
+
+  const clamped: BufferedSegment[] = [];
+  for (const r of ranges) {
+    const start = Math.max(0, Math.min(1, r.start / duration));
+    const end = Math.max(0, Math.min(1, r.end / duration));
+    if (end <= start) continue;
+    clamped.push({ start, end });
+  }
+  // Порядок берём свой: функция чистая и не вправе полагаться на то, что
+  // вызывающий отсортировал. У `TimeRanges` порядок гарантирован, у снимка
+  // из отладочного инструмента — уже нет.
+  clamped.sort((a, b) => a.start - b.start);
+
+  const out: BufferedSegment[] = [];
+  for (const seg of clamped) {
+    const last = out[out.length - 1];
+    if (last && seg.start <= last.end) {
+      if (seg.end > last.end) last.end = seg.end;
+      continue;
+    }
+    out.push({ ...seg });
+  }
+  return out;
+}
+
 /* ---------- Перебор раздач ---------- */
 
 /**

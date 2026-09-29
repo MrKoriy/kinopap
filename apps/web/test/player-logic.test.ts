@@ -4,6 +4,7 @@ import { formatDuration, formatTime } from "@/lib/format";
 import {
   absoluteStreamUrl,
   activeCues,
+  bufferedSegments,
   episodeGroups,
   flattenEpisodes,
   isIntroVisible,
@@ -310,5 +311,89 @@ describe("nextEpisode", () => {
 
   it("пустой список — null", () => {
     expect(nextEpisode([], 101)).toBeNull();
+  });
+});
+
+describe("bufferedSegments", () => {
+  it("пустой буфер даёт пустой список, а не отрезок в ноль", () => {
+    // `buffered.length === 0` — штатное состояние сразу после load(): ни один
+    // фрагмент ещё не пришёл. Полоса обязана остаться пустой.
+    expect(bufferedSegments([], 100)).toEqual([]);
+  });
+
+  it("один отрезок переводится в доли", () => {
+    expect(bufferedSegments([{ start: 25, end: 50 }], 100)).toEqual([
+      { start: 0.25, end: 0.5 },
+    ]);
+  });
+
+  it("дырка посередине даёт два отрезка", () => {
+    // Перескок по скрабберу: hls.js догружает новое место, оставляя пропуск.
+    const segs = bufferedSegments(
+      [
+        { start: 0, end: 30 },
+        { start: 60, end: 90 },
+      ],
+      100,
+    );
+    expect(segs).toEqual([
+      { start: 0, end: 0.3 },
+      { start: 0.6, end: 0.9 },
+    ]);
+  });
+
+  it("отрезок нулевой длины отбрасывается, а не рисуется точкой", () => {
+    expect(bufferedSegments([{ start: 10, end: 10 }], 100)).toEqual([]);
+  });
+
+  it("соседние отрезки склеиваются в один", () => {
+    // Два прямоугольника встык дают волосяной шов на стыке.
+    const segs = bufferedSegments(
+      [
+        { start: 0, end: 50 },
+        { start: 50, end: 80 },
+      ],
+      100,
+    );
+    expect(segs).toEqual([{ start: 0, end: 0.8 }]);
+  });
+
+  it("перекрывающиеся отрезки склеиваются по дальнему концу", () => {
+    const segs = bufferedSegments(
+      [
+        { start: 0, end: 50 },
+        { start: 20, end: 70 },
+      ],
+      100,
+    );
+    expect(segs).toEqual([{ start: 0, end: 0.7 }]);
+  });
+
+  it("неотсортированный вход приводится в порядок", () => {
+    const segs = bufferedSegments(
+      [
+        { start: 60, end: 90 },
+        { start: 0, end: 30 },
+      ],
+      100,
+    );
+    expect(segs.map((s) => s.start)).toEqual([0, 0.6]);
+  });
+
+  it("выход за длительность зажимается в [0,1]", () => {
+    // У живого потока хвост буфера легко перелетает объявленную длительность.
+    expect(bufferedSegments([{ start: -5, end: 150 }], 100)).toEqual([
+      { start: 0, end: 1 },
+    ]);
+  });
+
+  it("нулевая длительность — пусто, а не NaN", () => {
+    // Прямой поток: duration === 0, пока не пришли метаданные. Деление на ноль
+    // дало бы NaN в style.width, и полоса исчезла бы совсем.
+    expect(bufferedSegments([{ start: 0, end: 10 }], 0)).toEqual([]);
+  });
+
+  it("бесконечная длительность — пусто, а не NaN", () => {
+    expect(bufferedSegments([{ start: 0, end: 10 }], Number.POSITIVE_INFINITY)).toEqual([]);
   });
 });
