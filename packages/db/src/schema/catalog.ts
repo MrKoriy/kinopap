@@ -71,6 +71,10 @@ export const items = pgTable(
     posterBig: text("poster_big"),
     trailerId: varchar("trailer_id", { length: 64 }),
     trailerUrl: text("trailer_url"),
+    /** Негативный кэш трейлера: TMDb /videos ответил «нет» в это время.
+     * Пусто — трейлер ещё не искали. Ретрай «нет трейлера» — раз в 90 дней:
+     * ролики появляются после релиза, вечная пометка была бы ложью. */
+    trailerCheckedAt: timestamp("trailer_checked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },

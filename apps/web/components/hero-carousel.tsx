@@ -66,6 +66,8 @@ export function HeroCarousel({ items }: { items: ItemSummary[] }) {
     <section
       className="relative mb-10 h-[420px] overflow-hidden rounded-[var(--radius-card)] sm:h-[520px]"
       data-testid="hero"
+      aria-roledescription="карусель"
+      aria-label={item.title}
       onPointerEnter={() => setPaused(true)}
       onPointerLeave={() => setPaused(false)}
       onFocus={() => setPaused(true)}

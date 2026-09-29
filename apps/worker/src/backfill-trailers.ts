@@ -11,7 +11,9 @@
  *
  * Скрипт идемпотентен и прерываем: записанные трейлеры выпадают из выборки,
  * повторный запуск продолжает с того же места. Тайтлы, у которых трейлера нет
- * на самом TMDb, остаются в выборке навсегда — повторный прогон их переспросит.
+ * на самом TMDb, помечаются trailer_checked_at и выпадают из выборки на 90
+ * дней — раньше они оставались в ней навсегда и каждый прогон переспрашивал
+ * TMDb о них же (полный прогон рос вместе с «безтрейлерным» хвостом).
  *
  * Почему пул воркеров, а не последовательный цикл: 260 мс на тайтл — это почти
  * целиком ожидание ответа TMDb, а не работа. Последовательный цикл простаивает
@@ -25,6 +27,7 @@ import {
   createDb,
   createPool,
   listItemsMissingTrailer,
+  markTrailerChecked,
   setItemTrailer,
 } from "@zal/db";
 import { TmdbEnricher } from "@zal/ingest";
@@ -106,6 +109,7 @@ const started = Date.now();
 let processed = 0;
 let found = 0;
 let failed = 0;
+let noTrailer = 0;
 
 const total = await countItemsMissingTrailer(db);
 console.log(
@@ -123,6 +127,10 @@ async function worker(): Promise<void> {
       if (trailer) {
         found += 1;
         if (!dryRun) await setItemTrailer(db, row.id, trailer);
+      } else {
+        // Негативный кэш: TMDb подтвердил отсутствие — не спрашивать 90 дней.
+        noTrailer += 1;
+        if (!dryRun) await markTrailerChecked(db, row.id);
       }
     } catch (err) {
       failed += 1;
@@ -133,7 +141,7 @@ async function worker(): Promise<void> {
       const secs = (Date.now() - started) / 1000;
       console.log(
         `backfill-trailers: ${processed}/${total} обработано, найдено ${found}, ` +
-          `ошибок ${failed}, ${(secs / processed * 1000).toFixed(0)} мс/тайтл`,
+          `без трейлера ${noTrailer}, ошибок ${failed}, ${(secs / processed * 1000).toFixed(0)} мс/тайтл`,
       );
     }
   }
@@ -145,6 +153,6 @@ const seconds = ((Date.now() - started) / 1000).toFixed(1);
 const perItem = processed > 0 ? ((Date.now() - started) / processed).toFixed(0) : "-";
 console.log(
   `backfill-trailers: готово. Обработано ${processed}, найдено ${found}, ` +
-    `ошибок ${failed}, ${seconds}с, ${perItem} мс/тайтл`,
+    `без трейлера ${noTrailer}, ошибок ${failed}, ${seconds}с, ${perItem} мс/тайтл`,
 );
 process.exit(0);

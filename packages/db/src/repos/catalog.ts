@@ -18,7 +18,7 @@ import {
   type SortField,
   type SortSpec,
 } from "@zal/api-client";
-import { and, desc, eq, gt, inArray, isNotNull, isNull, or, type SQL, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, isNotNull, isNull, lt, or, type SQL, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   audioTracks,
@@ -84,6 +84,7 @@ const itemColumns = {
   posterBig: items.posterBig,
   trailerId: items.trailerId,
   trailerUrl: items.trailerUrl,
+  trailerCheckedAt: items.trailerCheckedAt,
   createdAt: items.createdAt,
   updatedAt: items.updatedAt,
 };
@@ -613,11 +614,18 @@ export interface TrailerBackfillRow {
   tmdbId: number;
 }
 
+/** Порог ретрая «трейлера нет»: ролики появляются после релиза. */
+const TRAILER_RETRY_MS = 90 * 24 * 60 * 60 * 1000;
+
 /**
  * Очередь бэкфилла трейлеров: тайтлы с TMDb id, но без ссылки на ролик.
  * Курсор — по id (afterId), чтобы обход не сдвигался при записи в те же
  * строки: запись трейлера выводит строку из выборки, и offset «съедал» бы
  * следующий тайтл.
+ *
+ * Негативный кэш: тайтл, у которого TMDb подтвердил «трейлера нет»
+ * (trailer_checked_at свежее 90 дней), из выборки выпадает — раньше такие
+ * висели в ней навсегда и каждый прогон переспрашивал TMDb о них же.
  */
 export async function listItemsMissingTrailer(
   db: Db,
@@ -636,6 +644,10 @@ export async function listItemsMissingTrailer(
       and(
         isNotNull(items.tmdbId),
         isNull(items.trailerUrl),
+        or(
+          isNull(items.trailerCheckedAt),
+          lt(items.trailerCheckedAt, new Date(Date.now() - TRAILER_RETRY_MS)),
+        ),
         gt(items.id, opts.afterId ?? 0),
       ),
     )
@@ -649,7 +661,16 @@ export async function countItemsMissingTrailer(db: Db): Promise<number> {
   const rows = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(items)
-    .where(and(isNotNull(items.tmdbId), isNull(items.trailerUrl)));
+    .where(
+      and(
+        isNotNull(items.tmdbId),
+        isNull(items.trailerUrl),
+        or(
+          isNull(items.trailerCheckedAt),
+          lt(items.trailerCheckedAt, new Date(Date.now() - TRAILER_RETRY_MS)),
+        ),
+      ),
+    );
   return rows[0]?.n ?? 0;
 }
 
@@ -661,7 +682,20 @@ export async function setItemTrailer(
 ): Promise<void> {
   await db
     .update(items)
-    .set({ trailerId: trailer.id, trailerUrl: trailer.url, updatedAt: new Date() })
+    .set({
+      trailerId: trailer.id,
+      trailerUrl: trailer.url,
+      trailerCheckedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(items.id, itemId));
+}
+
+/** Негативный кэш: TMDb сказал «трейлера нет» — не спрашивать 90 дней. */
+export async function markTrailerChecked(db: Db, itemId: number): Promise<void> {
+  await db
+    .update(items)
+    .set({ trailerCheckedAt: new Date() })
     .where(eq(items.id, itemId));
 }
 

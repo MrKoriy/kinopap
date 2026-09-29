@@ -1,7 +1,7 @@
+import type { ItemType } from "@zal/api-client";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { Suspense } from "react";
-import type { ItemType } from "@zal/api-client";
 import { ItemDetailView } from "@/components/item-detail";
 import { ItemRail } from "@/components/item-rail";
 import { RailSkeleton } from "@/components/skeletons";

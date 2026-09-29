@@ -3,11 +3,15 @@ import { describe, expect, it } from "vitest";
 import {
   getItem,
   listItems,
+  listItemsMissingTrailer,
+  markTrailerChecked,
   mediaLinks,
   searchItems,
+  setItemTrailer,
   shortcutItems,
   similarItems,
 } from "../src/repos/catalog";
+import * as schema from "../src/schema/index";
 import { createTestDb, seedFixtures } from "./helpers";
 
 describe("listItems", () => {
@@ -218,5 +222,32 @@ describe("similarItems + shortcuts", () => {
 
     const fresh = await shortcutItems(db, "fresh", { limit: 10 });
     expect(fresh.items.length).toBe(3);
+  });
+});
+
+describe("бэкфилл трейлеров: негативный кэш", () => {
+  it("отмеченный «трейлера нет» выпадает из выборки на 90 дней", async () => {
+    const db = await createTestDb();
+    // У фикстур нет tmdbId — очередь бэкфилла их не видит.
+    await db.insert(schema.items).values([
+      { type: "movie", title: "С трейлером будет", tmdbId: 100 },
+      { type: "movie", title: "Без трейлера", tmdbId: 200 },
+    ]);
+
+    const before = await listItemsMissingTrailer(db);
+    expect(before.map((r) => r.tmdbId)).toEqual([100, 200]);
+
+    // TMDb подтвердил отсутствие у второго.
+    await markTrailerChecked(db, before.find((r) => r.tmdbId === 200)!.id);
+    const afterMark = await listItemsMissingTrailer(db);
+    expect(afterMark.map((r) => r.tmdbId)).toEqual([100]);
+
+    // У первого нашли трейлер — тоже выпал.
+    await setItemTrailer(db, before.find((r) => r.tmdbId === 100)!.id, {
+      id: "yt123",
+      url: "https://youtu.be/yt123",
+    });
+    const afterFound = await listItemsMissingTrailer(db);
+    expect(afterFound).toEqual([]);
   });
 });

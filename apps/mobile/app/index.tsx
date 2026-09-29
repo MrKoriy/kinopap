@@ -89,7 +89,13 @@ export default function HomeScreen() {
   }, [loadSections]);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.content}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} />
+      }
+    >
       <View style={styles.topRow}>
         <Pressable
           testID="search-link"
@@ -146,6 +152,22 @@ export default function HomeScreen() {
       </View>
 
       {loading && <ActivityIndicator color={tokens.color.accent} style={styles.loader} />}
+
+      {/* Сетевой сбой: пустые ленты должны отличаться от «ничего нового». */}
+      {!loading && failed && (
+        <View style={styles.failedBox}>
+          <Text style={styles.failedText}>Ленты не загрузились</Text>
+          <Pressable
+            testID="retry-button"
+            style={[styles.retryButton, focusRetry.ring]}
+            onPress={() => void loadSections()}
+            accessibilityRole="button"
+            {...focusRetry.props}
+          >
+            <Text style={styles.retryText}>Повторить</Text>
+          </Pressable>
+        </View>
+      )}
 
       {SECTIONS.map((section) => (
         <View key={section.kind} style={styles.section}>
@@ -208,6 +230,28 @@ const styles = StyleSheet.create({
   },
   loader: {
     marginVertical: tokens.space.lg,
+  },
+  failedBox: {
+    alignItems: "center",
+    gap: tokens.space.sm,
+    marginVertical: tokens.space.lg,
+  },
+  failedText: {
+    color: tokens.color.textMuted,
+    fontSize: tokens.fontSize.sm,
+  },
+  retryButton: {
+    backgroundColor: tokens.color.surface,
+    borderRadius: tokens.radius.full,
+    borderWidth: 1,
+    borderColor: tokens.color.border,
+    paddingHorizontal: tokens.space.md,
+    paddingVertical: tokens.space.sm,
+  },
+  retryText: {
+    color: tokens.color.text,
+    fontSize: tokens.fontSize.sm,
+    fontWeight: "600",
   },
   section: {
     marginBottom: tokens.space.lg,

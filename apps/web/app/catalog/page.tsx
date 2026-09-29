@@ -1,5 +1,5 @@
-import type { Metadata } from "next";
 import { ITEM_TYPE_TITLES, type ItemType } from "@zal/api-client";
+import type { Metadata } from "next";
 import Link from "next/link";
 import { ItemCard } from "@/components/item-card";
 import { type CatalogParams, fetchItems } from "@/lib/api";
