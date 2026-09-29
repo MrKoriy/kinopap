@@ -153,7 +153,9 @@ export async function insertCatalogBatch(
             year: d.year,
             plot: d.plot,
             rating: d.rating,
-            quality: 1080,
+            // Качество файла неизвестно, пока ingest не залил media: колонка
+            // и DTO nullable, веб рисует бейдж только при наличии.
+            quality: null,
             posterSmall: d.posterSmall,
             posterMedium: d.posterMedium,
             posterBig: d.posterBig,

@@ -1,0 +1,5 @@
+UPDATE "comments" SET "parent_id" = NULL WHERE "parent_id" IS NOT NULL AND "parent_id" NOT IN (SELECT "id" FROM "comments");--> statement-breakpoint
+ALTER TABLE "comments" ADD CONSTRAINT "comments_parent_id_comments_id_fk" FOREIGN KEY ("parent_id") REFERENCES "public"."comments"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "comments" ADD CONSTRAINT "comments_depth_check" CHECK (depth <= 6);--> statement-breakpoint
+UPDATE "ingest_jobs" AS "dup" SET "status" = 'failed', "error" = 'superseded: duplicate active job for the same source (pre-unique-index race)', "updated_at" = now() FROM (SELECT "id", row_number() OVER (PARTITION BY "source_type", "source_ref" ORDER BY "id") AS "rn" FROM "ingest_jobs" WHERE "status" IN ('queued', 'running')) AS "ranked" WHERE "dup"."id" = "ranked"."id" AND "ranked"."rn" > 1;--> statement-breakpoint
+CREATE UNIQUE INDEX "ingest_jobs_active_source_uq" ON "ingest_jobs" USING btree ("source_type","source_ref") WHERE status in ('queued', 'running');

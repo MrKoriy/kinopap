@@ -260,7 +260,13 @@ async function ownsList(db: Db, profileId: number, listId: number): Promise<bool
   return Boolean(rows[0]);
 }
 
-/** Идемпотентно; position по умолчанию — в конец подборки. */
+/**
+ * Идемпотентно; position по умолчанию — в конец подборки.
+ *
+ * Вычисление max(position)+1 и вставка — в одной транзакции с row lock
+ * на строке подборки: без блокировки два параллельных добавления читали
+ * одинаковый max и писали одинаковую позицию (READ COMMITTED не спасает).
+ */
 export async function addItemToList(
   db: Db,
   profileId: number,
@@ -270,25 +276,27 @@ export async function addItemToList(
 ): Promise<boolean> {
   if (!(await ownsList(db, profileId, listId))) return false;
 
-  const next = position ?? 0;
   if (position === undefined) {
-    const maxRows = await db
-      .select({ max: sql<number>`coalesce(max(${listEntries.position}), -1)::int` })
-      .from(listEntries)
-      .where(eq(listEntries.listId, listId));
-    await db
-      .insert(listEntries)
-      .values({ listId, itemId, position: (maxRows[0]?.max ?? -1) + 1 })
-      .onConflictDoNothing({
-        target: [listEntries.listId, listEntries.itemId],
-      });
+    await db.transaction(async (tx) => {
+      await tx.select({ id: lists.id }).from(lists).where(eq(lists.id, listId)).for("update");
+      const maxRows = await tx
+        .select({ max: sql<number>`coalesce(max(${listEntries.position}), -1)::int` })
+        .from(listEntries)
+        .where(eq(listEntries.listId, listId));
+      await tx
+        .insert(listEntries)
+        .values({ listId, itemId, position: (maxRows[0]?.max ?? -1) + 1 })
+        .onConflictDoNothing({
+          target: [listEntries.listId, listEntries.itemId],
+        });
+    });
   } else {
     await db
       .insert(listEntries)
-      .values({ listId, itemId, position: next })
+      .values({ listId, itemId, position })
       .onConflictDoUpdate({
         target: [listEntries.listId, listEntries.itemId],
-        set: { position: next },
+        set: { position },
       });
   }
 

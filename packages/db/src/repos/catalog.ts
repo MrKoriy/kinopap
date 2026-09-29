@@ -65,14 +65,15 @@ const itemColumns = {
   quality: items.quality,
   imdbId: items.imdbId,
   imdbRating: items.imdbRating,
-  imdbVotes: items.imdbVotes,    kinopoiskId: items.kinopoiskId,
-    kinopoiskRating: items.kinopoiskRating,
-    kinopoiskVotes: items.kinopoiskVotes,
-    tmdbId: items.tmdbId,
-    tmdbRating: items.tmdbRating,
-    tmdbVotes: items.tmdbVotes,
-    externalSource: items.externalSource,
-    externalId: items.externalId,
+  imdbVotes: items.imdbVotes,
+  kinopoiskId: items.kinopoiskId,
+  kinopoiskRating: items.kinopoiskRating,
+  kinopoiskVotes: items.kinopoiskVotes,
+  tmdbId: items.tmdbId,
+  tmdbRating: items.tmdbRating,
+  tmdbVotes: items.tmdbVotes,
+  externalSource: items.externalSource,
+  externalId: items.externalId,
   rating: items.rating,
   votesPositive: items.votesPositive,
   votesNegative: items.votesNegative,
@@ -304,6 +305,30 @@ export async function listItems(db: Db, f: CatalogFilters): Promise<ItemPage> {
   return toPage(db, rows, f.sort, f.limit);
 }
 
+/**
+ * Карточки (summary) по списку id: батч для лент, где id уже известны
+ * («продолжить смотреть», подборки) — один запрос вместо N getItem.
+ * Порядок результата — порядок входных ids; дубли схлопываются;
+ * отсутствующие id молча пропускаются.
+ */
+export async function getItemsByIds(db: Db, ids: number[]): Promise<ItemSummary[]> {
+  const unique = [...new Set(ids)];
+  if (!unique.length) return [];
+  const rows = await db
+    .select(itemColumns)
+    .from(items)
+    .where(inArray(items.id, unique));
+  const refs = await attachRefs(
+    db,
+    rows.map((r) => r.id),
+  );
+  const byId = new Map(rows.map((r) => [r.id, mapItem(r, refs.get(r.id)!)]));
+  return unique.flatMap((id) => {
+    const item = byId.get(id);
+    return item ? [item] : [];
+  });
+}
+
 export interface SearchOptions {
   q: string;
   type?: ItemType;
@@ -367,60 +392,75 @@ export async function getItem(db: Db, id: number): Promise<ItemDetail | null> {
   const row = rows[0];
   if (!row) return null;
 
-  const refs = (await attachRefs(db, [id])).get(id)!;
-  const base = mapItem(row, refs);
+  // Раунд-трейпы: refs нужны всегда; для сериалов сезоны и эпизоды
+  // независимы (эпизоды — подзапросом по сезонам тайтла, а не списком id
+  // из предыдущей выборки), для фильмов media известен заранее. Один
+  // промис на ветку — сериалам media не нужен, фильмам — сезоны.
+  const serialLike = SERIAL_LIKE.includes(row.type) || row.type === "anime";
+  const [refs, seasonRows, eps, movieMediaRows] = await Promise.all([
+    attachRefs(db, [id]),
+    serialLike
+      ? db.select().from(seasons).where(eq(seasons.itemId, id)).orderBy(seasons.number)
+      : Promise.resolve([]),
+    serialLike
+      ? db
+          .select({
+            id: episodes.id,
+            seasonId: episodes.seasonId,
+            number: episodes.number,
+            title: episodes.title,
+            thumbnailUrl: episodes.thumbnailUrl,
+            runtime: episodes.runtime,
+            mediaId: media.id,
+          })
+          .from(episodes)
+          .leftJoin(media, eq(media.episodeId, episodes.id))
+          .where(
+            inArray(
+              episodes.seasonId,
+              db.select({ id: seasons.id }).from(seasons).where(eq(seasons.itemId, id)),
+            ),
+          )
+          .orderBy(episodes.number)
+      : Promise.resolve([]),
+    serialLike
+      ? null
+      : db.select().from(media).where(eq(media.itemId, id)).orderBy(media.partNumber),
+  ]);
+  const base = mapItem(row, refs.get(id)!);
 
-  if (SERIAL_LIKE.includes(row.type) || row.type === "anime") {
-    const seasonRows = await db
-      .select()
-      .from(seasons)
-      .where(eq(seasons.itemId, id))
-      .orderBy(seasons.number);
-    // Аниме без сезонов — это фильм: навигация по media-частям, не по сериям.
-    if (seasonRows.length > 0 || SERIAL_LIKE.includes(row.type)) {
-      const eps = seasonRows.length
-        ? await db
-            .select({
-              id: episodes.id,
-              seasonId: episodes.seasonId,
-              number: episodes.number,
-              title: episodes.title,
-              thumbnailUrl: episodes.thumbnailUrl,
-              runtime: episodes.runtime,
-              mediaId: media.id,
-            })
-            .from(episodes)
-            .leftJoin(media, eq(media.episodeId, episodes.id))
-            .where(inArray(episodes.seasonId, seasonRows.map((s) => s.id)))
-            .orderBy(episodes.number)
-        : [];
-      return {
-        ...base,
-        seasons: seasonRows.map((s) => ({
-          id: s.id,
-          number: s.number,
-          title: s.title,
-          episodes: eps
-            .filter((e) => e.seasonId === s.id)
-            .map((e) => ({
-              id: e.id,
-              number: e.number,
-              title: e.title,
-              thumbnailUrl: e.thumbnailUrl,
-              runtime: e.runtime,
-              mediaId: e.mediaId,
-            })),
-        })),
-        media: null,
-      };
-    }
+  // Аниме без сезонов — это фильм: навигация по media-частям, не по сериям.
+  if (serialLike && (seasonRows.length > 0 || SERIAL_LIKE.includes(row.type))) {
+    return {
+      ...base,
+      seasons: seasonRows.map((s) => ({
+        id: s.id,
+        number: s.number,
+        title: s.title,
+        episodes: eps
+          .filter((e) => e.seasonId === s.id)
+          .map((e) => ({
+            id: e.id,
+            number: e.number,
+            title: e.title,
+            thumbnailUrl: e.thumbnailUrl,
+            runtime: e.runtime,
+            mediaId: e.mediaId,
+          })),
+      })),
+      media: null,
+    };
   }
 
-  const mediaRows = await db
-    .select()
-    .from(media)
-    .where(eq(media.itemId, id))
-    .orderBy(media.partNumber);
+  // Фильм или аниме без сезонов: media-части. Аниме до этой ветки доходит
+  // только с пустыми seasonRows — media для него тянули не в parallel выше.
+  const mediaRows = serialLike
+    ? await db
+        .select()
+        .from(media)
+        .where(eq(media.itemId, id))
+        .orderBy(media.partNumber)
+    : movieMediaRows!;
   return {
     ...base,
     seasons: null,

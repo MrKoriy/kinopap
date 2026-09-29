@@ -7,6 +7,7 @@ import type { UserRole } from "@zal/api-client";
 import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { invites, profiles, refreshTokens, users } from "../schema/index";
+import { isUniqueViolationError } from "./ingest";
 
 export type UserRow = typeof users.$inferSelect;
 export type ProfileRow = typeof profiles.$inferSelect;
@@ -102,9 +103,10 @@ export async function registerUserWithInvite(
   } catch (err) {
     if (err instanceof EmailTaken) return { ok: false, reason: "email_taken" };
     if (err instanceof InviteRejected) return { ok: false, reason: "invalid_invite" };
-    // Гонка двух регистраций одним email: unique violation → email_taken.
-    const pgCode = (err as { code?: string }).code;
-    if (pgCode === "23505" || /duplicate key/i.test(String(err))) {
+    // Гонка двух регистраций одним email: drizzle (0.45) оборачивает
+    // PG-ошибку в DrizzleQueryError — код 23505 лежит в cause, поэтому
+    // проверяем обоих (см. isUniqueViolationError в repos/ingest.ts).
+    if (isUniqueViolationError(err)) {
       return { ok: false, reason: "email_taken" };
     }
     throw err;

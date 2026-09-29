@@ -7,6 +7,30 @@ import { type IngestJobStatus, ingestJobs } from "../schema/index";
 
 export type IngestJobRow = typeof ingestJobs.$inferSelect;
 
+/**
+ * Нарушение уникальности (pg 23505): insert упёрся в partial unique index
+ * ingest_jobs_active_source_uq — активная задача на источник уже есть.
+ * Код смотрим и в err, и в err.cause: node-postgres кладёт его на ошибку,
+ * drizzle (0.45) оборачивает ошибки в DrizzleQueryError с исходной PG-ошибкой
+ * в cause; сам message обёртки «Failed query: …» кода не несёт.
+ * Роуту POST /v1/ingest ловить это и отдавать 409 (существующую задачу —
+ * через findActiveIngestJob).
+ */
+export function isUniqueViolationError(err: unknown): boolean {
+  const e = err as { code?: string; cause?: { code?: string } | null };
+  const pgCode = e.code ?? e.cause?.code;
+  return (
+    pgCode === "23505" ||
+    /duplicate key/i.test(String(err)) ||
+    /duplicate key/i.test(String(e.cause ?? ""))
+  );
+}
+
+/**
+ * Постановка задачи. Активный дубль (queued/running) на тот же
+ * (source_type, source_ref) отклоняется БД — partial unique index
+ * ingest_jobs_active_source_uq; ловить через isUniqueViolationError.
+ */
 export async function createIngestJob(
   db: Db,
   input: { sourceType: string; sourceRef: string },

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
@@ -5,6 +6,7 @@ import {
   serial,
   text,
   timestamp,
+  uniqueIndex,
   varchar,
 } from "drizzle-orm/pg-core";
 import { items } from "./catalog";
@@ -33,6 +35,11 @@ export const ingestJobs = pgTable(
     index("ingest_jobs_status_idx").on(t.status),
     // Опрос статусов: свежие задачи статуса.
     index("ingest_jobs_status_created_idx").on(t.status, t.createdAt),
+    // Одна активная задача на источник: гонка двух POST /v1/ingest раньше
+    // плодила дубли, пока дедуп жил только в findActiveIngestJob.
+    uniqueIndex("ingest_jobs_active_source_uq")
+      .on(t.sourceType, t.sourceRef)
+      .where(sql`status in ('queued', 'running')`),
   ],
 );
 

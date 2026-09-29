@@ -3,7 +3,7 @@
  * Вся запись идёт через слой @zal/db, чтобы API и worker делили одну логику.
  */
 
-import type { AudioDubType, ItemType } from "@zal/api-client";
+import type { AudioDubType, ItemType, Quality } from "@zal/api-client";
 import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
 import {
@@ -50,7 +50,7 @@ export interface PublishItemDraft {
 }
 
 export interface PublishFile {
-  quality: string;
+  quality: Quality;
   qualityId: number;
   width: number;
   height: number;

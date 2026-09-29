@@ -41,6 +41,7 @@ export interface DuplicatePair {
   targetId: number;
   title: string;
   year: number | null;
+  /** trgm-сходство пары (0..1) — тот же similarity, что фильтровал кандидата. */
   score: number;
 }
 
@@ -102,9 +103,11 @@ export async function findDuplicatePairs(
       title_a: string;
       title_b: string;
       year_b: number;
+      score: number;
     }>(sql`
       select a.id as a_id, b.id as b_id,
-             a.title as title_a, b.title as title_b, b.year as year_b
+             a.title as title_a, b.title as title_b, b.year as year_b,
+             similarity(a.title, b.title) as score
       from items a
       join items b
         on b.id > a.id
@@ -125,7 +128,7 @@ export async function findDuplicatePairs(
         targetId: bId,
         title: String(row.title_a),
         year: row.year_b ?? null,
-        score: 1,
+        score: Number(row.score),
       });
     }
   }

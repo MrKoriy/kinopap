@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addComment,
+  comments,
   countComments,
   createUser,
   deleteSubscription,
@@ -236,6 +237,37 @@ describe("комментарии", () => {
 
     // Счётчик считает только живые.
     expect(await countComments(db, f.matrix)).toBe(all.length - 1);
+  });
+
+  it("самопочинка сирот: FK на parent_id ловит битые ссылки", async () => {
+    const db = await createTestDb();
+    const f = await seedFixtures(db);
+    const { profile } = await makeUser(db, "fk@zal.local");
+
+    // Прямая вставка ответа на несуществующий родитель — БД обязана
+    // отказать (self-FK comments_parent_id → comments.id).
+    await expect(
+      db.insert(comments).values({
+        itemId: f.matrix,
+        profileId: profile.id,
+        parentId: 999999,
+        depth: 1,
+        body: "сирота",
+      }),
+    ).rejects.toThrow();
+
+    // CHECK глубины: глубже MAX_COMMENT_DEPTH строки не проходят.
+    await expect(
+      db.insert(comments).values({
+        itemId: f.matrix,
+        profileId: profile.id,
+        depth: MAX_COMMENT_DEPTH + 1,
+        body: "слишком глубоко",
+      }),
+    ).rejects.toThrow();
+
+    const alive = await listComments(db, f.matrix);
+    expect(alive).toHaveLength(0);
   });
 
   it("редактирование переносит updatedAt и не трогает удалённые", async () => {

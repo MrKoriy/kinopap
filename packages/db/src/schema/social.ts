@@ -1,5 +1,8 @@
+import { sql } from "drizzle-orm";
 import {
+  type AnyPgColumn,
   boolean,
+  check,
   index,
   integer,
   pgTable,
@@ -105,6 +108,9 @@ export const votes = pgTable(
   (t) => [uniqueIndex("votes_profile_item_uq").on(t.profileId, t.itemId)],
 );
 
+/** Максимальная глубина вложенности ответов (дальше отвечаем на уровень ниже). */
+export const MAX_COMMENT_DEPTH = 6;
+
 /** Дерево комментариев (parent_id + depth). */
 export const comments = pgTable(
   "comments",
@@ -116,7 +122,10 @@ export const comments = pgTable(
     profileId: integer("profile_id")
       .notNull()
       .references(() => profiles.id, { onDelete: "cascade" }),
-    parentId: integer("parent_id"),
+    // Self-FK: родитель обязан существовать. ON DELETE не указан (NO ACTION):
+    // жёсткого удаления веток в коде нет (soft-delete), а каскад item_id
+    // сносит всё дерево одной командой, что NO ACTION допускает.
+    parentId: integer("parent_id").references((): AnyPgColumn => comments.id),
     depth: integer("depth").notNull().default(0),
     body: text("body").notNull(),
     deleted: boolean("deleted").notNull().default(false),
@@ -128,6 +137,10 @@ export const comments = pgTable(
     index("comments_parent_idx").on(t.parentId),
     // BFS веток: фильтр item + parent в одном скане.
     index("comments_item_parent_idx").on(t.itemId, t.parentId),
+    // Дубликат MAX_COMMENT_DEPTH из repos/social на стороне БД: клампы в
+    // коде не спасают от кривых записей извне. sql.raw, а не параметр:
+    // биндинг в CHECK drizzle-kit рендерит как $1.
+    check("comments_depth_check", sql.raw(`depth <= ${MAX_COMMENT_DEPTH}`)),
   ],
 );
 

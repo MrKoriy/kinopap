@@ -16,6 +16,7 @@ import {
   comments,
   episodes,
   items,
+  MAX_COMMENT_DEPTH,
   media,
   profiles,
   seasons,
@@ -33,9 +34,6 @@ export interface NewEpisodesFeed {
 }
 export type CommentRow = typeof comments.$inferSelect;
 export type VoteRow = typeof votes.$inferSelect;
-
-/** Максимальная глубина вложенности ответов (дальше отвечаем на уровень ниже). */
-export const MAX_COMMENT_DEPTH = 6;
 
 /** Потолок сканирования подписочной ленты (см. listNewEpisodes). */
 const NEW_EPISODES_SCAN_CAP = 500;
@@ -159,7 +157,8 @@ export async function listNewEpisodes(
   profileId: number,
   limit = 20,
   scanCap = NEW_EPISODES_SCAN_CAP,
-): Promise<NewEpisodesFeed> {  const epRows = await db
+): Promise<NewEpisodesFeed> {
+  const epRows = await db
     .select({
       itemId: items.id,
       itemTitle: items.title,

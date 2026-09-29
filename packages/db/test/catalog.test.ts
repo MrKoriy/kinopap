@@ -2,6 +2,7 @@ import { decodeCursor, parseCatalogQuery } from "@zal/api-client";
 import { describe, expect, it } from "vitest";
 import {
   getItem,
+  getItemsByIds,
   listItems,
   listItemsMissingTrailer,
   markTrailerChecked,
@@ -144,6 +145,40 @@ describe("searchItems", () => {
 
     const none = await searchItems(db, { q: "Несуществующийфильм", limit: 10 });
     expect(none.items).toEqual([]);
+  });
+});
+
+describe("getItemsByIds", () => {
+  it("возвращает карточки в порядке входных ids", async () => {
+    const db = await createTestDb();
+    const ids = await seedFixtures(db);
+
+    // Порядок на входе не совпадает с порядком в БД.
+    const summaries = await getItemsByIds(db, [ids.got, ids.matrix, ids.reloaded]);
+    expect(summaries.map((i) => i.id)).toEqual([ids.got, ids.matrix, ids.reloaded]);
+    expect(summaries[1]!.title).toBe("Матрица");
+    // Проекция — как у списка каталога: карточка summary с refs.
+    expect(summaries[1]!.cast).toEqual(["Киану Ривз"]);
+    expect(summaries[1]!.genres.map((g) => g.title)).toEqual(["Фантастика"]);
+  });
+
+  it("схлопывает дубли и пропускает отсутствующие id", async () => {
+    const db = await createTestDb();
+    const ids = await seedFixtures(db);
+
+    const summaries = await getItemsByIds(db, [
+      ids.matrix,
+      ids.matrix,
+      99999,
+      ids.reloaded,
+    ]);
+    expect(summaries.map((i) => i.id)).toEqual([ids.matrix, ids.reloaded]);
+  });
+
+  it("пустой вход — пустой ответ без запросов к БД", async () => {
+    const db = await createTestDb();
+    await seedFixtures(db);
+    expect(await getItemsByIds(db, [])).toEqual([]);
   });
 });
 

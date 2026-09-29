@@ -14,7 +14,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { episodes, items } from "./catalog";
-import { audioDubType } from "./enums";
+import { audioDubType, mediaQuality } from "./enums";
 
 /** Метаданные спрайта для скраббинга плеера. */
 export interface SpriteMeta {
@@ -68,7 +68,7 @@ export const mediaFiles = pgTable(
     mediaId: integer("media_id")
       .notNull()
       .references(() => media.id, { onDelete: "cascade" }),
-    quality: varchar("quality", { length: 16 }).notNull(),
+    quality: mediaQuality("quality").notNull(),
     qualityId: integer("quality_id").notNull(),
     width: integer("width").notNull(),
     height: integer("height").notNull(),

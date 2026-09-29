@@ -4,6 +4,7 @@ import {
   INGEST_JOB_STATUSES,
   ITEM_TYPES,
   PERSON_ROLES,
+  QUALITIES,
   USER_ROLES,
   WATCH_STATUSES,
 } from "@zal/api-client";
@@ -17,3 +18,4 @@ export const audioDubType = pgEnum("audio_dub_type", [...AUDIO_DUB_TYPES]);
 export const watchStatus = pgEnum("watch_status", [...WATCH_STATUSES]);
 export const userRole = pgEnum("user_role", [...USER_ROLES]);
 export const ingestJobStatus = pgEnum("ingest_job_status", [...INGEST_JOB_STATUSES]);
+export const mediaQuality = pgEnum("media_quality", [...QUALITIES]);
