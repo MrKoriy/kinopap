@@ -47,7 +47,10 @@ add_env() {
 touch .env
 add_env TMDB_API_KEY "$TMDB_KEY"
 add_env CORS_ORIGIN "$PUBLIC_URL,$HTTPS_URL"
-add_env COOKIE_SECURE "0"
+# Сайт отдаётся по HTTPS, а порт 80 теперь только редиректит на него (vhost
+# `default`). Значит refresh-cookie обязан идти с флагом Secure: по plain HTTP
+# браузер такую cookie не отправит, и попасть туда можно лишь через редирект.
+add_env COOKIE_SECURE "1"
 add_env MEDIA_ROOT "$APP_DIR/media"
 # Относительный путь: постеры и спрайты должны открываться и с http://<ip>,
 # и с https://<имя>, а абсолютный http:// на HTTPS-странице браузер блокирует.
@@ -79,7 +82,10 @@ if ! command -v redis-server >/dev/null 2>&1; then
 fi
 
 # --- nginx: /media отдаётся статикой прямо с диска (Range из коробки) ---
-NGINX_SITE=\$(grep -rl "7001" /etc/nginx/sites-enabled/ 2>/dev/null | head -1 || true)
+# -R, а не -r: в sites-enabled лежат симлинки, и `grep -r` по ним не идёт —
+# с -r список всегда пуст, поэтому весь блок ниже молча пропускался, и nginx на
+# деплое не проверялся и не перезагружался. С -R находится ровно vhost сайта.
+NGINX_SITE=\$(grep -Rl "7001" /etc/nginx/sites-enabled/ 2>/dev/null | head -1 || true)
 if [ -n "\$NGINX_SITE" ]; then
   if ! grep -q "location /media/" "\$NGINX_SITE"; then
     python3 - "\$NGINX_SITE" <<'PY'
@@ -184,11 +190,12 @@ REMOTE
 
 echo "==> 5/6: смоук"
 ssh "$SERVER" bash -s <<REMOTE
-echo -n "  web (http/ip):    "; curl -s -o /dev/null -w "%{http_code}\n" $PUBLIC_URL/
-echo -n "  api (http/ip):    "; curl -s -o /dev/null -w "%{http_code}\n" "$PUBLIC_URL/v1/items?limit=1"
-echo -n "  docs (http/ip):   "; curl -s -o /dev/null -w "%{http_code}\n" $PUBLIC_URL/docs
+# Порт 80 теперь только редиректит на HTTPS: 301 здесь — ожидаемый ответ, а 200
+# означал бы, что сайт снова отдаётся по http, где Secure-cookie не отправится.
+echo -n "  http/ip:          "; curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" "$PUBLIC_URL/"
 echo -n "  web (https/имя):  "; curl -s -o /dev/null -w "%{http_code}\n" $HTTPS_URL/
 echo -n "  api (https/имя):  "; curl -s -o /dev/null -w "%{http_code}\n" "$HTTPS_URL/v1/items?limit=1"
+echo -n "  docs (https/имя): "; curl -s -o /dev/null -w "%{http_code}\n" "$HTTPS_URL/docs"
 # Абсолютный http:// в бандле = mixed content на HTTPS-странице. Ловим регрессию.
 echo -n "  mixed content:    "
 if grep -rq "$PUBLIC_URL" apps/web/.next/static/ 2>/dev/null; then
@@ -201,7 +208,7 @@ fi
 PAIR=\$(docker exec kinopap-postgres psql -U zal -d zal -tAc \\
   "select item_id || ':' || id from media order by item_id limit 1;" | tr -d '[:space:]')
 if [ -n "\$PAIR" ]; then
-  BODY=\$(curl -s --max-time 90 "$PUBLIC_URL/v1/items/\${PAIR%%:*}/media-links?mid=\${PAIR##*:}")
+  BODY=\$(curl -s --max-time 90 "$HTTPS_URL/v1/items/\${PAIR%%:*}/media-links?mid=\${PAIR##*:}")
   ABS=\$(printf '%s' "\$BODY" | grep -o 'http://[^"]*' | wc -l | tr -d '[:space:]')
   FILES=\$(printf '%s' "\$BODY" | grep -o '"quality"' | wc -l | tr -d '[:space:]')
   echo -n "  ссылки API:       "
@@ -215,4 +222,4 @@ pm2 ls | grep kinopap
 REMOTE
 
 echo "==> 6/6: готово."
-echo "Наполнить каталог: POST $PUBLIC_URL/v1/discover (owner/admin, {\"pages\":2})"
+echo "Наполнить каталог: POST $HTTPS_URL/v1/discover (owner/admin, {\"pages\":2})"
