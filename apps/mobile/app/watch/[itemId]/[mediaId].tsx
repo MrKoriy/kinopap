@@ -3,7 +3,7 @@
 import type { ItemDetail, MediaLinks } from "@zal/api-client";
 import { tokens } from "@zal/ui";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useVideoPlayer, type VideoSource, VideoView } from "expo-video";
+import { type TimeUpdateEventPayload, useVideoPlayer, type VideoSource, VideoView } from "expo-video";
 /**
  * Плеер: нативный HLS (expo-video), резюме и синхронизация прогресса,
  * «пропустить интро», следующая серия, скорость, полный экран.
@@ -26,6 +26,7 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useTvFocus } from "../../../components/tv-focus";
 import { useAuth } from "../../../lib/auth";
+import { bufferedBand } from "../../../lib/buffer";
 import { formatTime } from "../../../lib/format";
 import { cueAt, parseVtt, type SubtitleCue } from "../../../lib/subtitles";
 import { shouldSaveProgress } from "../../../lib/watch-state";
@@ -54,6 +55,10 @@ export default function WatchScreen() {
   const [current, setCurrent] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
   const [playing, setPlaying] = React.useState(false);
+  // Сырое «докуда забуферено», в секундах. Держим именно сырое значение, а
+  // долю считает bufferedBand — та же функция, что покрыта тестами, вместо
+  // второй копии тех же clamps прямо в разметке.
+  const [bufferedPosition, setBufferedPosition] = React.useState(0);
   const [barWidth, setBarWidth] = React.useState(0);
   // На TV (ландшафт 16:9) видео в полную ширину заняло бы весь экран и
   // вытолкнуло контролы за фолд — ограничиваем высоту долей экрана.
@@ -97,9 +102,14 @@ export default function WatchScreen() {
     setCues([]);
     setActiveSub(null);
     setActiveAudio(0);
+    // Выбор дубляжа — тоже состояние прошлой серии: у новой свой список дорожек.
+    setAudioChoice(null);
     setShiftMs(0);
     setError(null);
     setPlaying(false);
+    // Буфер прошлой серии к новой отношения не имеет: без сброса серая полоса
+    // на мгновение показала бы скачанное из другого файла.
+    setBufferedPosition(0);
     appliedResumeRef.current = false;
     // Прошлый эпизод: его позицию здесь держать нельзя. Смена media меняет и
     // mediaIdNum, поэтому запись «на паузе» ниже ушла бы под новую серию с
@@ -215,11 +225,24 @@ export default function WatchScreen() {
   );
 
   // 3. Источник: главный мастер либо персональный мастер выбранного дубляжа.
+  //
+  // `audioChoice` — отдельно от `activeAudio` намеренно, и это не украшение.
+  // `activeAudio` — подсветка в списке, и по умолчанию там 0. Дорожки приезжают
+  // лениво, через несколько секунд после старта (gst-проба на холодных пирах
+  // идёт до 45 с), поэтому «в списке отмечен нулевой» и «пользователь выбрал
+  // нулевой» — разные состояния, и первое наступает само. Пока они были одним
+  // стейтом, `sourceUri` в момент прихода дорожек менялся с общего мастера на
+  // персональный мастер нулевого дубляжа — прямо во время просмотра, — и
+  // эффект ниже перезагружал ассет вторым `replace()`: картинка рвалась на
+  // ровном месте, а на iOS replace() ещё и грузит ассет синхронно, то есть
+  // это был двойной фриз. Теперь источник меняет только явный выбор.
+  const [audioChoice, setAudioChoice] = React.useState<number | null>(null);
+
   const sourceUri = React.useMemo(() => {
     if (!links) return null;
-    const dub = links.audios[activeAudio];
-    return dub?.masterUrl ?? links.files.find((f) => f.urls.hls)?.urls.hls ?? null;
-  }, [links, activeAudio]);
+    const chosen = audioChoice == null ? null : links.audios[audioChoice];
+    return chosen?.masterUrl ?? links.files.find((f) => f.urls.hls)?.urls.hls ?? null;
+  }, [links, audioChoice]);
 
   const loadSource = React.useCallback(
     (uri: string, resumeAt: number) => {
@@ -237,16 +260,28 @@ export default function WatchScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceUri, loadSource]);
 
-  // 4. Тик таймера: позиция/длительность/пауза + резюме + автосохранение.
+  // 4. Тик плеера: позиция/длительность + резюме + автосохранение.
+  //
+  // Раньше здесь стоял собственный setInterval на 250 мс, который сам вычитывал
+  // player.currentTime, player.duration и player.playing. Опрос — это три
+  // пересечения моста JS↔нативный плеер четыре раза в секунду, причём с той же
+  // частотой и на паузе, и в фоне, где ничего не меняется. expo-video отдаёт то
+  // же самое событием, а `playingChange` избавляет от чтения player.playing.
   React.useEffect(() => {
-    const timer = setInterval(() => {
-      const position = player.currentTime;
+    // Шаг тот же, что был у опроса: чаще незачем — полоса времени дёргается.
+    player.timeUpdateEventInterval = 0.25;
+
+    const onTime = ({ currentTime, bufferedPosition: buffered }: TimeUpdateEventPayload) => {
+      const position = currentTime;
       const total = Number.isFinite(player.duration) ? player.duration : 0;
       positionRef.current = position;
       durationRef.current = total;
       setCurrent(position);
       setDuration(total);
-      setPlaying(player.playing);
+      // Буфер приходит в том же событии, что и позиция: отдельного похода через
+      // мост за player.bufferedPosition не нужно (см. комментарий выше про
+      // опрос). Проверять значение здесь нечем — этим занят bufferedBand.
+      setBufferedPosition(buffered);
 
       // Резюме уже применено — значит «точка возобновления» дальше просто равна
       // текущей позиции. Без этого она навсегда оставалась стартовой, и любая
@@ -267,8 +302,22 @@ export default function WatchScreen() {
       if (player.playing && position - lastSaveRef.current >= SAVE_EVERY_SECONDS) {
         saveProgress();
       }
-    }, 250);
-    return () => clearInterval(timer);
+    };
+
+    const timeSub = player.addListener("timeUpdate", onTime);
+    const playSub = player.addListener("playingChange", ({ isPlaying }) => {
+      setPlaying(isPlaying);
+    });
+    // Один явный снимок на входе: если воспроизведение уже шло до того, как
+    // слушатель подключился, перехода play/pause больше не будет, и кнопка
+    // осталась бы в состоянии «пауза» до первого нажатия.
+    setPlaying(player.playing);
+
+    return () => {
+      timeSub.remove();
+      playSub.remove();
+      player.timeUpdateEventInterval = 0;
+    };
   }, [player, saveProgress]);
 
   // 5. Прогресс на паузе и при уходе с экрана.
@@ -334,15 +383,29 @@ export default function WatchScreen() {
   /** Дубляж: источник меняет эффект ниже — здесь только запоминаем позицию. */
   const changeAudio = (index: number) => {
     const dub = links?.audios[index];
-    if (!dub?.masterUrl || index === activeAudio) return;
+    // Сравниваем с выбором, а не с подсветкой: выбор нулевого дубляжа при
+    // `activeAudio === 0` раньше считался повтором и не делал ничего, хотя
+    // играл общий мастер, а не персональный мастер этого дубляжа.
+    if (!dub?.masterUrl || index === audioChoice) return;
     // Позицию фиксируем до смены источника: replace() обнуляет currentTime.
     resumeRef.current = player.currentTime;
-    // loadSource отсюда звать нельзя: setActiveAudio вызовет перерисовку,
+    // loadSource отсюда звать нельзя: setAudioChoice вызовет перерисовку,
     // sourceUri изменится, и эффект ниже перезагрузит тот же ассет вторым
     // replace(). На iOS replace() грузит ассет синхронно на главном потоке —
     // то есть это ещё и двойной фриз на переключении дубляжа.
+    setAudioChoice(index);
     setActiveAudio(index);
   };
+
+  /**
+   * Серая полоса «уже скачано впереди». Пересчитывается от текущей позиции:
+   * отрезок живёт между позицией и `bufferedPosition`, поэтому обновляется он
+   * вместе с ними, а не по своему таймеру.
+   */
+  const buffered = React.useMemo(
+    () => bufferedBand(current, bufferedPosition, duration),
+    [current, bufferedPosition, duration],
+  );
 
   const intro = links?.intro;
   const inIntro =
@@ -396,7 +459,24 @@ export default function WatchScreen() {
             }}
             accessibilityRole="button"
           >
+            {/* Полоса буфера идёт первой: в RN следующий ребёнок рисуется поверх
+                предыдущего, поэтому заливка проигранного ложится на серое, а не
+                наоборот. Отрезок начинается от текущей позиции — см. buffer.ts. */}
+            {buffered && (
+              <View
+                testID="player-buffered"
+                pointerEvents="none"
+                style={[
+                  styles.seekBuffered,
+                  {
+                    left: `${buffered.start * 100}%`,
+                    width: `${(buffered.end - buffered.start) * 100}%`,
+                  },
+                ]}
+              />
+            )}
             <View
+              testID="player-seek-fill"
               style={[
                 styles.seekFill,
                 { width: duration ? `${(current / duration) * 100}%` : "0%" },
@@ -666,6 +746,18 @@ const styles = StyleSheet.create({
   seekFill: {
     height: "100%",
     backgroundColor: tokens.color.accent,
+  },
+  /**
+   * Серая полоса скачанного. Цвет задан напрямую, а не токеном: белый с
+   * прозрачностью поверх тёмного трека — это приём, а не цвет палитры, и в
+   * токенах его нет. Ровно так же сделано в веб-плеере (`bg-white/40`), чтобы
+   * полоса выглядела одинаково на обеих платформах.
+   */
+  seekBuffered: {
+    position: "absolute",
+    top: 0,
+    bottom: 0,
+    backgroundColor: "rgba(255, 255, 255, 0.4)",
   },
   buttonRow: {
     flexDirection: "row",
