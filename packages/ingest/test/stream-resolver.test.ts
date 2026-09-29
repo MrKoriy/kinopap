@@ -28,6 +28,17 @@ const RUTOR_HTML = `<html><body>
 
 const RUTOR_HTML_ALT = RUTOR_HTML.replace(HASH, HASH2);
 
+/** Выдача rutor с одним релизом с заданным названием (для кейсов сверки). */
+const rutorHtmlWith = (title: string): string => `<html><body>
+<tr class="gai">
+  <td><a href="/torrent/1/test">${title}</a></td>
+  <td><a href="magnet:?xt=urn:btih:${HASH}&dn=Test&tr=udp://tracker">magnet</a></td>
+  <td align="right">2.5 GB</td>
+  <td><span class="green">120 </span></td>
+  <td><span class="red">4 </span></td>
+</tr>
+</body></html>`;
+
 const VIDEO_FILES = [
   { id: 1, path: "sample.mkv", length: 1_000_000 },
   { id: 3, path: "Movie.2010.1080p.mkv", length: 2_500_000_000 },
@@ -53,6 +64,13 @@ const aniReleases: string[] = [];
 let aniDown = false;
 /** Rutor без релизов: поиск ничего не нашёл. */
 let rutorEmpty = false;
+/**
+ * Подмена выдачи rutor: когда не null, поиск возвращает эти релизы.
+ * Нужна кейсам сверки названий — резолвер обязан отвергать чужие.
+ */
+let rutorHtmlOverride: string | null = null;
+/** Имя релиза в каталоге AniLibria: подменяется кейсом чужого матча. */
+let aniCatalogName = "Тест-аниме";
 /** Задержка ответа /torrents action=add — имитация медленных метаданных DHT. */
 let addDelayMs = 0;
 
@@ -72,7 +90,7 @@ beforeAll(async () => {
         res.end();
         return;
       }
-      json({ data: [{ id: 777, name: { main: "Тест-аниме", english: "Test Anime" }, year: 2020 }] });
+      json({ data: [{ id: 777, name: { main: aniCatalogName, english: "Test Anime" }, year: 2020 }] });
       return;
     }
     const aniRelease = url.pathname.match(/^\/anime\/releases\/(\d+)$/);
@@ -104,6 +122,10 @@ beforeAll(async () => {
       res.setHeader("content-type", "text/html; charset=utf-8");
       if (rutorEmpty) {
         res.end("<html><body></body></html>");
+        return;
+      }
+      if (rutorHtmlOverride) {
+        res.end(rutorHtmlOverride);
         return;
       }
       // Второй параллельный запрос (оригинальное название) отдаём тем же
@@ -177,6 +199,8 @@ beforeEach(() => {
   aniReleases.length = 0;
   aniDown = false;
   rutorEmpty = false;
+  rutorHtmlOverride = null;
+  aniCatalogName = "Тест-аниме";
   addDelayMs = 0;
 });
 
@@ -248,6 +272,161 @@ describe("StreamResolver.resolve", () => {
     expect(resolved.warm).toBeNull();
     // Прогревать нечего — ни одного addTorrent.
     expect(counters.add).toBe(0);
+  });
+});
+
+describe("StreamResolver — сверка названий релизов", () => {
+  // Поиск rutor нечёткий: на «Во все тяжкие 2008» он возвращал и
+  // «Breaking Bear» — без сверки резолвер прикладывал чужой файл к тайтлу
+  // (подмена контента на проде). Совпасть обязано название, а не выдача.
+
+  it("чужой релиз (Breaking Bear) не прикладывается к Breaking Bad", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Breaking.Bear.S01E08.720p.WEB-DL");
+
+    const resolved = await resolver.resolve(
+      query({
+        itemId: 21,
+        mediaId: 21,
+        title: "Во все тяжкие",
+        originalTitle: "Breaking Bad",
+        year: 2008,
+      }),
+    );
+
+    expect(resolved.files).toEqual([]);
+    expect(resolved.warm).toBeNull();
+    expect(counters.add).toBe(0);
+  });
+
+  it("релиз на языке оригинала проходит по оригинальному названию", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Breaking.Bad.S01.COMPLETE.720p.WEB-DL");
+
+    const resolved = await resolver.resolve(
+      query({
+        itemId: 22,
+        mediaId: 22,
+        title: "Во все тяжкие",
+        originalTitle: "Breaking Bad",
+        year: null,
+      }),
+    );
+
+    expect(resolved.files.length).toBeGreaterThan(0);
+  });
+
+  it("русское релизное имя с разделителями и серией проходит", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Во.все.тяжкие.S01E01.720p.WEB-DL");
+
+    const resolved = await resolver.resolve(
+      query({
+        itemId: 23,
+        mediaId: 23,
+        title: "Во все тяжкие",
+        year: 2008,
+        seasonNumber: 1,
+        episodeNumber: 1,
+      }),
+    );
+
+    expect(resolved.files.length).toBeGreaterThan(0);
+  });
+
+  it("сиквел с чужим годом не подменяет первую часть", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Форсаж 2 / The Fate of the Furious (2019) WEB-DL 1080p");
+
+    const resolved = await resolver.resolve(
+      query({
+        itemId: 24,
+        mediaId: 24,
+        title: "Форсаж",
+        originalTitle: "The Fast and the Furious",
+        year: 2001,
+      }),
+    );
+
+    expect(resolved.files).toEqual([]);
+  });
+
+  it("числа-маркеры: «Форсаж 2» без года не проходит под «Форсаж»", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Форсаж 2 BDRip 1080p");
+
+    const resolved = await resolver.resolve(
+      query({ itemId: 25, mediaId: 25, title: "Форсаж", year: null }),
+    );
+
+    expect(resolved.files).toEqual([]);
+  });
+
+  it("год в названии релиза обязан совпадать с тайтлом", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Гадкий я (2010) BDRip 1080p");
+    const ok = await resolver.resolve(query({ itemId: 26, mediaId: 26 }));
+    expect(ok.files.length).toBeGreaterThan(0);
+
+    rutorHtmlOverride = rutorHtmlWith("Гадкий я (2015) BDRip 1080p");
+    const bad = await resolver.resolve(query({ itemId: 27, mediaId: 27 }));
+    expect(bad.files).toEqual([]);
+  });
+
+  it("год в самом названии тайтла («Бегущий по лезвию 2049») не считается чужим", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Бегущий по лезвию 2049 (2017) BDRip 1080p");
+
+    const resolved = await resolver.resolve(
+      query({
+        itemId: 28,
+        mediaId: 28,
+        title: "Бегущий по лезвию 2049",
+        originalTitle: "Blade Runner 2049",
+        year: 2017,
+      }),
+    );
+
+    expect(resolved.files.length).toBeGreaterThan(0);
+  });
+
+  it("сиквел без номера и без года режется щитом хвоста", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Мстители Эра Альтрона BDRip");
+
+    const resolved = await resolver.resolve(
+      query({
+        itemId: 29,
+        mediaId: 29,
+        title: "Мстители",
+        originalTitle: "The Avengers",
+        year: null,
+      }),
+    );
+
+    expect(resolved.files).toEqual([]);
+  });
+});
+
+describe("StreamResolver — аниме: чужой результат поиска AniLibria", () => {
+  const aniResolver = () =>
+    new StreamResolver({
+      rutorBaseUrl: base,
+      torrServerBaseUrl: base,
+      torrServerPublicUrl: base,
+      anilibriaBaseUrl: base,
+    });
+
+  it("не берёт релиз с несовпадающим названием, откатываясь на торренты", async () => {
+    aniCatalogName = "Совсем-другое-аниме";
+
+    const resolved = await aniResolver().resolve(
+      query({
+        itemId: 31,
+        mediaId: 31,
+        title: "Тест-аниме",
+        type: "anime",
+        year: 2020,
+      }),
+    );
+
+    // Чужой релиз вообще не запрашивался; по «Тест-аниме» rutor ничего
+    // совпадающего не находит — честный пустой список.
+    expect(aniSearches).toBe(1);
+    expect(aniReleases).toEqual([]);
+    expect(resolved.files).toEqual([]);
   });
 });
 

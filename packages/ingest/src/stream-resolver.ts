@@ -22,6 +22,106 @@ const WARM_BUDGET_MS = 2500;
 /** Как долго в памяти держим завершённые прогревы (для media-tracks). */
 const WARM_TTL_MS = 10 * 60 * 1000;
 
+/* ---------- Сверка названия релиза с тайтлом ----------
+ * Поиск rutor нечёткий: на «Во все тяжкие 2008» он спокойно возвращает
+ * «Breaking Bear» — и резолвер, не сверяя названия, уверенно прикладывал
+ * чужой файл к тайтлу (подмена контента на проде). Ниже — нормализация
+ * и щиты, отсеивающие чужие и соседние (сиквелы/части франшиз) релизы. */
+
+/** Нижний регистр, разделители в пробелы, схлопнутые пробелы. */
+function normalizeForMatch(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[.:_\-–—·|/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Цифры/римские из названия, кроме годоподобных: «Форсаж 2» → ["2"]. */
+function numericMarkers(title: string): string[] {
+  const lower = title.toLowerCase().replace(/\b(?:19|20)\d{2}\b/g, " ");
+  const arabic = lower.match(/\d+/g) ?? [];
+  const roman = lower.match(/\b[ivxlcdm]{1,8}\b/g) ?? [];
+  return [...arabic, ...roman].sort();
+}
+
+/**
+ * Название релиза без технического шума: качество, кодеки, номера сезонов
+ * и серий, размеры. Годы НЕ выкидываем — они часть сверяемого имени.
+ * «Во.все.тяжкие.S01E08.720p.WEB-DL» → «во все тяжкие».
+ */
+function stripReleaseNoise(title: string): string {
+  return normalizeForMatch(title)
+    .replace(/\bs\d{1,2}\s?e\d{1,3}\b/gi, " ")
+    .replace(/\b[se]\d{1,3}\b/gi, " ")
+    .replace(/\b(?:сезон|season)s?\s+\d+(?:\s?[-–]\s?\d+)?\b/gi, " ")
+    .replace(/\b(?:2160|1080|720|480|4k|2k)\s?p?\b/gi, " ")
+    .replace(/\b(?:web|bd|hdtv|dvd|blu\s?ray|remux|uhd)\s?(?:dl|rip)?\b/gi, " ")
+    .replace(/\b(?:x26[45]|h26[45]|hevc|avc|aac|ac3|dts|flac|truehd|atmos)\b/gi, " ")
+    .replace(/\b\d+(?:[.,]\d+)?\s?(?:gb|mb|tb|гб|мб)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Релиз действительно про запрошенный тайтл? Сверяем против обеих форм
+ * названия (русской и оригинальной): нормализованное название релиза
+ * обязано содержать название тайтла, числа-маркеры — совпадать, годы в
+ * названии — не быть чужими. Ничего не прошло → релиз чужой.
+ */
+function releaseMatchesTitle(
+  releaseTitle: string,
+  candidates: string[],
+  year: number | null | undefined,
+): boolean {
+  const releaseClean = stripReleaseNoise(releaseTitle);
+  if (!releaseClean) return false;
+
+  for (const candidate of candidates) {
+    const clean = normalizeForMatch(candidate);
+    if (!clean) continue;
+    // «Форсаж» ≠ «Форсаж 2»: числа в названии обязаны совпасть.
+    if (numericMarkers(clean).join("|") !== numericMarkers(releaseClean).join("|")) {
+      continue;
+    }
+    // Чужой год в названии — соседняя часть франшизы. Год из самого
+    // названия («Бегущий по лезвию 2049») не считается чужим.
+    if (year != null) {
+      const known = new Set(clean.match(/\b(?:19|20)\d{2}\b/g) ?? []);
+      const foreign = (releaseClean.match(/\b(?:19|20)\d{2}\b/g) ?? []).some(
+        (y) => y !== String(year) && !known.has(y),
+      );
+      if (foreign) continue;
+    }
+    if (!releaseClean.includes(clean)) continue;
+    // Название тайтла — начало названия релиза: хвост обязан быть годами
+    // или упаковкой (COMPLETE). Хвост из двух и более слов — сиквел:
+    // «Мстители: Эра Альтрона».
+    if (releaseClean.startsWith(`${clean} `)) {
+      const rest = releaseClean.slice(clean.length + 1);
+      const restTokens = rest.split(" ").filter(Boolean);
+      const allYears = restTokens.every((t) => /^(?:19|20)\d{2}$/.test(t));
+      if (restTokens.length >= 2 && !allYears) continue;
+    }
+    return true;
+  }
+  return false;
+}
+
+/** Совпадает ли хоть одно из имён с названием тайтла (для AniLibria). */
+function namesMatchQuery(names: Array<string | null | undefined>, title: string): boolean {
+  const cleanTitle = normalizeForMatch(title);
+  if (!cleanTitle) return false;
+  for (const name of names) {
+    if (!name) continue;
+    const clean = normalizeForMatch(name);
+    if (clean === cleanTitle || clean.includes(cleanTitle) || cleanTitle.includes(clean)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export interface ResolveQuery {
   itemId: number;
   mediaId: number;
@@ -140,10 +240,15 @@ export class StreamResolver {
           }
         }
         // Фолбэк (ручной тайтл / источник лежит) — поиск по названию.
+        // Первый результат обязан быть про наш тайтл: поиск AniLibria тоже
+        // нечёткий, чужой релиз подменит контент так же, как rutor.
         if (!full) {
           const aniReleases = await this.anilibria.search(query.title);
-          if (aniReleases.length > 0) {
-            full = await this.anilibria.getRelease(aniReleases[0].id);
+          const hit = aniReleases.find((r) =>
+            namesMatchQuery([r.title, r.englishTitle], query.title),
+          );
+          if (hit) {
+            full = await this.anilibria.getRelease(hit.id);
           }
         }
         if (full && full.episodes.length > 0) {
@@ -214,13 +319,17 @@ export class StreamResolver {
     return { files, audios, intro };
   }
 
-  /** Фаза 2: поиск релизов на rutor, дедуп по хешу и скоринг. */
+  /** Фаза 2: поиск релизов на rutor, сверка названий и скоринг. */
   private async findTorrentReleases(query: ResolveQuery): Promise<RutorRelease[]> {
     // Search torrent releases on Rutor: русский титул И оригинальный
     // параллельно. Названия франшиз расходятся: под «Форсаж» rutor держит
     // мусор, под «The Fast and the Furious» — все фильмы. Слияние по хешу.
     const cleanTitle = query.title.replace(/[:\-–—]/g, " ").replace(/\s+/g, " ").trim();
     const cleanOriginal = query.originalTitle?.replace(/[:\-–—]/g, " ").replace(/\s+/g, " ").trim();
+    // Обе формы названия: релизы бывают на любом языке.
+    const candidates = [cleanTitle, cleanOriginal].filter(
+      (t): t is string => !!t && normalizeForMatch(t).length > 0,
+    );
 
     const searchQueries = new Set<string>();
     {
@@ -251,18 +360,31 @@ export class StreamResolver {
 
     const settled = await Promise.allSettled([...searchQueries].map((q) => this.rutor.search(q)));
     for (const r of settled) mergeReleases(r);
-    let releases: RutorRelease[] = [...byHash.values()];
+    let matching = this.matchReleases([...byHash.values()], candidates, query.year);
 
-    // Если год не помог (релизы без года в названии) — ищем без года.
-    if (releases.length === 0 && query.year) {
+    // Если год не помог (релизы без года в названии или чужие) — ищем без
+    // года и сверяем заново.
+    if (matching.length === 0 && query.year) {
       const bare = [cleanTitle, cleanOriginal].filter((t): t is string => !!t);
       const bareSettled = await Promise.allSettled(
         [...new Set(bare)].map((q) => this.rutor.search(q)),
       );
       for (const r of bareSettled) mergeReleases(r);
-      releases = [...byHash.values()];
+      matching = this.matchReleases([...byHash.values()], candidates, query.year);
     }
+    return matching;
+  }
 
+  /**
+   * Видеорелизы, чьё название совпадает с тайтлом, — отсортированные
+   * скорингом под веб-стриминг. Ничего не совпало → пусто: прикладывать
+   * «лучший из мусора» значит подменять фильм чужим файлом.
+   */
+  private matchReleases(
+    releases: RutorRelease[],
+    candidates: string[],
+    year: number | null | undefined,
+  ): RutorRelease[] {
     // Filter out non-video releases (books, mp3s, games, etc.)
     const videoReleases = releases.filter((r) => {
       const lower = r.title.toLowerCase();
@@ -271,9 +393,14 @@ export class StreamResolver {
       return true;
     });
 
+    const matching = videoReleases.filter((r) =>
+      releaseMatchesTitle(r.title, candidates, year),
+    );
+    if (matching.length === 0) return [];
+
     // Score releases for optimal web streaming performance:
     // Prefer healthy seeders and moderate size (1.5GB - 8GB) over gigantic 70GB remuxes
-    const scoredReleases = videoReleases.map((r) => {
+    const scoredReleases = matching.map((r) => {
       let score = (r.seeds ?? 0) * 10 + (r.peers ?? 0);
       const gb = (r.sizeBytes ?? 0) / (1024 * 1024 * 1024);
       if (gb >= 1.5 && gb <= 6.0) {
@@ -290,17 +417,13 @@ export class StreamResolver {
         score += 150;
       }
       // Релиз с нужным годом в названии — точно та часть франшизы.
-      if (query.year && r.year === query.year) score += 100;
+      if (year && r.year === year) score += 100;
       return { rel: r, score };
     });
 
     scoredReleases.sort((a, b) => b.score - a.score);
 
-    let viableReleases = scoredReleases.map((s) => s.rel).slice(0, 8);
-    if (viableReleases.length === 0 && releases.length > 0) {
-      viableReleases = releases.slice(0, 5);
-    }
-    return viableReleases;
+    return scoredReleases.map((s) => s.rel).slice(0, 8);
   }
 
   /**
