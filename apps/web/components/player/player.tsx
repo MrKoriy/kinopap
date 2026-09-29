@@ -23,12 +23,17 @@ import {
   nextAliveSource,
   nextEpisode,
   type PlayerEpisodeGroup,
-  parseVtt,
   resolveStreamUrl,
-  type SubtitleCue as VttCue,
 } from "@/lib/player-logic";
 import { PlayerControls } from "./controls";
-import { useBufferedRanges, useProgressReporting, useTransport } from "./hooks";
+import {
+  useBufferedRanges,
+  usePlayerHotkeys,
+  useProgressReporting,
+  useScrubPreview,
+  useSubtitleTracks,
+  useTransport,
+} from "./hooks";
 import {
   BufferingOverlay,
   NextEpisodeOverlay,
@@ -53,13 +58,6 @@ export interface PlayerProps {
   currentMediaId?: number;
   /** Первое реальное воспроизведение: watch-страница греет следующую серию. */
   onPlaybackStart?: () => void;
-}
-
-interface SubtitleTrack {
-  index: number;
-  label: string;
-  url: string | null;
-  cues: VttCue[];
 }
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -90,8 +88,11 @@ export function Player({
   // Ленивые аудио-дорожки: gst-проба идёт фоном, пока видео уже играет.
   const [lazyAudios, setLazyAudios] = React.useState<AudioTrack[]>([]);
   const [activeSubtitle, setActiveSubtitle] = React.useState<number | null>(null);
-  const [subtitles, setSubtitles] = React.useState<SubtitleTrack[]>([]);
-  const [cues, setCues] = React.useState<VttCue[]>([]);
+  const [subtitles, setSubtitles] = useSubtitleTracks(links.subtitles);
+  // Реплики не отдельным состоянием, а выводом из выбранной дорожки: VTT
+  // приезжает позже выбора, и два независимых состояния разъезжались бы —
+  // выбор обновился, текст нет.
+  const cues = activeSubtitle == null ? [] : (subtitles[activeSubtitle]?.cues ?? []);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   const [controlsVisible, setControlsVisible] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
@@ -432,42 +433,7 @@ export function Player({
       hlsRef.current = null;
       video.removeAttribute("src");
     };
-  }, [streamUrl, activeFile, directFallback, sourceEpoch]);
-
-  /* ---------- Субтитры: загрузка WebVTT ---------- */
-  React.useEffect(() => {
-    let cancelled = false;
-    const tracks: SubtitleTrack[] = links.subtitles.map((s, i) => ({
-      index: i,
-      label: s.title ?? s.lang.toUpperCase(),
-      url: s.url,
-      cues: [],
-    }));
-    setSubtitles(tracks);
-
-    void Promise.all(
-      tracks.map(async (t) => {
-        if (!t.url) return t;
-        try {
-          const res = await fetch(t.url);
-          if (!res.ok) return t;
-          return { ...t, cues: parseVtt(await res.text()) };
-        } catch {
-          return t;
-        }
-      }),
-    ).then((loaded) => {
-      if (cancelled) return;
-      setSubtitles(loaded);
-      setActiveSubtitle((cur) => {
-        if (cur != null) setCues(loaded[cur]?.cues ?? []);
-        return cur;
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [links.subtitles]);
+  }, [streamUrl, activeFile, directFallback, sourceEpoch, setSubtitles]);
 
   /* ---------- События видео ---------- */
   React.useEffect(() => {
@@ -652,7 +618,6 @@ export function Player({
         hls.subtitleTrack = index ?? -1;
       }
       setActiveSubtitle(index);
-      setCues(index == null ? [] : (subtitles[index]?.cues ?? []));
     },
     [subtitles],
   );
@@ -684,71 +649,29 @@ export function Player({
   }, []);
 
   /* ---------- Хоткеи ---------- */
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
-      switch (e.key.toLowerCase()) {
-        case " ":
-        case "k":
-          e.preventDefault();
-          togglePlay();
-          break;
-        case "arrowright":
-          e.preventDefault();
-          seek((videoRef.current?.currentTime ?? 0) + 5);
-          break;
-        case "arrowleft":
-          e.preventDefault();
-          seek((videoRef.current?.currentTime ?? 0) - 5);
-          break;
-        case "l":
-          seek((videoRef.current?.currentTime ?? 0) + 10);
-          break;
-        case "j":
-          seek((videoRef.current?.currentTime ?? 0) - 10);
-          break;
-        case "arrowup":
-          e.preventDefault();
-          changeVolume(Math.min(1, volume + 0.1));
-          break;
-        case "arrowdown":
-          e.preventDefault();
-          changeVolume(Math.max(0, volume - 0.1));
-          break;
-        case "m":
-          changeVolume(muted ? volume || 1 : 0);
-          break;
-        case "f":
-          void toggleFullscreen();
-          break;
-        case "p":
-          void togglePip();
-          break;
-        case "c":
-          changeSubtitle(activeSubtitle == null ? 0 : null);
-          break;
-        case "[":
-          setShiftMs((s) => s - 100);
-          break;
-        case "]":
-          setShiftMs((s) => s + 100);
-          break;
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [
-    togglePlay,
-    seek,
-    changeVolume,
-    changeSubtitle,
-    toggleFullscreen,
-    togglePip,
+  // Клавиша не знает ни позиции, ни элемента — только намерение. Относительную
+  // перемотку считаем здесь, где позиция под рукой.
+  const seekBy = React.useCallback(
+    (delta: number) => seek((videoRef.current?.currentTime ?? 0) + delta),
+    [seek],
+  );
+  const shiftSubtitles = React.useCallback(
+    (deltaMs: number) => setShiftMs((s) => s + deltaMs),
+    [],
+  );
+
+  usePlayerHotkeys({
+    onTogglePlay: togglePlay,
+    seekBy,
+    onVolume: changeVolume,
+    onSubtitle: changeSubtitle,
+    onFullscreen: toggleFullscreen,
+    onPip: togglePip,
+    onShift: shiftSubtitles,
     volume,
     muted,
-    activeSubtitle,
-  ]);
+    subtitlesOn: activeSubtitle != null,
+  });
 
   /* ---------- Автоскрытие контролов ---------- */
   // Раньше currentTime был в deps: таймаут пересоздавался на каждом
@@ -769,24 +692,11 @@ export function Player({
   }, []);
 
   /* ---------- Живое превью при перемотке (стримы без спрайта) ---------- */
-  // Для zero-storage стримов спрайта нет: второй <video> с SEEK по позиции
-  // курсора рисует реальный кадр (Range-запросы к TorrServer).
-  const previewVideoRef = React.useRef<HTMLVideoElement | null>(null);
-  const previewSrc =
-    sprites || !activeFile || activeFile.urls.hls ? null : activeFile.urls.http;
-
-  const handleScrubTime = React.useCallback((t: number | null) => {
-    const pv = previewVideoRef.current;
-    if (!pv || t == null || !Number.isFinite(t)) return;
-    // Сики с шагом от 0.8с — не спамим торрсервер рейндж-запросами.
-    if (Math.abs(pv.currentTime - t) > 0.8 && t > 0) {
-      try {
-        pv.currentTime = t;
-      } catch {
-        // Метаданные ещё не готовы — молча пропускаем этот тик.
-      }
-    }
-  }, []);
+  const {
+    previewRef: previewVideoRef,
+    previewSrc,
+    onScrubTime: handleScrubTime,
+  } = useScrubPreview(sprites, activeFile);
 
   const scrubPreview = previewSrc ? (
     <video
