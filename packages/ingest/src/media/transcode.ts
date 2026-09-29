@@ -6,6 +6,7 @@
  */
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Quality } from "@zal/api-client";
 import { type Rung, selectLadder } from "./ladder";
 import {
   DEFAULT_ENCODE_TIMEOUT_MS,
@@ -20,7 +21,7 @@ export interface AudioRenditionInput {
 }
 
 export interface TranscodedRung {
-  quality: string;
+  quality: Quality;
   qualityId: number;
   width: number;
   height: number;

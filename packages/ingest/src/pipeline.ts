@@ -24,7 +24,12 @@ import {
 import { type FfmpegConfig, probeMedia } from "./media/probe";
 import { type AudioRenditionInput, transcodeToHls } from "./media/transcode";
 import { type MediaStorage, slugify } from "./storage";
-import type { MetadataEnricher, SourceAudioInfo, SourceConnector } from "./types";
+import type {
+  MetadataEnricher,
+  PulledSource,
+  SourceAudioInfo,
+  SourceConnector,
+} from "./types";
 
 export interface IngestPipelineDeps {
   db: Db;
@@ -97,6 +102,7 @@ export async function runIngest(
   const connector = deps.connectors[request.source.type];
   const cfg = deps.ffmpeg ?? {};
   const workDir = await mkdtemp(path.join(os.tmpdir(), "zal-ingest-"));
+  let pulled: PulledSource | null = null;
 
   // ffmpeg пишет в подкаталоги, mtime самого workDir стоит со времён
   // mkdtemp — часовой GC tmp-каталогов срезал бы активный многочасовой
@@ -107,7 +113,7 @@ export async function runIngest(
   dirHeartbeat.unref();
 
   try {
-    const pulled = await connector.pull(request.source.ref, {
+    pulled = await connector.pull(request.source.ref, {
       workDir,
       subtitleRefs: request.source.subtitleRefs,
     });
@@ -193,7 +199,12 @@ export async function runIngest(
     }
 
     // 4. Ключи хранилища и перенос результатов (до записи в БД).
-    const baseKey = `ingest/${Date.now()}-${slugify(request.item.title)}`;
+    // Каталог детерминирован по источнику: повторный ingest того же
+    // источника (и того же эпизода) пишет поверх, а не плодит новый —
+    // старый вариант не становится мусором до GC. Разные эпизоды/источники
+    // дают разные ключи.
+    const sourceKey = mediaSourceKey(request);
+    const baseKey = `ingest/${sourceKey}-${slugify(request.item.title)}`;
     const dest = deps.storage.resolveDir(baseKey);
     await mkdir(dest, { recursive: true });
     await cp(path.join(workDir, "hls"), dest, { recursive: true });
@@ -230,7 +241,7 @@ export async function runIngest(
         duration: Math.round(info.durationSeconds),
         // Дедуп: повторный ingest того же источника обновляет эту же media,
         // а не плодит дубль (старые файлы на диске зачистит GC воркера).
-        sourceKey: mediaSourceKey(request),
+        sourceKey,
         posterKey: `${baseKey}/poster.jpg`,
         spriteKey: `${baseKey}/sprite.jpg`,
         spriteMeta: {
@@ -303,13 +314,13 @@ export async function runIngest(
     };
   } finally {
     clearInterval(dirHeartbeat);
+    // cleanup источника вызываем в finally и на успехе, и на ошибке: он
+    // чистит ВРЕМЕННЫЕ артефакты pull'а (у local — no-op, url качает прямо
+    // в workDir). Опубликованное уже скопировано в storage, cleanup про него
+    // не знает. Ошибку глотаем, чтобы не затирать исходную причину падения.
+    await pulled?.cleanup().catch((err) => {
+      console.warn("ingest: source cleanup failed (non-fatal):", String(err).slice(0, 200));
+    });
     await rm(workDir, { recursive: true, force: true });
-    await pulledCleanupGuard();
   }
-}
-
-// cleanup источника вызываем отдельно, чтобы не потерять ошибку pull
-async function pulledCleanupGuard(): Promise<void> {
-  // cleanup каждого pulled уже no-op у готовых коннекторов;
-  // хук оставлен под плагины, которым нужно удалять временные файлы.
 }

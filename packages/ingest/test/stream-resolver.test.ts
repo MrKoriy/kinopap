@@ -51,6 +51,8 @@ let aniSearches = 0;
 const aniReleases: string[] = [];
 /** Источник «лежит»: оба эндпоинта отвечают 500. */
 let aniDown = false;
+/** Rutor без релизов: поиск ничего не нашёл. */
+let rutorEmpty = false;
 /** Задержка ответа /torrents action=add — имитация медленных метаданных DHT. */
 let addDelayMs = 0;
 
@@ -100,6 +102,10 @@ beforeAll(async () => {
     if (url.pathname.startsWith("/search/")) {
       rutorQueries.push(decodeURIComponent(url.pathname));
       res.setHeader("content-type", "text/html; charset=utf-8");
+      if (rutorEmpty) {
+        res.end("<html><body></body></html>");
+        return;
+      }
       // Второй параллельный запрос (оригинальное название) отдаём тем же
       // хешем — дедуп по hash должен оставить один релиз.
       res.end(rutorQueries.length % 2 === 0 ? RUTOR_HTML_ALT : RUTOR_HTML);
@@ -170,6 +176,7 @@ beforeEach(() => {
   aniSearches = 0;
   aniReleases.length = 0;
   aniDown = false;
+  rutorEmpty = false;
   addDelayMs = 0;
 });
 
@@ -225,6 +232,22 @@ describe("StreamResolver.resolve", () => {
     );
 
     expect(rutorQueries.some((q) => q.includes("s01e05"))).toBe(true);
+  });
+
+  it("источников нет — пустой files без мёртвой заглушки link=none", async () => {
+    rutorEmpty = true;
+
+    const resolved = await resolver.resolve(
+      query({ itemId: 4, mediaId: 4, title: "Несуществующий фильм", year: 1970 }),
+    );
+
+    // Честный пустой список: плеер покажет «нет источников», а не ошибку
+    // воспроизведения по мёртвой ссылке stream?link=none.
+    expect(resolved.files).toEqual([]);
+    expect(JSON.stringify(resolved)).not.toContain("link=none");
+    expect(resolved.warm).toBeNull();
+    // Прогревать нечего — ни одного addTorrent.
+    expect(counters.add).toBe(0);
   });
 });
 

@@ -2,6 +2,7 @@
  * Rutor torrent search connector.
  * Direct search on rutor.info / mirrors with zero external dependencies.
  */
+import { fetchWithTimeout } from "../lib/http";
 
 export interface RutorRelease {
   title: string;
@@ -89,12 +90,9 @@ export class RutorConnector {
 
     for (const mirror of this.mirrors) {
       const url = `${mirror}/search/0/${catId}/2/0/${encodeURIComponent(query)}`;
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 4000);
 
       try {
-        const res = await fetch(url, {
-          signal: controller.signal,
+        const res = await fetchWithTimeout(url, 4000, {
           headers: {
             "User-Agent":
               "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -108,14 +106,16 @@ export class RutorConnector {
         if (parsed.length > 0) return parsed;
       } catch (err) {
         lastError = err;
-      } finally {
-        clearTimeout(timeout);
       }
     }
 
+    // Трекер недоступен (таймаут/сеть) — отдаём пустой результат, резолв
+    // откатывается на остальные источники.
     if (lastError) {
-      // Return empty results gracefully rather than crashing if trackers are blocked
-      return [];
+      console.warn(
+        `rutor: search "${query}" failed on all mirrors:`,
+        String(lastError).slice(0, 200),
+      );
     }
     return [];
   }

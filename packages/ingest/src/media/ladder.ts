@@ -1,10 +1,12 @@
+import type { Quality } from "@zal/api-client";
+
 /**
  * Лестница качеств HLS. Апскейла нет: рунг берём не выше исходника,
  * но хотя бы один рунг оставляем всегда.
  */
 
 export interface Rung {
-  name: string;
+  name: Quality;
   height: number;
   videoBitrateKbps: number;
   audioBitrateKbps: number;

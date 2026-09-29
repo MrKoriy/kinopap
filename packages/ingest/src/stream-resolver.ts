@@ -75,13 +75,60 @@ export class StreamResolver {
   /**
    * Resolves on-the-fly streaming options for a movie or episode.
    * Zero disk storage required.
+   *
+   * Четыре фазы: аниме-резолв (AniLibria), торрент-поиск (rutor), прогрев
+   * лучшего релиза (TorrServer, в пределах бюджета), сборка files.
    */
   async resolve(query: ResolveQuery): Promise<ResolvedStream> {
+    // 1. Аниме: AniLibria отдаёт готовый HLS — мгновенный старт без торрентов.
+    const anime = await this.resolveAnime(query);
+
+    // 2. Поиск торрент-релизов на rutor + скоринг под веб-стриминг.
+    const releases = await this.findTorrentReleases(query);
+
+    // 3. Прогрев лучшего релиза: тёплый кэш не ждём вовсе, новый — только
+    //    в пределах бюджета (точный fileIndex доедет фоном).
+    const warmed = await this.warmTopRelease(query, releases);
+
+    // 4. Сборка files из релизов; источников нет — честный пустой список
+    //    (без мёртвой заглушки stream?link=none, плеер показал бы ошибку).
+    const torrentFiles = this.buildTorrentFiles(releases, warmed);
+
+    // Аудио-дорожки НЕ резолвим здесь: gst-проба читает голову файла из
+    // торрента и на холодных пирах занимает до 45с. Дорожки подтягиваются
+    // лениво через tracksFor() по маршруту /items/:id/media-tracks, когда
+    // плеер уже играет.
+
+    return {
+      mediaId: query.mediaId,
+      itemId: query.itemId,
+      files: [...anime.files, ...torrentFiles],
+      audios: anime.audios,
+      subtitles: [],
+      posterUrl: null,
+      sprites: null,
+      intro: anime.intro,
+      // Только 4 поля: url (прямая ссылка) — производная, в кэш не нужна.
+      warm: warmed
+        ? {
+            hash: warmed.hash,
+            fileIndex: warmed.fileIndex,
+            magnet: warmed.magnet,
+            title: warmed.title,
+          }
+        : null,
+    };
+  }
+
+  /** Фаза 1: AniLibria — интро, HLS-серии и дорожка озвучки. */
+  private async resolveAnime(
+    query: ResolveQuery,
+  ): Promise<{ files: MediaFile[]; audios: AudioTrack[]; intro: MediaLinks["intro"] }> {
     const files: MediaFile[] = [];
     const audios: AudioTrack[] = [];
     let intro: MediaLinks["intro"] = null;
 
-    // 1. If it's anime or contains anime keywords, try AniLibria for instant HLS
+    // If it's anime or contains anime keywords, try AniLibria for instant HLS
     if (query.type === "anime" || /аниме|anime/i.test(query.title)) {
       try {
         // Точный путь: тайтл импортирован из AniLibria — берём его релиз по id.
@@ -106,65 +153,70 @@ export class StreamResolver {
                 full.episodes[0]
               : full.episodes[0];
 
-            if (targetEp.introStart && targetEp.introStop) {
-              intro = {
-                startSeconds: targetEp.introStart,
-                endSeconds: targetEp.introStop,
-              };
-            }
+          if (targetEp.introStart && targetEp.introStop) {
+            intro = {
+              startSeconds: targetEp.introStart,
+              endSeconds: targetEp.introStop,
+            };
+          }
 
-            if (targetEp.hls1080) {
-              files.push({
-                quality: "1080p (AniLibria)",
-                qualityId: 1080,
-                width: 1920,
-                height: 1080,
-                codec: "h264",
-                bitrate: null,
-                sizeBytes: null,
-                urls: {
-                  http: targetEp.hls1080,
-                  hls: targetEp.hls1080,
-                },
-              });
-            }
-            if (targetEp.hls720 && !targetEp.hls1080) {
-              files.push({
-                quality: "720p (AniLibria)",
-                qualityId: 720,
-                width: 1280,
-                height: 720,
-                codec: "h264",
-                bitrate: null,
-                sizeBytes: null,
-                urls: {
-                  http: targetEp.hls720,
-                  hls: targetEp.hls720,
-                },
-              });
-            }
-
-            audios.push({
-              id: 1,
-              index: 0,
-              codec: "aac",
-              channels: 2,
-              lang: "rus",
-              type: "dub",
-              author: {
-                title: "AniLibria",
-                shortTitle: "AL",
+          if (targetEp.hls1080) {
+            files.push({
+              quality: "1080p (AniLibria)",
+              qualityId: 1080,
+              width: 1920,
+              height: 1080,
+              codec: "h264",
+              bitrate: null,
+              sizeBytes: null,
+              urls: {
+                http: targetEp.hls1080,
+                hls: targetEp.hls1080,
               },
-              url: null,
-              masterUrl: null,
             });
+          }
+          if (targetEp.hls720 && !targetEp.hls1080) {
+            files.push({
+              quality: "720p (AniLibria)",
+              qualityId: 720,
+              width: 1280,
+              height: 720,
+              codec: "h264",
+              bitrate: null,
+              sizeBytes: null,
+              urls: {
+                http: targetEp.hls720,
+                hls: targetEp.hls720,
+              },
+            });
+          }
+
+          audios.push({
+            id: 1,
+            index: 0,
+            codec: "aac",
+            channels: 2,
+            lang: "rus",
+            type: "dub",
+            author: {
+              title: "AniLibria",
+              shortTitle: "AL",
+            },
+            url: null,
+            masterUrl: null,
+          });
         }
       } catch {
         // Fallback to torrent search
       }
     }
 
-    // 2. Search torrent releases on Rutor: русский титул И оригинальный
+    return { files, audios, intro };
+  }
+
+  /** Фаза 2: поиск релизов на rutor, дедуп по хешу и скоринг. */
+  private async findTorrentReleases(query: ResolveQuery): Promise<RutorRelease[]> {
+    // Search torrent releases on Rutor: русский титул И оригинальный
     // параллельно. Названия франшиз расходятся: под «Форсаж» rutor держит
     // мусор, под «The Fast and the Furious» — все фильмы. Слияние по хешу.
     const cleanTitle = query.title.replace(/[:\-–—]/g, " ").replace(/\s+/g, " ").trim();
@@ -188,15 +240,17 @@ export class StreamResolver {
       }
     }
 
-    const settled = await Promise.allSettled([...searchQueries].map((q) => this.rutor.search(q)));
     const byHash = new Map<string, RutorRelease>();
-    for (const r of settled) {
-      if (r.status !== "fulfilled") continue;
-      for (const rel of r.value) {
+    const mergeReleases = (settled: PromiseSettledResult<RutorRelease[]>) => {
+      if (settled.status !== "fulfilled") return;
+      for (const rel of settled.value) {
         const prev = byHash.get(rel.hash);
         if (!prev || rel.seeds > prev.seeds) byHash.set(rel.hash, rel);
       }
-    }
+    };
+
+    const settled = await Promise.allSettled([...searchQueries].map((q) => this.rutor.search(q)));
+    for (const r of settled) mergeReleases(r);
     let releases: RutorRelease[] = [...byHash.values()];
 
     // Если год не помог (релизы без года в названии) — ищем без года.
@@ -205,13 +259,7 @@ export class StreamResolver {
       const bareSettled = await Promise.allSettled(
         [...new Set(bare)].map((q) => this.rutor.search(q)),
       );
-      for (const r of bareSettled) {
-        if (r.status !== "fulfilled") continue;
-        for (const rel of r.value) {
-          const prev = byHash.get(rel.hash);
-          if (!prev || rel.seeds > prev.seeds) byHash.set(rel.hash, rel);
-        }
-      }
+      for (const r of bareSettled) mergeReleases(r);
       releases = [...byHash.values()];
     }
 
@@ -252,27 +300,43 @@ export class StreamResolver {
     if (viableReleases.length === 0 && releases.length > 0) {
       viableReleases = releases.slice(0, 5);
     }
+    return viableReleases;
+  }
 
-    // Прогрев лучшего релиза. Знакомый релиз (тёплый кэш) не ждём вообще,
-    // новый — только в пределах бюджета: клиент получает список файлов
-    // сразу, а точный fileIndex подтянется, когда метаданные доехали.
-    // Раньше здесь стоял безусловный await — addTorrent + DHT добавляли
-    // к каждому холодному резолву до 3с сверх поиска в rutor.
+  /**
+   * Фаза 3: прогрев лучшего релиза. Знакомый релиз (тёплый кэш) не ждём
+   * вообще, новый — только в пределах бюджета: клиент получает список
+   * файлов сразу, а точный fileIndex подтянется, когда метаданные доехали.
+   * Раньше здесь стоял безусловный await — addTorrent + DHT добавляли
+   * к каждому холодному резолву до 3с сверх поиска в rutor.
+   */
+  private async warmTopRelease(
+    query: ResolveQuery,
+    releases: RutorRelease[],
+  ): Promise<WarmedRelease | null> {
     const known = query.warm ?? null;
-    let warmed: WarmedRelease | null = null;
-    const best = viableReleases[0] ?? null;
+    const best = releases[0] ?? null;
 
     if (known && best && known.magnet === best.magnet) {
-      warmed = { ...known, url: this.torrServer.getStreamUrl(known.hash, known.fileIndex) };
       // Сервер TorrServer мог перезапуститься — заново приоткрываем голову
       // файла, чтобы первый сегмент не ждал DHT.
       void this.torrServer.preopenStream(known.hash, known.fileIndex).catch(() => {});
-    } else if (best) {
-      const pending = this.startWarm(`${query.itemId}:${query.mediaId}`, best);
-      warmed = (await budget(pending, WARM_BUDGET_MS)) ?? null;
+      return { ...known, url: this.torrServer.getStreamUrl(known.hash, known.fileIndex) };
     }
+    if (best) {
+      const pending = this.startWarm(`${query.itemId}:${query.mediaId}`, best);
+      return (await budget(pending, WARM_BUDGET_MS)) ?? null;
+    }
+    return null;
+  }
 
-    for (const rel of viableReleases) {
+  /** Фаза 4: files из релизов — stream/http TorrServer + gst-HLS. */
+  private buildTorrentFiles(
+    releases: RutorRelease[],
+    warmed: WarmedRelease | null,
+  ): MediaFile[] {
+    const files: MediaFile[] = [];
+    for (const rel of releases) {
       // Generate TorrServer stream link for the magnet
       const warmHit = warmed && warmed.magnet === rel.magnet ? warmed : null;
       const streamUrl = warmHit
@@ -302,48 +366,7 @@ export class StreamResolver {
         },
       });
     }
-
-    // Аудио-дорожки НЕ резолвим здесь: gst-проба читает голову файла из
-    // торрента и на холодных пирах занимает до 45с. Дорожки подтягиваются
-    // лениво через tracksFor() по маршруту /items/:id/media-tracks, когда
-    // плеер уже играет.
-
-    // Default fallback file if no releases matched
-    if (files.length === 0) {
-      files.push({
-        quality: "720p",
-        qualityId: 720,
-        width: 1280,
-        height: 720,
-        codec: "h264",
-        bitrate: null,
-        sizeBytes: null,
-        urls: {
-          http: `${this.torrServer.baseUrl}/stream?link=none`,
-          hls: null,
-        },
-      });
-    }
-
-    return {
-      mediaId: query.mediaId,
-      itemId: query.itemId,
-      files,
-      audios,
-      subtitles: [],
-      posterUrl: null,
-      sprites: null,
-      intro,
-      // Только 4 поля: url (прямая ссылка) — производная, в кэш не нужна.
-      warm: warmed
-        ? {
-            hash: warmed.hash,
-            fileIndex: warmed.fileIndex,
-            magnet: warmed.magnet,
-            title: warmed.title,
-          }
-        : null,
-    };
+    return files;
   }
 
   /**

@@ -2,7 +2,7 @@
  * End-to-end: LocalFolder → ffprobe → ffmpeg → публикация в каталог.
  * Реальный ffmpeg, реальные миграции на PGlite.
  */
-import { stat } from "node:fs/promises";
+import { stat, writeFile } from "node:fs/promises";
 import {
   audioTracks,
   type Db,
@@ -22,6 +22,7 @@ import {
   LocalStorage,
   type MetadataEnricher,
   runIngest,
+  type SourceConnector,
   UrlSourceConnector,
 } from "../src";
 import { createTestDb, makeTestMedia, makeTmpDir, TEST_FFMPEG } from "./helpers";
@@ -161,9 +162,11 @@ describe("runIngest (полный пайплайн)", () => {
     const first = await runIngest(deps, request);
     const second = await runIngest(deps, request);
 
-    // Тот же источник → та же media-строка, файлы заменены.
+    // Тот же источник → та же media-строка, файлы заменены. baseKey
+    // детерминирован по источнику (не по времени прогона) — тот же каталог.
     expect(second.itemId).toBe(first.itemId);
     expect(second.mediaId).toBe(first.mediaId);
+    expect(second.baseKey).toBe(first.baseKey);
 
     const mediaRows = await db.select().from(media).where(eq(media.itemId, first.itemId));
     expect(mediaRows).toHaveLength(1);
@@ -211,6 +214,84 @@ describe("runIngest (полный пайплайн)", () => {
     // Мастер и обе рендitions реально лежат в хранилище.
     await stat(deps.storage.resolveDir(result.masterKey));
     for (const key of result.audioKeys) await stat(deps.storage.resolveDir(key));
+  });
+
+  it("разные эпизоды одного источника пишут в разные каталоги", async () => {
+    const src = await makeTestMedia();
+    const db = await createTestDb();
+    const deps = makeDeps(db, src.dir, await makeTmpDir("zal-store-"));
+
+    const run = (episodeNumber: number) =>
+      runIngest(deps, {
+        source: { type: "local", ref: "sample.mp4" },
+        item: { type: "serial", title: "Ярмарка тщеславия", year: 2020 },
+        episode: { seasonNumber: 1, episodeNumber, title: `Серия ${episodeNumber}` },
+        ladders: ["480p"],
+      });
+
+    const e1 = await run(1);
+    const e1again = await run(1);
+    const e2 = await run(2);
+
+    // Тот же эпизод → тот же ключ; другой эпизод → другой.
+    expect(e1again.baseKey).toBe(e1.baseKey);
+    expect(e2.baseKey).not.toBe(e1.baseKey);
+    // И разные media-строки: файлы эпизодов не перезаписывают друг друга.
+    expect(e1again.mediaId).toBe(e1.mediaId);
+    expect(e2.mediaId).not.toBe(e1.mediaId);
+  });
+
+  it("cleanup коннектора вызывается и на успехе, и на ошибке прогона", async () => {
+    const src = await makeTestMedia();
+    const db = await createTestDb();
+
+    const fakeConnector = (filePath: string) => {
+      const calls = { cleanup: 0 };
+      const connector: SourceConnector = {
+        kind: "local",
+        search: async () => [],
+        probe: async () => {
+          throw new Error("pipeline не должен звать probe напрямую");
+        },
+        pull: async () => ({
+          filePath,
+          subtitlePaths: [],
+          cleanup: async () => {
+            calls.cleanup += 1;
+          },
+        }),
+      };
+      return { connector, calls };
+    };
+    const makeDepsWith = async (connector: SourceConnector): Promise<IngestPipelineDeps> => ({
+      db,
+      storage: new LocalStorage(await makeTmpDir("zal-store-"), "http://cdn.test/m"),
+      connectors: { local: connector, url: connector },
+      ffmpeg: TEST_FFMPEG,
+    });
+
+    // Успех: полный прогон до публикации.
+    const ok = fakeConnector(src.videoPath);
+    await runIngest(await makeDepsWith(ok.connector), {
+      source: { type: "local", ref: "sample.mp4" },
+      item: { type: "movie", title: "Фильм", year: 2020 },
+      ladders: ["480p"],
+    });
+    expect(ok.calls.cleanup).toBe(1);
+
+    // Ошибка после pull (мусорный файл валит probe) — cleanup всё равно зван.
+    const badDir = await makeTmpDir("zal-bad-");
+    const garbage = `${badDir}/garbage.bin`;
+    await writeFile(garbage, "definitely not a video");
+    const bad = fakeConnector(garbage);
+    await expect(
+      runIngest(await makeDepsWith(bad.connector), {
+        source: { type: "local", ref: "garbage.bin" },
+        item: { type: "movie", title: "Мусор", year: 2020 },
+        ladders: ["480p"],
+      }),
+    ).rejects.toThrow();
+    expect(bad.calls.cleanup).toBe(1);
   });
 
   it("эпизод сериала публикуется с сезоном и эпизодом", async () => {

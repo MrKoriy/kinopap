@@ -2,6 +2,7 @@
  * AniLibria connector for fast, legal anime streaming via direct HLS.
  * Compatible with anilibria.top/api/v1.
  */
+import { fetchWithTimeout } from "../lib/http";
 
 export interface AnilibriaEpisode {
   id: string;
@@ -40,6 +41,40 @@ export interface AnilibriaCatalogPage {
   totalPages: number;
 }
 
+/** Пункт поисковой выдачи каталога — только читаемые поля. */
+interface SearchItem {
+  id?: number;
+  name?: { main?: string; english?: string };
+  year?: number;
+  poster?: { optimized?: { src?: string } };
+}
+
+interface SearchResponse {
+  data?: SearchItem[];
+}
+
+/** Ответ /anime/releases/:id — только читаемые поля. */
+interface EpisodeResponse {
+  id?: number | string;
+  ordinal?: number;
+  name?: string;
+  duration?: number;
+  opening?: { start?: number; stop?: number };
+  hls_1080?: string;
+  hls_720?: string;
+  hls_480?: string;
+}
+
+interface ReleaseResponse {
+  id?: number;
+  name?: { main?: string; english?: string };
+  year?: number;
+  episodes?: EpisodeResponse[];
+  poster?: { optimized?: { src?: string } };
+  description?: string;
+  plot?: string;
+}
+
 function absPoster(poster: unknown): string | null {
   const src = (poster as { optimized?: { src?: unknown } } | undefined)?.optimized?.src;
   if (typeof src !== "string" || !src) return null;
@@ -62,12 +97,10 @@ export class AnilibriaConnector {
    */
   async listReleases(page: number, limit = 50): Promise<AnilibriaCatalogPage> {
     const url = `${this.baseUrl}/anime/catalog/releases?page=${page}&limit=${limit}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
     try {
-      const res = await this.fetchFn(url, {
-        signal: controller.signal,
+      const res = await fetchWithTimeout(url, 8000, {
         headers: { "User-Agent": "Mozilla/5.0" },
+        fetchImpl: this.fetchFn,
       });
       if (!res.ok) return { releases: [], totalPages: 0 };
       const json = (await res.json()) as unknown;
@@ -112,56 +145,49 @@ export class AnilibriaConnector {
       };
     } catch {
       return { releases: [], totalPages: 0 };
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
   async search(query: string): Promise<AnilibriaRelease[]> {
     const url = `${this.baseUrl}/anime/catalog/releases?search=${encodeURIComponent(query)}&limit=5`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
 
     try {
-      const res = await this.fetchFn(url, {
-        signal: controller.signal,
+      const res = await fetchWithTimeout(url, 6000, {
         headers: { "User-Agent": "Mozilla/5.0" },
+        fetchImpl: this.fetchFn,
       });
       if (!res.ok) return [];
-      const json = (await res.json()) as { data?: any[] };
+      const json = (await res.json()) as SearchResponse;
       if (!json.data || !Array.isArray(json.data)) return [];
 
       return json.data.map((item) => ({
-        id: item.id,
+        id: item.id ?? 0,
         title: item.name?.main ?? "",
         englishTitle: item.name?.english ?? undefined,
         year: item.year ?? 0,
         episodes: [],
-        posterUrl: item.poster?.optimized?.src ? `https://anilibria.top${item.poster.optimized.src}` : undefined,
+        posterUrl: item.poster?.optimized?.src
+          ? `https://anilibria.top${item.poster.optimized.src}`
+          : undefined,
       }));
     } catch {
       return [];
-    } finally {
-      clearTimeout(timeout);
     }
   }
 
   async getRelease(id: number): Promise<AnilibriaRelease | null> {
     const url = `${this.baseUrl}/anime/releases/${id}`;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
 
     try {
-      const res = await this.fetchFn(url, {
-        signal: controller.signal,
+      const res = await fetchWithTimeout(url, 8000, {
         headers: { "User-Agent": "Mozilla/5.0" },
+        fetchImpl: this.fetchFn,
       });
       if (!res.ok) return null;
-      const data = (await res.json()) as any;
+      const data = (await res.json()) as ReleaseResponse;
       if (!data?.id) return null;
 
-      const rawEpisodes: any[] = data.episodes ?? [];
-      const episodes: AnilibriaEpisode[] = rawEpisodes.map((ep) => ({
+      const episodes: AnilibriaEpisode[] = (data.episodes ?? []).map((ep) => ({
         id: String(ep.id ?? ep.ordinal),
         name: ep.name ?? `Серия ${ep.ordinal}`,
         ordinal: ep.ordinal ?? 1,
@@ -184,8 +210,6 @@ export class AnilibriaConnector {
       };
     } catch {
       return null;
-    } finally {
-      clearTimeout(timeout);
     }
   }
 }

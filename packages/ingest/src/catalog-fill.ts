@@ -20,6 +20,7 @@ import {
   mergeCatalogDuplicates,
 } from "@zal/db";
 import { type AnimeImportSummary, importAnilibriaCatalog } from "./anilibria-import";
+import { TMDB_IMAGE_BASE_URL, TmdbClient } from "./tmdb-client";
 
 /** TMDb (ru) → локальные названия жанров из сида. */
 const GENRE_ALIASES: Record<string, string> = {
@@ -148,47 +149,6 @@ export interface FillOptions {
 
 type TmdbEntry = CatalogDraft;
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-/** Клиент TMDb с пейсингом и ретраями: 429/5xx не роняют fill. */
-class TmdbClient {
-  private nextAt = 0;
-
-  constructor(
-    private readonly apiKey: string,
-    private readonly fetchFn: typeof fetch,
-    private readonly baseUrl: string,
-    private readonly intervalMs: number,
-  ) {}
-
-  async get<T = unknown>(path: string): Promise<T | null> {
-    // Пейсинг: очередь вместо «спим и дёргаемся» — держит ровный темп.
-    const now = Date.now();
-    const start = Math.max(now, this.nextAt);
-    this.nextAt = start + this.intervalMs;
-    if (start > now) await sleep(start - now);
-
-    const url = new URL(`${this.baseUrl}${path}`);
-    url.searchParams.set("api_key", this.apiKey);
-    url.searchParams.set("language", "ru-RU");
-
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const res = await this.fetchFn(url, { signal: AbortSignal.timeout(10_000) });
-        if (res.status === 429) {
-          await sleep(1000 * (attempt + 1));
-          continue;
-        }
-        if (!res.ok) return null;
-        return (await res.json()) as T;
-      } catch {
-        await sleep(500 * (attempt + 1));
-      }
-    }
-    return null;
-  }
-}
-
 function mapEntry(raw: Record<string, unknown>, type: "movie" | "serial", minVotes: number): TmdbEntry | null {
   const tmdbId = typeof raw.id === "number" ? raw.id : null;
   const title = String(raw.title ?? raw.name ?? "").trim();
@@ -218,9 +178,9 @@ function mapEntry(raw: Record<string, unknown>, type: "movie" | "serial", minVot
     rating: voteAvg > 0 ? Math.round(voteAvg * 10) / 10 : 0,
     votes,
     runtime: typeof runtimeRaw === "number" && runtimeRaw > 0 ? runtimeRaw * 60 : null,
-    posterSmall: `https://image.tmdb.org/t/p/w185${posterPath}`,
-    posterMedium: `https://image.tmdb.org/t/p/w500${posterPath}`,
-    posterBig: `https://image.tmdb.org/t/p/original${posterPath}`,
+    posterSmall: `${TMDB_IMAGE_BASE_URL}/w185${posterPath}`,
+    posterMedium: `${TMDB_IMAGE_BASE_URL}/w500${posterPath}`,
+    posterBig: `${TMDB_IMAGE_BASE_URL}/original${posterPath}`,
     genreIds: Array.isArray(raw.genre_ids)
       ? raw.genre_ids.filter((g): g is number => typeof g === "number")
       : [],
@@ -259,9 +219,9 @@ function mapCollectionPart(raw: Record<string, unknown>): TmdbEntry | null {
     rating: voteAvg > 0 ? Math.round(voteAvg * 10) / 10 : 0,
     votes,
     runtime: null,
-    posterSmall: posterPath ? `https://image.tmdb.org/t/p/w185${posterPath}` : null,
-    posterMedium: posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : null,
-    posterBig: posterPath ? `https://image.tmdb.org/t/p/original${posterPath}` : null,
+    posterSmall: posterPath ? `${TMDB_IMAGE_BASE_URL}/w185${posterPath}` : null,
+    posterMedium: posterPath ? `${TMDB_IMAGE_BASE_URL}/w500${posterPath}` : null,
+    posterBig: posterPath ? `${TMDB_IMAGE_BASE_URL}/original${posterPath}` : null,
     genreIds: [],
   };
 }
@@ -271,12 +231,12 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
   const spec = opts.spec ?? {};
   const minVotesMovie = spec.minVotesMovie ?? 30;
   const minVotesTv = spec.minVotesTv ?? 20;
-  const tmdb = new TmdbClient(
-    opts.apiKey,
-    opts.fetch ?? fetch,
-    opts.baseUrl ?? "https://api.themoviedb.org/3",
-    opts.requestIntervalMs ?? 60,
-  );
+  const tmdb = new TmdbClient({
+    apiKey: opts.apiKey,
+    fetch: opts.fetch ?? fetch,
+    baseUrl: opts.baseUrl,
+    requestIntervalMs: opts.requestIntervalMs ?? 60,
+  });
 
   const byKey = new Map<string, TmdbEntry>();
   const sources: string[] = [];
@@ -482,7 +442,7 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
   }
 
   /* ---------- 5. Склейка дублей (похожие названия, близкие годы) ---------- */
-  let dedupe: FillSummary["dedupe"] ;
+  let dedupe: FillSummary["dedupe"];
   if (spec.dedupe !== false) {
     report("dedupe", processed, added, skipped);
     const merge = await mergeCatalogDuplicates(opts.db);

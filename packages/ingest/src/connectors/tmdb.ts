@@ -2,8 +2,13 @@
  * TmdbEnricher — легальный официальный TMDb API (api.themoviedb.org).
  * Тянет постеры, описания, оригинальные названия, рейтинги и трейлеры.
  * fetch инжектируется — тесты ходят в мок, не в сеть.
+ *
+ * Транспорт общий с fill'ом каталога (tmdb-client.ts): пейсинг, ретраи на
+ * 429 и знание baseUrl/api_key — в одном месте. Поиск идёт без language
+ * (как и раньше), трейлеры — ru-RU → en-US.
  */
 import type { ItemType } from "@zal/api-client";
+import { TmdbClient } from "../tmdb-client";
 import type { Enrichment, EnrichmentQuery, MetadataEnricher } from "../types";
 
 const TV_TYPES: readonly ItemType[] = ["serial", "docuserial", "tvshow"];
@@ -44,25 +49,34 @@ export interface TmdbTrailer {
 export class TmdbEnricher implements MetadataEnricher {
   readonly kind = "tmdb";
 
-  constructor(private readonly opts: TmdbEnricherOptions) {}
+  private readonly client: TmdbClient;
+
+  constructor(opts: TmdbEnricherOptions) {
+    this.client = new TmdbClient({
+      apiKey: opts.apiKey,
+      fetch: opts.fetch,
+      baseUrl: opts.baseUrl,
+      imageBaseUrl: opts.imageBaseUrl,
+      // Энричер ходит в TMDb точечно (1-3 запроса на ingest): пейсинг не нужен,
+      // ошибки — non-fatal на уровне pipeline, поэтому строгий режим.
+      requestIntervalMs: 0,
+      timeoutMs: 8000,
+      // Поиск по названию идёт без language — как исторически: матчатся
+      // названия, а не локализация выдачи.
+      language: null,
+    });
+  }
 
   async find(query: EnrichmentQuery): Promise<Enrichment[]> {
     const isTv = TV_TYPES.includes(query.type);
-    const url = new URL(
-      `${this.opts.baseUrl ?? "https://api.themoviedb.org/3"}/search/${isTv ? "tv" : "movie"}`,
-    );
-    url.searchParams.set("api_key", this.opts.apiKey);
-    url.searchParams.set("query", query.title);
+    const params: Record<string, string> = { query: query.title };
     if (query.year) {
-      url.searchParams.set(isTv ? "first_air_date_year" : "year", String(query.year));
+      params[isTv ? "first_air_date_year" : "year"] = String(query.year);
     }
-
-    // Без таймаута зависший TMDb фейлил уже опубликованную задачу.
-    const res = await (this.opts.fetch ?? fetch)(url, {
-      signal: AbortSignal.timeout(8000),
-    });
-    if (!res.ok) throw new Error(`tmdb: HTTP ${res.status}`);
-    const data = (await res.json()) as { results?: TmdbSearchResult[] };
+    const data = await this.client.getOrThrow<{ results?: TmdbSearchResult[] }>(
+      `/search/${isTv ? "tv" : "movie"}`,
+      { params },
+    );
 
     const results = (data.results ?? []).slice(0, 5).map((r) => this.map(r));
 
@@ -89,19 +103,14 @@ export class TmdbEnricher implements MetadataEnricher {
    */
   async trailer(input: { type: ItemType; tmdbId: number }): Promise<TmdbTrailer | null> {
     const isTv = TV_TYPES.includes(input.type);
-    const base = this.opts.baseUrl ?? "https://api.themoviedb.org/3";
     const kind = isTv ? "tv" : "movie";
 
     for (const language of ["ru-RU", "en-US"]) {
-      const url = new URL(`${base}/${kind}/${input.tmdbId}/videos`);
-      url.searchParams.set("api_key", this.opts.apiKey);
-      url.searchParams.set("language", language);
-      const res = await (this.opts.fetch ?? fetch)(url, {
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) continue;
-      const data = (await res.json()) as { results?: TmdbVideo[] };
-      const picked = pickTrailer(data.results ?? []);
+      const data = await this.client.get<{ results?: TmdbVideo[] }>(
+        `/${kind}/${input.tmdbId}/videos`,
+        { language },
+      );
+      const picked = data && pickTrailer(data.results ?? []);
       if (picked) {
         return { id: picked, url: `https://www.youtube.com/watch?v=${picked}` };
       }
@@ -127,8 +136,7 @@ export class TmdbEnricher implements MetadataEnricher {
 
   private img(posterPath: string | null | undefined, size: string): string | null {
     if (!posterPath) return null;
-    const base = (this.opts.imageBaseUrl ?? "https://image.tmdb.org/t/p").replace(/\/$/, "");
-    return `${base}/${size}${posterPath}`;
+    return this.client.imageUrl(posterPath, size);
   }
 }
 
