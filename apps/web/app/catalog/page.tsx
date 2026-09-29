@@ -1,9 +1,16 @@
+import type { Metadata } from "next";
 import { ITEM_TYPE_TITLES, type ItemType } from "@zal/api-client";
 import Link from "next/link";
 import { ItemCard } from "@/components/item-card";
 import { type CatalogParams, fetchItems } from "@/lib/api";
 
 export const revalidate = 30;
+
+export const metadata: Metadata = {
+  title: "Каталог — Зал",
+  description:
+    "Каталог закрытого стриминг-клуба «Зал»: фильмы, сериалы, аниме, концерты и документальное кино — с фильтрами по типу, году и рейтингу.",
+};
 
 const SORTS: { value: string; label: string }[] = [
   { value: "updated-", label: "Новое" },

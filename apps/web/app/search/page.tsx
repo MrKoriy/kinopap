@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { ItemCard } from "@/components/item-card";
 import { fetchSearch } from "@/lib/api";
@@ -10,6 +11,12 @@ const FIELDS = [
 ] as const;
 
 export const revalidate = 0;
+
+// Без запроса страница пустая, с запросом — бесконечные варианты URL: не индексируем.
+export const metadata: Metadata = {
+  title: "Поиск — Зал",
+  robots: { index: false },
+};
 
 /** Результаты поиска: title/director/cast через pg_trgm на бэкенде. */
 export default async function SearchPage({
