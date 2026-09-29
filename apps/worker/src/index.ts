@@ -1,5 +1,5 @@
 import { createDb, createPool, reconcileStaleIngestJobs } from "@zal/db";
-import { fillCatalog } from "@zal/ingest";
+import { fillCatalog, stopActiveChildren } from "@zal/ingest";
 import { Redis } from "ioredis";
 import { createCatalogWorker } from "./catalog";
 import { makeWorkerDeps } from "./deps";
@@ -15,10 +15,18 @@ if (!databaseUrl) {
 const db = createDb(createPool(databaseUrl));
 
 // Краш воркера посреди encode раньше оставлял ingest_jobs навсегда «running».
-const reconciled = await reconcileStaleIngestJobs(db);
-if (reconciled > 0) {
-  console.log(`worker: reconciled ${reconciled} stale ingest jobs`);
+// SQL сужают до running-only — просто вызываем, сигнатура не меняется.
+async function reconcileStale(): Promise<void> {
+  try {
+    const reconciled = await reconcileStaleIngestJobs(db);
+    if (reconciled > 0) {
+      console.log(`worker: reconciled ${reconciled} stale ingest jobs`);
+    }
+  } catch (err) {
+    console.warn("worker: reconcile failed:", String(err).slice(0, 200));
+  }
 }
+await reconcileStale();
 
 const deps = makeWorkerDeps({
   db,
@@ -74,10 +82,56 @@ const catalogWorker = createCatalogWorker(catalogConnection, {
 });
 console.log("worker: catalog-fill queue ready");
 
+// BullMQ-воркеры и Redis-коннекты эмитят 'error' (сбой jobs, реконнект).
+// Без слушателя an unhandled 'error' роняет процесс — падение Redis
+// не должно убивать воркера, оно должно попадать в лог и ретраиться.
+for (const [name, w] of [
+  ["transcode", worker],
+  ["catalog", catalogWorker],
+] as const) {
+  w.on("error", (err) => {
+    console.warn(`worker: ${name} worker error (non-fatal):`, String(err).slice(0, 300));
+  });
+}
+for (const [name, c] of [
+  ["transcode", connection],
+  ["catalog", catalogConnection],
+] as const) {
+  c.on("error", (err) => {
+    console.warn(`worker: ${name} redis error (non-fatal):`, String(err).slice(0, 300));
+  });
+}
+
+// GC по расписанию: раньше чистка шла только после успешного ingest,
+// и «тихий» воркер без джоб копил сироты вечно. Раз в час достаточно.
+const GC_INTERVAL_MS = 60 * 60 * 1000;
+const gcTimer = setInterval(() => {
+  void deps.gc?.().catch((err) => {
+    console.warn("worker: scheduled gc failed (non-fatal):", String(err).slice(0, 200));
+  });
+}, GC_INTERVAL_MS);
+gcTimer.unref();
+
+// Реконсиляция «running»-джоб: не только на старте — краш между
+// стартами воркера висел бы до следующего рестарта. Раз в 15 минут.
+const RECONCILE_INTERVAL_MS = 15 * 60 * 1000;
+const reconcileTimer = setInterval(() => void reconcileStale(), RECONCILE_INTERVAL_MS);
+reconcileTimer.unref();
+
 async function shutdown(signal: string): Promise<void> {
   console.log(`worker: ${signal}, closing`);
+  clearInterval(gcTimer);
+  clearInterval(reconcileTimer);
+  // Потолок ожидания: зависший encode держал worker.close() бесконечно,
+  // PM2 завершал процесс принудительно, ffmpeg оставался сиротой.
+  const exitTimer = setTimeout(() => process.exit(1), 10_000);
+  exitTimer.unref();
+  // Сначала останавливаем дочерние ffmpeg/ffprobe — иначе close() ждёт
+  // завершения активной джобы часами.
+  await stopActiveChildren(5_000);
   await Promise.allSettled([worker.close(), catalogWorker.close()]);
   await Promise.allSettled([connection.quit(), catalogConnection.quit()]);
+  clearTimeout(exitTimer);
   process.exit(0);
 }
 

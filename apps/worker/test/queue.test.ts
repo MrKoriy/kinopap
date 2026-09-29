@@ -1,53 +1,26 @@
 import { describe, expect, it } from "vitest";
-import {
-  probeJobSchema,
-  transcodeJobPayloadSchema,
-  transcodeJobSchema,
-} from "../src/queue";
+import { ingestJobSchema, transcodeJobPayloadSchema } from "../src/queue";
 
 describe("transcode job schemas", () => {
-  it("accepts probe and transcode payloads", () => {
-    const probe = probeJobSchema.parse({
-      kind: "probe",
-      mediaId: 1,
-      sourceKey: "uploads/movie.mkv",
+  it("ingest-пayload валиден целиком", () => {
+    const job = ingestJobSchema.parse({
+      kind: "ingest",
+      jobId: 5,
+      source: { type: "local", ref: "movie.mkv" },
+      item: { title: "Матрица", year: 1999, ladders: ["720p", "1080p"] },
     });
-    expect(probe.kind).toBe("probe");
-
-    const transcode = transcodeJobSchema.parse({
-      kind: "transcode",
-      mediaId: 1,
-      sourceKey: "uploads/movie.mkv",
-      ladders: ["720p", "1080p"],
-    });
-    expect(transcode.ladders).toEqual(["720p", "1080p"]);
-  });
-
-  it("без ladders рунги выбирает selectLadder по высоте исходника", () => {
-    const job = transcodeJobSchema.parse({
-      kind: "transcode",
-      mediaId: 2,
-      sourceKey: "uploads/x.mkv",
-    });
-    expect(job.ladders).toBeUndefined();
+    expect(job.kind).toBe("ingest");
+    expect(job.jobId).toBe(5);
   });
 
   it("rejects garbage payloads", () => {
     expect(transcodeJobPayloadSchema.safeParse({ kind: "unknown" }).success).toBe(false);
     expect(
-      transcodeJobSchema.safeParse({
-        kind: "transcode",
-        mediaId: -1,
-        sourceKey: "",
-      }).success,
+      ingestJobSchema.safeParse({ kind: "ingest", jobId: 0 }).success,
     ).toBe(false);
     expect(
-      transcodeJobSchema.safeParse({
-        kind: "transcode",
-        mediaId: 1,
-        sourceKey: "a.mkv",
-        ladders: ["4k-ultra"],
-      }).success,
+      ingestJobSchema.safeParse({ kind: "ingest", jobId: 1, source: { type: "local" } })
+        .success,
     ).toBe(false);
   });
 });

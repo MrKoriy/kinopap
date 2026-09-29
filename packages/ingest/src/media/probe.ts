@@ -1,13 +1,10 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { type ChildProcess, execFile } from "node:child_process";
 import type {
   SourceAudioInfo,
   SourceInfo,
   SourceSubtitleInfo,
   SourceVideoInfo,
 } from "../types";
-
-const execFileAsync = promisify(execFile);
 
 export interface FfmpegConfig {
   ffmpegPath?: string;
@@ -30,9 +27,16 @@ export const DEFAULT_ENCODE_TIMEOUT_MS = 4 * 60 * 60 * 1000;
 export const DEFAULT_ASSET_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
+ * Активные дочерние процессы (ffmpeg/ffprobe): трекинг для остановки при
+ * shutdown воркера. add — на spawn, remove — на завершении процесса.
+ */
+export const activeChildProcesses = new Set<ChildProcess>();
+
+/**
  * execFile с таймаутом: зависший ffmpeg/ffprobe раньше занимал единственный
  * слот воркера навсегда (лок продлевается, event loop жив — BullMQ не
- * детектит stall). timeout у child_process посылает SIGTERM процессу.
+ * детектит stall). timeout у child_process по умолчанию останавливает
+ * процесс мягким сигналом.
  */
 export function execWithTimeout(
   file: string,
@@ -40,7 +44,56 @@ export function execWithTimeout(
   timeoutMs: number,
   maxBuffer = 64 * 1024 * 1024,
 ): Promise<{ stdout: string; stderr: string }> {
-  return execFileAsync(file, args, { maxBuffer, timeout: timeoutMs });
+  return new Promise((resolve, reject) => {
+    const child = execFile(
+      file,
+      args,
+      { maxBuffer, timeout: timeoutMs },
+      (error, stdout, stderr) => {
+        activeChildProcesses.delete(child);
+        if (error) reject(error);
+        else resolve({ stdout, stderr });
+      },
+    );
+    activeChildProcesses.add(child);
+  });
+}
+
+/**
+ * Остановить все активные дочерние процессы: каждому посылаем мягкий
+ * сигнал завершения, через hardAfterMs — принудительный. Нужно, чтобы
+ * shutdown воркера не ждал часовой encode: процесс завершается, джоба
+ * быстро отдаёт ошибку, worker.close() отпускает слот.
+ */
+export function stopActiveChildren(hardAfterMs = 5_000): Promise<void> {
+  const isAlive = (c: ChildProcess) => c.exitCode === null && c.signalCode === null;
+  const live = [...activeChildProcesses].filter(isAlive);
+  if (live.length === 0) return Promise.resolve();
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(hardTimer);
+      resolve();
+    };
+
+    for (const child of live) {
+      child.kill("SIGTERM");
+      // Мягкий сигнал сработал — принудительный уже незачем.
+      child.once("exit", () => {
+        if ([...activeChildProcesses].every((c) => !isAlive(c))) finish();
+      });
+    }
+
+    const hardTimer = setTimeout(() => {
+      for (const child of live) {
+        if (isAlive(child)) child.kill("SIGKILL");
+      }
+      finish();
+    }, hardAfterMs);
+  });
 }
 
 function parseFps(rate: string | undefined): number {

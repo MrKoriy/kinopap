@@ -6,15 +6,14 @@ import { type Db, updateIngestJob } from "@zal/db";
 import {
   type FfmpegConfig,
   gcOrphanIngestDirs,
+  gcStaleTmpDirs,
   LocalFolderConnector,
   LocalStorage,
   type MediaStorage,
   type MetadataEnricher,
-  probeMedia,
   runIngest,
   type SourceConnector,
   TmdbEnricher,
-  transcodeToHls,
   UrlSourceConnector,
 } from "@zal/ingest";
 import type { IngestJobStore, WorkerDeps } from "./worker";
@@ -49,11 +48,15 @@ export function makeWorkerDeps(cfg: WorkerDepsConfig): WorkerDeps {
 
   const jobStore: IngestJobStore = {
     markRunning: (id) => updateIngestJob(cfg.db, id, { status: "running" }),
+    // Пустой патч: updateIngestJob сам освежает updatedAt.
+    touch: (id) => updateIngestJob(cfg.db, id, {}),
     markDone: (id, result) =>
       updateIngestJob(cfg.db, id, {
         status: "done",
         itemId: result.itemId,
         mediaId: result.mediaId,
+        // Хвост прошлых реконсиляций/ретраев не должен висеть на успехе.
+        error: null,
       }),
     markFailed: (id, error) =>
       updateIngestJob(cfg.db, id, { status: "failed", error }),
@@ -61,12 +64,18 @@ export function makeWorkerDeps(cfg: WorkerDepsConfig): WorkerDeps {
 
   return {
     jobStore,
-    gc: () =>
-      gcOrphanIngestDirs(cfg.db, cfg.mediaRoot).then((removed) => {
-        if (removed.length > 0) {
-          console.log(`worker gc: removed ${removed.length} orphan dirs`);
-        }
-      }),
+    gc: async () => {
+      // Сироты ingest/* и jobs/* в хранилище + осиротевшие zal-ingest-*
+      // рабочие каталоги в tmpdir (остаются после крашей воркера).
+      const removed = await gcOrphanIngestDirs(cfg.db, cfg.mediaRoot);
+      const tmpRemoved = await gcStaleTmpDirs();
+      if (removed.length > 0) {
+        console.log(`worker gc: removed ${removed.length} orphan dirs`);
+      }
+      if (tmpRemoved.length > 0) {
+        console.log(`worker gc: removed ${tmpRemoved.length} stale tmp dirs`);
+      }
+    },
     runIngest: (job) =>
       runIngest(
         {
@@ -83,27 +92,5 @@ export function makeWorkerDeps(cfg: WorkerDepsConfig): WorkerDeps {
           episode: job.episode,
         },
       ),
-    runProbe: (job) => probeMedia(storage.resolveDir(job.sourceKey), cfg.ffmpeg),
-    runTranscode: async (job) => {
-      const src = storage.resolveDir(job.sourceKey);
-      const info = await probeMedia(src, cfg.ffmpeg);
-      const height = info.video[0]?.height ?? 720;
-      const baseKey = `jobs/transcode-${Date.now()}`;
-      // Multi-audio HLS: видео-лестница + рендitions дубляжей + мастер.
-      const { rungs, audioRenditions } = await transcodeToHls(
-        src,
-        storage.resolveDir(baseKey),
-        height,
-        info.audio.map((a) => ({ lang: a.lang, title: a.title })),
-        { ...cfg.ffmpeg, ladder: job.ladders },
-      );
-      return {
-        keys: [
-          `${baseKey}/master.m3u8`,
-          ...rungs.map((r) => `${baseKey}/${r.dirName}/index.m3u8`),
-          ...audioRenditions.map((a) => `${baseKey}/${a.dirName}/index.m3u8`),
-        ],
-      };
-    },
   };
 }

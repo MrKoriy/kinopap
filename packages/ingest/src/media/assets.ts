@@ -31,6 +31,28 @@ function effectiveInterval(intervalSeconds: number, durationSeconds: number): nu
   return Math.min(intervalSeconds, Math.max(durationSeconds, 0.1));
 }
 
+/** Потолок тайлов спрайта: длинный фильм иначе даёт 1440+ тайлов
+ * и JPEG ~6000px, который плеер тянет с трудом. */
+export const MAX_TILES = 600;
+
+/**
+ * Раскладка тайлов спрайта: интервал и число тайлов. Если тайлов
+ * получается больше MAX_TILES — интервал пересчитывается как
+ * ceil(длительность / MAX_TILES), чтобы уложиться в потолок.
+ */
+export function spriteTileLayout(
+  durationSeconds: number,
+  intervalSeconds: number,
+): { intervalSeconds: number; count: number } {
+  let interval = effectiveInterval(intervalSeconds, durationSeconds);
+  let count = Math.max(1, Math.floor(durationSeconds / interval));
+  if (count > MAX_TILES) {
+    interval = Math.max(1, Math.ceil(durationSeconds / MAX_TILES));
+    count = Math.max(1, Math.floor(durationSeconds / interval));
+  }
+  return { intervalSeconds: interval, count };
+}
+
 export interface SpriteMetaResult {
   intervalSeconds: number;
   tileWidth: number;
@@ -94,13 +116,12 @@ export async function generateSprite(
     sourceHeight: number;
   },
 ): Promise<SpriteMetaResult> {
-  const interval = effectiveInterval(
-    opts.intervalSeconds ?? 5,
+  const { intervalSeconds: interval, count } = spriteTileLayout(
     opts.durationSeconds,
+    opts.intervalSeconds ?? 5,
   );
   const tileWidth = opts.tileWidth ?? 160;
   const tileHeight = Math.max(2, Math.round((tileWidth * opts.sourceHeight) / opts.sourceWidth / 2) * 2);
-  const count = Math.max(1, Math.floor(opts.durationSeconds / interval));
   const columns = Math.ceil(Math.sqrt(count));
   const rows = Math.ceil(count / columns);
 

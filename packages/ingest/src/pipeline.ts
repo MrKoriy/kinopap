@@ -4,7 +4,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { cp, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, stat, utimes } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AudioDubType, IngestRequest } from "@zal/api-client";
@@ -87,6 +87,9 @@ export function mediaSourceKey(request: IngestRequest): string {
     .slice(0, 16);
 }
 
+/** Пульс рабочего каталога: mtime освежается вдвое чаще порога GC tmp-каталогов. */
+const WORKDIR_HEARTBEAT_MS = 5 * 60 * 1000;
+
 export async function runIngest(
   deps: IngestPipelineDeps,
   request: IngestRequest,
@@ -94,6 +97,14 @@ export async function runIngest(
   const connector = deps.connectors[request.source.type];
   const cfg = deps.ffmpeg ?? {};
   const workDir = await mkdtemp(path.join(os.tmpdir(), "zal-ingest-"));
+
+  // ffmpeg пишет в подкаталоги, mtime самого workDir стоит со времён
+  // mkdtemp — часовой GC tmp-каталогов срезал бы активный многочасовой
+  // encode. Держим mtime свежим, пока прогон жив.
+  const dirHeartbeat = setInterval(() => {
+    void utimes(workDir, new Date(), new Date()).catch(() => {});
+  }, WORKDIR_HEARTBEAT_MS);
+  dirHeartbeat.unref();
 
   try {
     const pulled = await connector.pull(request.source.ref, {
@@ -118,7 +129,7 @@ export async function runIngest(
       path.join(workDir, "hls"),
       video.height,
       audioInputs,
-      { ...cfg, ladder: request.ladders },
+      { ...cfg, ladder: request.ladders, durationSeconds: info.durationSeconds },
     );
 
     // 2. Ассеты плеера: постер, тумбы, спрайт для скраббинга.
@@ -291,6 +302,7 @@ export async function runIngest(
       audioKeys: audioRenditions.map((a) => `${baseKey}/${a.dirName}/index.m3u8`),
     };
   } finally {
+    clearInterval(dirHeartbeat);
     await rm(workDir, { recursive: true, force: true });
     await pulledCleanupGuard();
   }

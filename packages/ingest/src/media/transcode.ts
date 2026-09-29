@@ -48,6 +48,22 @@ export interface TranscodeResult {
 
 export interface TranscodeOptions extends FfmpegConfig {
   ladder?: readonly string[];
+  /** Длительность источника, сек: таймаут масштабируется от неё. */
+  durationSeconds?: number;
+}
+
+/**
+ * Таймаут encode: явное значение (encodeTimeoutMs) уважаем как есть,
+ * иначе — max(базовый потолок, 2× длительность источника). Два часа
+ * фильма кодируются дольше часа — масштаб от длительности, но короткие
+ * клипы не должны получать таймаут меньше базового.
+ */
+export function resolveEncodeTimeoutMs(opts: {
+  encodeTimeoutMs?: number;
+  durationSeconds?: number;
+}): number {
+  const durationMs = (opts.durationSeconds ?? 0) * 1000;
+  return opts.encodeTimeoutMs ?? Math.max(DEFAULT_ENCODE_TIMEOUT_MS, durationMs * 2);
 }
 
 function safeToken(raw: string | null | undefined, fallback: string): string {
@@ -172,12 +188,7 @@ export async function transcodeToHls(
     path.join(outDir, "%v", "index.m3u8"),
   );
 
-  // Два часа фильма кодируются дольше часа: таймаут — от длительности,
-  // но не меньше базового (масштаб: 120 минут → ~4 часа потолка).
-  const timeoutMs = Math.max(
-    DEFAULT_ENCODE_TIMEOUT_MS,
-    opts.encodeTimeoutMs ?? 0,
-  );
+  const timeoutMs = resolveEncodeTimeoutMs(opts);
 
   // -nostats/-v warning: stderr без прогресс-строк — 64 МБ maxBuffer
   // не переполняется на длинных кодированиях.
