@@ -1,11 +1,15 @@
+import type { ItemDetail } from "@zal/api-client";
 import { describe, expect, it } from "vitest";
 import { formatDuration, formatTime } from "@/lib/format";
 import {
   absoluteStreamUrl,
   activeCues,
+  episodeGroups,
+  flattenEpisodes,
   isIntroVisible,
   isNearEnd,
   nextAliveSource,
+  nextEpisode,
   parseVtt,
   spriteTileFor,
 } from "@/lib/player-logic";
@@ -182,5 +186,129 @@ describe("absoluteStreamUrl", () => {
     expect(absoluteStreamUrl(null)).toBe("");
     expect(absoluteStreamUrl(undefined)).toBe("");
     expect(absoluteStreamUrl("")).toBe("");
+  });
+});
+
+/* ---------- Серии: список для плеера ---------- */
+
+type SeasonInput = NonNullable<ItemDetail["seasons"]>[number];
+type PartInput = NonNullable<ItemDetail["media"]>[number];
+
+function ep(number: number, mediaId: number | null, title: string | null = null) {
+  return { id: number, number, title, thumbnailUrl: null, runtime: 600, mediaId };
+}
+
+function seasonOf(
+  number: number,
+  episodes: SeasonInput["episodes"],
+  title: string | null = null,
+): SeasonInput {
+  return { id: number, number, title, episodes };
+}
+
+function partOf(id: number, partNumber: number, title: string | null = null): PartInput {
+  return { id, partNumber, title, thumbnailUrl: null, runtime: 600 };
+}
+
+describe("episodeGroups", () => {
+  it("группирует серии по сезонам с ярлыками S/E", () => {
+    const groups = episodeGroups({
+      seasons: [seasonOf(1, [ep(1, 101), ep(2, 102)]), seasonOf(2, [ep(1, 201)])],
+      media: null,
+    });
+    expect(groups.map((g) => g.heading)).toEqual(["Сезон 1", "Сезон 2"]);
+    expect(groups[0]!.episodes.map((e) => e.label)).toEqual(["S1E1", "S1E2"]);
+    expect(groups[1]!.episodes.map((e) => e.label)).toEqual(["S2E1"]);
+    expect(groups[0]!.episodes[1]!.mediaId).toBe(102);
+  });
+
+  it("берёт название сезона, если оно есть", () => {
+    const groups = episodeGroups({
+      seasons: [seasonOf(1, [ep(1, 101)], "Первый сезон")],
+      media: null,
+    });
+    expect(groups[0]!.heading).toBe("Первый сезон");
+  });
+
+  it("пропускает серии без mediaId", () => {
+    const groups = episodeGroups({
+      seasons: [seasonOf(1, [ep(1, 101), ep(2, null), ep(3, 103)])],
+      media: null,
+    });
+    expect(groups[0]!.episodes.map((e) => e.mediaId)).toEqual([101, 103]);
+  });
+
+  it("не оставляет пустой сезон в списке", () => {
+    const groups = episodeGroups({
+      seasons: [seasonOf(1, [ep(1, null)]), seasonOf(2, [ep(1, 201)])],
+      media: null,
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.heading).toBe("Сезон 2");
+  });
+
+  it("аниме без сезонов показывает части из item.media", () => {
+    const groups = episodeGroups({
+      seasons: null,
+      media: [partOf(501, 1), partOf(502, 2, "Финал")],
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.heading).toBe("Части");
+    expect(groups[0]!.episodes.map((e) => e.label)).toEqual(["Часть 1", "Часть 2"]);
+    // part.id — это и есть mediaId маршрута /watch/[itemId]/[mediaId].
+    expect(groups[0]!.episodes.map((e) => e.mediaId)).toEqual([501, 502]);
+    expect(groups[0]!.episodes[1]!.title).toBe("Финал");
+  });
+
+  it("сезоны приоритетнее частей, когда есть и то и другое", () => {
+    const groups = episodeGroups({
+      seasons: [seasonOf(1, [ep(1, 101)])],
+      media: [partOf(501, 1)],
+    });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.heading).toBe("Сезон 1");
+  });
+
+  it("фильм без серий и частей даёт пустой список", () => {
+    expect(episodeGroups({ seasons: null, media: null })).toEqual([]);
+    expect(episodeGroups({ seasons: [], media: [] })).toEqual([]);
+  });
+});
+
+describe("flattenEpisodes", () => {
+  it("сохраняет порядок сезонов", () => {
+    const groups = episodeGroups({
+      seasons: [seasonOf(1, [ep(1, 101), ep(2, 102)]), seasonOf(2, [ep(1, 201)])],
+      media: null,
+    });
+    expect(flattenEpisodes(groups).map((e) => e.mediaId)).toEqual([101, 102, 201]);
+  });
+});
+
+describe("nextEpisode", () => {
+  const groups = episodeGroups({
+    seasons: [seasonOf(1, [ep(1, 101), ep(2, 102)]), seasonOf(2, [ep(1, 201)])],
+    media: null,
+  });
+
+  it("идёт к следующей серии внутри сезона", () => {
+    expect(nextEpisode(groups, 101)?.mediaId).toBe(102);
+  });
+
+  it("переходит через границу сезона", () => {
+    expect(nextEpisode(groups, 102)?.mediaId).toBe(201);
+  });
+
+  it("на последней серии возвращает null", () => {
+    expect(nextEpisode(groups, 201)).toBeNull();
+  });
+
+  it("неизвестный mediaId — null, а не первая серия", () => {
+    // Иначе оверлей «следующая серия» увёл бы в начало чужого тайтла.
+    expect(nextEpisode(groups, 999)).toBeNull();
+  });
+
+  it("пустой список — null", () => {
+    expect(nextEpisode([], 101)).toBeNull();
   });
 });

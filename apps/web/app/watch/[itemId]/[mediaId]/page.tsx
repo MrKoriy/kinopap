@@ -1,40 +1,14 @@
-import type { ItemDetail } from "@zal/api-client";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import type { PlayerNext } from "@/components/player/player";
 import { fetchItem } from "@/lib/api";
+import { episodeGroups } from "@/lib/player-logic";
 import { WatchClient } from "./watch-client";
 
 // Страница просмотра всегда свежая: item рендерим сразу, media-links
 // клиент тянет сам (zero-storage резолв может занимать до ~10 секунд).
 export const dynamic = "force-dynamic";
 
-/** Медиа id всех эпизодов сериала в порядке просмотра. */
-function episodeOrder(item: ItemDetail): { mediaId: number; label: string }[] {
-  const out: { mediaId: number; label: string }[] = [];
-  for (const season of item.seasons ?? []) {
-    for (const ep of season.episodes) {
-      if (ep.mediaId != null) {
-        out.push({
-          mediaId: ep.mediaId,
-          label: `S${season.number}E${ep.number}${ep.title ? ` · ${ep.title}` : ""}`,
-        });
-      }
-    }
-  }
-  return out;
-}
-
-function nextEpisode(item: ItemDetail, mediaId: number): PlayerNext | null {
-  const order = episodeOrder(item);
-  const idx = order.findIndex((e) => e.mediaId === mediaId);
-  if (idx < 0 || idx + 1 >= order.length) return null;
-  // itemId кладём рядом с mediaId: плеер строит маршрут /watch/[itemId]/[mediaId],
-  // иначе «Следующая серия» ведёт в 404.
-  return { itemId: item.id, ...order[idx + 1]! };
-}
-
-/** Страница просмотра: плеер + навигация по эпизодам. */
+/** Страница просмотра: плеер с выбором серии и переходом к следующей. */
 export default async function WatchPage({
   params,
 }: {
@@ -43,6 +17,10 @@ export default async function WatchPage({
   const { itemId, mediaId } = await params;
   const item = await fetchItem(Number(itemId));
   if (!item) notFound();
+
+  // Список серий строится здесь и уходит в плеер целиком: и меню выбора, и
+  // «следующая серия» выводятся из него, поэтому разойтись не могут.
+  const groups = episodeGroups(item);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-6">
@@ -55,11 +33,7 @@ export default async function WatchPage({
           ← {item.title}
         </Link>
       </div>
-      <WatchClient
-        item={item}
-        mediaId={Number(mediaId)}
-        next={nextEpisode(item, Number(mediaId))}
-      />
+      <WatchClient item={item} mediaId={Number(mediaId)} episodeGroups={groups} />
     </main>
   );
 }

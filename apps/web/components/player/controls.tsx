@@ -11,6 +11,18 @@ export interface TrackOption {
   label: string;
 }
 
+/** Серия для меню выбора. `mediaId` — идентификатор маршрута, не позиция. */
+export interface EpisodeOption {
+  mediaId: number;
+  label: string;
+  title: string | null;
+}
+
+export interface EpisodeGroupOption {
+  heading: string;
+  episodes: EpisodeOption[];
+}
+
 export interface PlayerControlsProps {
   playing: boolean;
   currentTime: number;
@@ -27,6 +39,11 @@ export interface PlayerControlsProps {
   qualities?: TrackOption[];
   activeQuality?: number;
   onQuality?(index: number): void;
+  /** Серии тайтла. Пусто или одна серия — меню не показываем. */
+  episodeGroups?: EpisodeGroupOption[];
+  /** mediaId текущей серии: подсветка в списке и стартовый сезон меню. */
+  activeEpisode?: number;
+  onEpisode?(mediaId: number): void;
   sprites: SpriteMetaDto | null;
   spriteUrl: string | null;
   /** Реакт-нода живого превью (второй <video>) для стримов без спрайта. */
@@ -110,6 +127,103 @@ function MenuItem({
   );
 }
 
+/**
+ * Меню выбора серии.
+ *
+ * Отдельно от `Menu`, потому что список двухуровневый: у сериала бывает и
+ * 1600 серий в 9 сезонах, и плоское меню такой длины нечитаемо, а рендер всех
+ * пунктов разом заметно тормозит. Поэтому сверху сезоны, снизу — серии
+ * выбранного сезона в прокрутке.
+ */
+function EpisodesMenu({
+  groups,
+  activeMediaId,
+  onPick,
+}: {
+  groups: EpisodeGroupOption[];
+  activeMediaId: number;
+  onPick(mediaId: number): void;
+}) {
+  const [open, setOpen] = React.useState(false);
+  // Открываем на сезоне текущей серии, а не на первом: иначе на седьмом сезоне
+  // меню каждый раз показывает первый, и до своей серии надо листать заново.
+  const activeGroupIdx = Math.max(
+    0,
+    groups.findIndex((g) => g.episodes.some((e) => e.mediaId === activeMediaId)),
+  );
+  const [groupIdx, setGroupIdx] = React.useState(activeGroupIdx);
+
+  React.useEffect(() => {
+    if (open) setGroupIdx(activeGroupIdx);
+  }, [open, activeGroupIdx]);
+
+  const group = groups[groupIdx] ?? groups[0];
+  if (!group) return null;
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        className="rounded-full px-3 py-1.5 text-sm text-white/80 transition hover:bg-white/10 hover:text-white"
+        onClick={() => setOpen((o) => !o)}
+        data-testid="menu-серии"
+      >
+        Серии
+      </button>
+      {open && (
+        <div
+          className="absolute bottom-full right-0 mb-2 w-72 rounded-[var(--radius-card)] border border-border bg-surface p-1.5 shadow-lg"
+          onMouseLeave={() => setOpen(false)}
+        >
+          {groups.length > 1 && (
+            <div className="mb-1 flex flex-wrap gap-1 border-b border-border pb-1.5">
+              {groups.map((g, i) => (
+                <button
+                  key={g.heading}
+                  type="button"
+                  className={`rounded-full px-2.5 py-1 text-xs transition ${
+                    i === groupIdx
+                      ? "bg-accent text-white"
+                      : "text-white/70 hover:bg-white/10"
+                  }`}
+                  onClick={() => setGroupIdx(i)}
+                  data-active={i === groupIdx}
+                  data-testid="player-season-tab"
+                >
+                  {g.heading}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="max-h-64 overflow-y-auto">
+            {group.episodes.map((e) => (
+              <button
+                key={e.mediaId}
+                type="button"
+                className={`block w-full rounded-lg px-3 py-2 text-left text-sm transition ${
+                  e.mediaId === activeMediaId
+                    ? "bg-accent text-white"
+                    : "text-white/80 hover:bg-white/10"
+                }`}
+                onClick={() => {
+                  // Клик по текущей серии не гоняет маршрут зря — просто закрываем.
+                  if (e.mediaId !== activeMediaId) onPick(e.mediaId);
+                  setOpen(false);
+                }}
+                data-active={e.mediaId === activeMediaId}
+                data-testid={`player-episode-${e.mediaId}`}
+              >
+                <span className="tabular-nums text-xs opacity-70">{e.label}</span>
+                {e.title && <span className="ml-2">{e.title}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function PlayerControls(props: PlayerControlsProps) {
   const {
     playing,
@@ -134,6 +248,13 @@ export function PlayerControls(props: PlayerControlsProps) {
   const [hoverX, setHoverX] = React.useState(0);
 
   const ratio = duration > 0 ? currentTime / duration : 0;
+
+  // У фильма с единственной частью выбирать нечего: меню показываем только
+  // когда серий действительно больше одной.
+  const episodeCount = (props.episodeGroups ?? []).reduce(
+    (n, g) => n + g.episodes.length,
+    0,
+  );
 
   const onBarMove = (e: React.MouseEvent) => {
     const bar = barRef.current;
@@ -277,6 +398,15 @@ export function PlayerControls(props: PlayerControlsProps) {
             </MenuItem>
           ))}
         </Menu>
+
+        {/* Серии */}
+        {episodeCount > 1 && props.episodeGroups && (
+          <EpisodesMenu
+            groups={props.episodeGroups}
+            activeMediaId={props.activeEpisode ?? -1}
+            onPick={(mediaId) => props.onEpisode?.(mediaId)}
+          />
+        )}
 
         {/* Качество / Источник */}
         {props.qualities && props.qualities.length > 0 && (

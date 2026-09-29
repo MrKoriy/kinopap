@@ -17,22 +17,26 @@ import {
   isIntroVisible,
   isNearEnd,
   nextAliveSource,
+  nextEpisode,
+  type PlayerEpisodeGroup,
   parseVtt,
   type SubtitleCue as VttCue,
 } from "@/lib/player-logic";
 import { PlayerControls } from "./controls";
 
-export interface PlayerNext {
-  /** Тайтл, к которому принадлежит серия — нужен для маршрута /watch/[itemId]/[mediaId]. */
-  itemId: number;
-  mediaId: number;
-  label: string;
-}
-
 export interface PlayerProps {
   links: MediaLinks;
   title: string;
-  next?: PlayerNext | null;
+  /**
+   * Серии тайтла для меню выбора. Пусто у фильма — тогда меню не рисуется.
+   *
+   * «Следующая серия» выводится из этого же списка, а не приходит отдельным
+   * пропом: иначе оверлей и соседний пункт меню могли бы указывать на разные
+   * серии, и расхождение всплыло бы только на стыке сезонов.
+   */
+  episodeGroups?: PlayerEpisodeGroup[];
+  /** mediaId текущей серии — по нему находим её место в списке. */
+  currentMediaId?: number;
   /** Первое реальное воспроизведение: watch-страница греет следующую серию. */
   onPlaybackStart?: () => void;
 }
@@ -49,7 +53,13 @@ const PROGRESS_INTERVAL_MS = 10_000;
 /** Минимум просмотра, чтобы считать позицию осмысленной (резюме тоже с 5с). */
 const MIN_REPORT_SECONDS = 5;
 
-export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
+export function Player({
+  links,
+  title,
+  episodeGroups,
+  currentMediaId,
+  onPlaybackStart,
+}: PlayerProps) {
   const { api, isAuthed } = useAuth();
   const router = useRouter();
   const videoRef = React.useRef<HTMLVideoElement | null>(null);
@@ -111,6 +121,16 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
     ? (activeFile?.urls.http ?? baseStream)
     : (audioMaster ?? baseStream);
   const sprites: SpriteMetaDto | null = links.sprites;
+  // Следующая серия — из того же списка, что и меню выбора, чтобы оверлей и
+  // соседний пункт меню не могли разойтись. itemId для маршрута берём из links:
+  // плеер всегда знает, к какому тайтлу относится играющее медиа.
+  const next = React.useMemo(
+    () =>
+      episodeGroups && currentMediaId != null
+        ? nextEpisode(episodeGroups, currentMediaId)
+        : null,
+    [episodeGroups, currentMediaId],
+  );
 
   /* ---------- Ленивые аудио-дорожки (gst-проба в фоне) ---------- */
   React.useEffect(() => {
@@ -550,6 +570,17 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
       .catch(() => {});
   }, [api, isAuthed, links.mediaId]);
 
+  // Выбор серии в меню: тот же переход, что и у «Следующей серии», — страница
+  // просмотра пересоздаёт плеер по key={itemId:mediaId}. Прогресс фиксируем до
+  // ухода, иначе последние секунды текущей серии теряются.
+  const changeEpisode = React.useCallback(
+    (mediaId: number) => {
+      reportProgress();
+      router.push(`/watch/${links.itemId}/${mediaId}`);
+    },
+    [links.itemId, reportProgress, router],
+  );
+
   React.useEffect(() => {
     if (!playing) return;
     const id = window.setInterval(reportProgress, PROGRESS_INTERVAL_MS);
@@ -906,9 +937,10 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
             className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
             onClick={() => {
               reportProgress();
-              // Маршрут /watch/[itemId]/[mediaId]: без itemId ссылка ведёт в 404.
-              // router.push — клиентская навигация вместо полной перезагрузки.
-              router.push(`/watch/${next!.itemId}/${next!.mediaId}`);
+              // Маршрут /watch/[itemId]/[mediaId]: itemId берём из links, он
+              // относится к играющему медиа. router.push — клиентская
+              // навигация вместо полной перезагрузки.
+              router.push(`/watch/${links.itemId}/${next!.mediaId}`);
             }}
           >
             {next!.label}
@@ -1005,6 +1037,9 @@ export function Player({ links, title, next, onPlaybackStart }: PlayerProps) {
           }))}
           activeQuality={activeFileIndex}
           onQuality={changeQuality}
+          episodeGroups={episodeGroups}
+          activeEpisode={currentMediaId}
+          onEpisode={changeEpisode}
           sprites={sprites}
           spriteUrl={sprites?.url ?? null}
           scrubPreview={scrubPreview}

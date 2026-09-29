@@ -8,18 +8,23 @@ import type { ItemDetail, MediaLinks } from "@zal/api-client";
  * Теперь страница рисуется сразу, источники ищутся под спиннером.
  */
 import * as React from "react";
-import { Player, type PlayerNext } from "@/components/player/player";
+import { Player } from "@/components/player/player";
 import { useAuth } from "@/lib/auth";
-import { absoluteStreamUrl } from "@/lib/player-logic";
+import {
+  absoluteStreamUrl,
+  nextEpisode,
+  type PlayerEpisodeGroup,
+} from "@/lib/player-logic";
 
 export function WatchClient({
   item,
   mediaId,
-  next,
+  episodeGroups,
 }: {
   item: ItemDetail;
   mediaId: number;
-  next: PlayerNext | null;
+  /** Серии тайтла для меню в плеере; пусто у фильма. */
+  episodeGroups: PlayerEpisodeGroup[];
 }) {
   const { api } = useAuth();
   const [links, setLinks] = React.useState<MediaLinks | null>(null);
@@ -95,6 +100,12 @@ export function WatchClient({
     add("dns-prefetch", false);
   }, [links]);
 
+  // Следующая серия — из того же списка, что уходит в меню плеера.
+  const next = React.useMemo(
+    () => nextEpisode(episodeGroups, mediaId),
+    [episodeGroups, mediaId],
+  );
+
   // Следующая серия: греем media-links, пока играет текущая, — «Следующая
   // серия» открывается мгновенно, без повторного резолва торрента.
   React.useEffect(() => {
@@ -150,7 +161,8 @@ export function WatchClient({
         key={`${item.id}:${mediaId}`}
         links={links}
         title={item.title}
-        next={next}
+        episodeGroups={episodeGroups}
+        currentMediaId={mediaId}
         onPlaybackStart={() => setPlaybackStarted(true)}
       />
 
