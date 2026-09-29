@@ -4,13 +4,16 @@
  * месте. Дублируй мы тесты по клиентам, расхождение подписей снова прошло бы
  * незамеченным — ровно это и случилось с «Продолжить Часть 2».
  */
-import type { HistoryEntryDto, ItemDetail, Season } from "@zal/api-client";
+import type { HistoryEntryDto, ItemDetail, ItemProgressEntry, Season } from "@zal/api-client";
 import { describe, expect, it } from "vitest";
 import {
   historyPositionLabel,
   historySlotCode,
+  latestInProgressEntry,
   mediaSlotLabel,
+  pickDefaultSeason,
   primaryPlayLabel,
+  seasonIndexForMedia,
 } from "../src/watch";
 
 function makeItem(over: Partial<ItemDetail> = {}): ItemDetail {
@@ -241,5 +244,131 @@ describe("historyPositionLabel", () => {
       updatedAt: "2026-01-01T00:00:00.000Z",
     };
     expect(historyPositionLabel(entry, { episodeTitle: "Серия 4" })).toBe("S2E4 · Серия 4");
+  });
+});
+
+/* ---------- Выбор сезона по прогрессу ---------- */
+
+function entry(over: Partial<ItemProgressEntry>): ItemProgressEntry {
+  return {
+    mediaId: 1,
+    positionSeconds: 0,
+    durationSeconds: 100,
+    progress: 0,
+    status: "unwatched",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    ...over,
+  };
+}
+
+function progress(
+  entries: ItemProgressEntry[],
+  resumeMediaId: number | null = null,
+): { entries: ItemProgressEntry[]; resumeMediaId: number | null } {
+  return { entries, resumeMediaId };
+}
+
+describe("pickDefaultSeason", () => {
+  const seasons = [season(10, 1, [101, 102]), season(20, 2, [201, 202])];
+
+  it("без прогресса — первый сезон", () => {
+    expect(pickDefaultSeason(seasons, null)).toBe(10);
+  });
+
+  it("берёт сезон самой свежей начатой серии", () => {
+    const p = progress([
+      entry({ mediaId: 101, status: "in_progress", updatedAt: "2026-02-01T00:00:00.000Z" }),
+      entry({ mediaId: 201, status: "in_progress", updatedAt: "2026-03-01T00:00:00.000Z" }),
+    ]);
+    expect(pickDefaultSeason(seasons, p)).toBe(20);
+  });
+
+  it("досмотренные серии сезон не выбирают", () => {
+    const p = progress([entry({ mediaId: 201, status: "watched", progress: 1 })]);
+    expect(pickDefaultSeason(seasons, p)).toBe(10);
+  });
+
+  it("нет сезонов — null", () => {
+    expect(pickDefaultSeason([], null)).toBeNull();
+  });
+
+  it("равные метки — первый сезон по порядку списка", () => {
+    const p = progress([
+      entry({ mediaId: 201, status: "in_progress", updatedAt: "2026-02-01T00:00:00.000Z" }),
+      entry({ mediaId: 101, status: "in_progress", updatedAt: "2026-02-01T00:00:00.000Z" }),
+    ]);
+    expect(pickDefaultSeason(seasons, p)).toBe(10);
+  });
+
+  it("начатая серия вне дерева сезонов не выбирает сезон", () => {
+    const p = progress([entry({ mediaId: 999, status: "in_progress" })]);
+    expect(pickDefaultSeason(seasons, p)).toBe(10);
+  });
+
+  it("метки в разных форматах сравниваются хронологически, а не по строкам", () => {
+    // Лексикографически "…T23:00:00+05:00" больше "…T19:00:00.000Z",
+    // хронологически (18:00Z) — меньше. Выбрать должен 19:00Z, то есть сезон 10.
+    const p = progress([
+      entry({ mediaId: 201, status: "in_progress", updatedAt: "2026-03-01T23:00:00+05:00" }),
+      entry({ mediaId: 101, status: "in_progress", updatedAt: "2026-03-01T19:00:00.000Z" }),
+    ]);
+    expect(pickDefaultSeason(seasons, p)).toBe(10);
+  });
+
+  it("нет начатых, но есть resumeMediaId — сезон точки возобновления (поведение веба)", () => {
+    expect(pickDefaultSeason(seasons, progress([], 202))).toBe(20);
+  });
+
+  it("resumeMediaId вне сезонов или null — первый сезон", () => {
+    expect(pickDefaultSeason(seasons, progress([], 999))).toBe(10);
+    expect(pickDefaultSeason(seasons, progress([]))).toBe(10);
+  });
+});
+
+describe("latestInProgressEntry", () => {
+  it("берёт запись с самой свежей меткой", () => {
+    const p = progress([
+      entry({ mediaId: 101, status: "in_progress", updatedAt: "2026-02-01T00:00:00.000Z" }),
+      entry({ mediaId: 201, status: "in_progress", updatedAt: "2026-03-01T00:00:00.000Z" }),
+    ]);
+    expect(latestInProgressEntry(p)?.mediaId).toBe(201);
+  });
+
+  it("смотренные и не начатые не считаются", () => {
+    const p = progress([
+      entry({ mediaId: 101, status: "watched" }),
+      entry({ mediaId: 201, status: "unwatched" }),
+    ]);
+    expect(latestInProgressEntry(p)).toBeNull();
+  });
+
+  it("битая метка не кандидат и не блокирует последующие записи", () => {
+    const p = progress([
+      entry({ mediaId: 101, status: "in_progress", updatedAt: "не дата" }),
+      entry({ mediaId: 201, status: "in_progress", updatedAt: "2026-03-01T00:00:00.000Z" }),
+    ]);
+    expect(latestInProgressEntry(p)?.mediaId).toBe(201);
+  });
+
+  it("без прогресса — null", () => {
+    expect(latestInProgressEntry(null)).toBeNull();
+  });
+});
+
+describe("seasonIndexForMedia", () => {
+  const item = makeItem({ seasons: [season(10, 1, [101, 102]), season(20, 2, [201, 202])] });
+
+  it("серия находится по mediaId — индекс её сезона", () => {
+    expect(seasonIndexForMedia(item, 201)).toBe(1);
+    expect(seasonIndexForMedia(item, 102)).toBe(0);
+  });
+
+  it("чужая media или null — null", () => {
+    expect(seasonIndexForMedia(item, 999)).toBeNull();
+    expect(seasonIndexForMedia(item, null)).toBeNull();
+  });
+
+  it("сезонов нет — null", () => {
+    expect(seasonIndexForMedia(makeItem(), 101)).toBeNull();
   });
 });

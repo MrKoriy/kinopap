@@ -94,6 +94,12 @@ export const historyListResponseSchema = z.object({
   total: z.number().int(),
 });
 
+/** Очистка истории: сколько записей снято (DELETE /v1/history). */
+export const clearHistoryResponseSchema = z.object({
+  ok: z.boolean(),
+  removed: z.number().int(),
+});
+
 /* ---------- Сводка профиля ---------- */
 
 export const profileStatsSchema = z.object({

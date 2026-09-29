@@ -1,6 +1,8 @@
 /**
  * Типизированный HTTP-клиент API «Зал».
- * Общий для web и mobile: пара fetch + базовый URL, ошибки — в ApiError.
+ * Общий для web и mobile: пара fetch + базовый URL, дедлайн на каждый
+ * запрос (по умолчанию 30с, повисший fetch больше не ждёт вечно), один
+ * ретрай GET при сетевом сбое, ошибки — в ApiError.
  */
 
 import {
@@ -25,6 +27,7 @@ import {
   type ItemPage,
   itemDetailSchema,
   itemPageSchema,
+  itemsSummaryResponseSchema,
   type MediaLinks,
   type MediaTracks,
   mediaLinksSchema,
@@ -32,7 +35,7 @@ import {
   typesResponseSchema,
 } from "./catalog";
 import type { ApiErrorBody, ItemType } from "./common";
-import { apiErrorSchema } from "./common";
+import { apiErrorSchema, okResponseSchema } from "./common";
 import {
   type IngestRequest,
   ingestRequestSchema,
@@ -43,6 +46,7 @@ import {
   progressResponseSchema,
 } from "./ingest";
 import {
+  clearHistoryResponseSchema,
   favoriteListResponseSchema,
   favoriteResponseSchema,
   historyListResponseSchema,
@@ -84,11 +88,32 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Запрос не уложился в дедлайн: fetch оборван таймаутом, а не внешним
+ * signal. Код "timeout" — как у ошибок API, чтобы вызывающий различал
+ * «не дождались» и «не доехало». Это ApiError: обработчики ошибок не
+ * обязаны знать про транспортный слой отдельно.
+ */
+export class ApiTimeoutError extends ApiError {
+  constructor(timeoutMs: number) {
+    super(0, { error: { code: "timeout", message: `Запрос не уложился в ${timeoutMs} мс` } });
+    this.name = "ApiTimeoutError";
+  }
+}
+
+/** Дедлайн запроса по умолчанию: повисший fetch без лимита ждал вечно. */
+export const DEFAULT_TIMEOUT_MS = 30_000;
+
 export interface ApiClientOptions {
   baseUrl: string;
   fetch?: typeof fetch;
   /** Веб: "include" — httpOnly-cookie с refresh-токеном ходит с запросами. */
   credentials?: "include" | "same-origin" | "omit";
+  /**
+   * Дедлайн каждого запроса (мс), если метод не задал свой. 0 отключает.
+   * Холодные media-links и опрос дорожек берут щедрый лимит — см. методы.
+   */
+  timeoutMs?: number;
   /**
    * Вызывается при 401 от защищённого запроса — шанс сделать refresh.
    *
@@ -135,6 +160,61 @@ function buildUrl(baseUrl: string, path: string, query?: Record<string, unknown>
   return url.toString();
 }
 
+/**
+ * Статические timeout/any есть не у всех типов AbortSignal (старые
+ * объявления React Native знают AbortSignal без них), поэтому достаются
+ * через необязательные слоты, а рантайм проверяется на месте. Где их нет —
+ * ручной фолбэк на подписку.
+ */
+interface AbortSignalStatics {
+  timeout?: (ms: number) => AbortSignal;
+  any?: (signals: readonly AbortSignal[]) => AbortSignal;
+}
+
+const signalStatics = AbortSignal as typeof AbortSignal & AbortSignalStatics;
+
+/** Внешний signal и дедлайн, сведённые в один signal. */
+function requestSignal(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): AbortSignal | undefined {
+  const deadline =
+    timeoutMs > 0 && typeof signalStatics.timeout === "function"
+      ? signalStatics.timeout(timeoutMs)
+      : undefined;
+  if (external == null) return deadline;
+  if (deadline == null) return external;
+  if (typeof signalStatics.any === "function") return signalStatics.any([external, deadline]);
+  // AbortSignal.any нет — зажигаем первый же аборт из двух.
+  const controller = new AbortController();
+  for (const s of [external, deadline]) {
+    if (s.aborted) {
+      controller.abort();
+      return controller.signal;
+    }
+    s.addEventListener("abort", () => controller.abort(), { once: true });
+  }
+  return controller.signal;
+}
+
+function isAbortError(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { name?: unknown }).name === "AbortError";
+}
+
+/**
+ * AbortError превращается в таймаут-ошибку, только если внешнего signal не
+ * было: отмена вызывающим — не наша ошибка, и летит наверх как есть.
+ */
+function toTransportError(
+  err: unknown,
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): unknown {
+  if (!isAbortError(err)) return err;
+  if (external?.aborted) return err;
+  return new ApiTimeoutError(timeoutMs);
+}
+
 export function createApiClient(opts: ApiClientOptions) {
   const doFetch = opts.fetch ?? fetch;
   let accessToken: string | null = null;
@@ -150,19 +230,45 @@ export function createApiClient(opts: ApiClientOptions) {
       retryOn401?: boolean;
       /** keepalive: запрос выживает выгрузку страницы (запись прогресса). */
       keepalive?: boolean;
+      /** Внешняя отмена: unmount экрана, навигация, роутер. */
+      signal?: AbortSignal;
+      /** Дедлайн запроса (мс); 0 — без лимита. Иначе клиентский или 30с. */
+      timeoutMs?: number;
     } = {},
   ): Promise<T> {
     const headers: Record<string, string> = {};
     if (init.body !== undefined) headers["content-type"] = "application/json";
     if (init.auth && accessToken) headers.authorization = `Bearer ${accessToken}`;
 
-    const res = await doFetch(buildUrl(opts.baseUrl, path, init.query), {
-      method: init.method ?? "GET",
-      headers,
-      body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
-      keepalive: init.keepalive ?? false,
-      credentials: opts.credentials,
-    });
+    const method = init.method ?? "GET";
+    const timeoutMs = init.timeoutMs ?? opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+    const doRequest = () =>
+      doFetch(buildUrl(opts.baseUrl, path, init.query), {
+        method,
+        headers,
+        body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
+        keepalive: init.keepalive ?? false,
+        credentials: opts.credentials,
+        signal: requestSignal(init.signal, timeoutMs),
+      });
+
+    let res: Response;
+    try {
+      res = await doRequest();
+    } catch (err) {
+      // Один ретрай при сетевом сбое (fetch reject, не HTTP-ошибка) — только
+      // GET: повтор POST мог бы задвоить его эффект, а после внешней отмены
+      // или таймаута повтор никому не нужен.
+      if (method !== "GET" || init.signal?.aborted || isAbortError(err)) {
+        throw toTransportError(err, init.signal, timeoutMs);
+      }
+      try {
+        res = await doRequest();
+      } catch (retryErr) {
+        throw toTransportError(retryErr, init.signal, timeoutMs);
+      }
+    }
 
     if (res.status === 401 && init.auth && init.retryOn401 !== false && opts.onUnauthorized) {
       // Явный отказ от повтора экономит запрос: после неудачной ротации второй
@@ -194,8 +300,7 @@ export function createApiClient(opts: ApiClientOptions) {
       accessToken = token;
     },
 
-    health: () =>
-      request("/healthz", { parse: (v) => v as { ok: boolean } }),
+    health: () => request("/healthz", okResponseSchema),
 
     /* auth */
     register: (input: RegisterInput) => {
@@ -244,9 +349,19 @@ export function createApiClient(opts: ApiClientOptions) {
       limit?: number;
     }) => request("/v1/items/search", itemPageSchema, { query: q }),
     getItem: (id: number) => request(`/v1/items/${id}`, itemDetailSchema),
+    /** Батч карточек по id: ленты «продолжить смотреть» берут всё одним
+     * запросом вместо getItem на каждую запись прогресса. */
+    getItemsSummary: (ids: number[]) =>
+      request("/v1/items/summary", itemsSummaryResponseSchema, {
+        query: { ids: ids.join(",") },
+      }),
     getMediaLinks: (itemId: number, mediaId: number) =>
       request(`/v1/items/${itemId}/media-links`, mediaLinksSchema, {
         query: { mid: mediaId },
+        // Холодный резолв ходит в rutor/AniLibria/TorrServer и занимает
+        // десятки секунд — дефолтный дедлайн его срезал бы. Веб-обёртка
+        // SSR держит для этого запроса те же 45с.
+        timeoutMs: 45_000,
       }),
     /**
      * Ленивые аудио-дорожки прогретого релиза: подтягиваются фоном, пока
@@ -256,6 +371,7 @@ export function createApiClient(opts: ApiClientOptions) {
     getMediaTracks: (itemId: number, mediaId: number) =>
       request(`/v1/items/${itemId}/media-tracks`, mediaTracksSchema, {
         query: { mid: mediaId },
+        timeoutMs: 45_000,
       }),
     getSimilar: (id: number) =>
       request(`/v1/items/${id}/similar`, itemPageSchema),
@@ -335,7 +451,7 @@ export function createApiClient(opts: ApiClientOptions) {
       });
     },
     deleteList: (listId: number) =>
-      request(`/v1/lists/${listId}`, { parse: (v) => v as { ok: boolean } }, {
+      request(`/v1/lists/${listId}`, okResponseSchema, {
         method: "DELETE",
         auth: true,
       }),
@@ -357,12 +473,12 @@ export function createApiClient(opts: ApiClientOptions) {
         auth: true,
       }),
     clearHistory: () =>
-      request("/v1/history", { parse: (v) => v as { ok: boolean; removed: number } }, {
+      request("/v1/history", clearHistoryResponseSchema, {
         method: "DELETE",
         auth: true,
       }),
     deleteHistoryEntry: (mediaId: number) =>
-      request(`/v1/history/${mediaId}`, { parse: (v) => v as { ok: boolean } }, {
+      request(`/v1/history/${mediaId}`, okResponseSchema, {
         method: "DELETE",
         auth: true,
       }),
@@ -391,7 +507,7 @@ export function createApiClient(opts: ApiClientOptions) {
       });
     },
     deleteComment: (commentId: number) =>
-      request(`/v1/comments/${commentId}`, { parse: (v) => v as { ok: boolean } }, {
+      request(`/v1/comments/${commentId}`, okResponseSchema, {
         method: "DELETE",
         auth: true,
       }),

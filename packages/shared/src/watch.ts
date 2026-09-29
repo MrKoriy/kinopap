@@ -10,7 +10,13 @@
  * Где клиенты расходятся осознанно, это видно в сигнатурах (`opts`), а не
  * спрятано внутри.
  */
-import type { HistoryEntryDto, ItemDetail } from "@zal/api-client";
+import type {
+  HistoryEntryDto,
+  ItemDetail,
+  ItemProgressDto,
+  ItemProgressEntry,
+  Season,
+} from "@zal/api-client";
 
 /**
  * Как тайтл называет этот media: «S2E4» у серии, «Часть 2» у части фильма.
@@ -89,4 +95,103 @@ export function historyPositionLabel(
   if (code == null) return entry.mediaTitle ?? opts.fallback ?? "";
   const title = entry.mediaTitle ?? opts.episodeTitle ?? null;
   return title ? `${code} · ${title}` : code;
+}
+
+/* ---------- Выбор сезона по прогрессу ---------- */
+
+/** Карта mediaId → запись прогресса: строки серий ищут себя одним проходом. */
+export function progressByMedia(
+  progress: Pick<ItemProgressDto, "entries"> | null | undefined,
+): Map<number, ItemProgressEntry> {
+  return new Map((progress?.entries ?? []).map((e) => [e.mediaId, e]));
+}
+
+/**
+ * Последняя начатая серия: запись in_progress с самой свежей меткой updatedAt.
+ * null — начатых нет. По ней карточка тайтла выбирает активный сезон и точку
+ * возобновления.
+ *
+ * Метки сравниваются парсингом дат, а не лексикографически: у ISO-строк
+ * порядок совпадает с хронологией, но парсинг честнее и переживает записи
+ * в разных форматах. Запись с битой меткой не кандидат: веб раньше мог взять
+ * именно её первой и застрять на ней — NaN не сравнивается ни с чем.
+ */
+export function latestInProgressEntry(
+  progress: Pick<ItemProgressDto, "entries"> | null | undefined,
+): ItemProgressEntry | null {
+  let best: ItemProgressEntry | null = null;
+  let bestAt = Number.NaN;
+  for (const entry of progress?.entries ?? []) {
+    if (entry.status !== "in_progress") continue;
+    const at = Date.parse(entry.updatedAt);
+    if (Number.isNaN(at)) continue;
+    if (best == null || at > bestAt) {
+      best = entry;
+      bestAt = at;
+    }
+  }
+  return best;
+}
+
+/**
+ * Сезон по умолчанию на карточке тайтла: где остановились, а не первый попавшийся.
+ *
+ * Правило сводит две написанные независимо копии. Мобильный клиент искал
+ * сезон самой свежей начатой серии (сравнением ISO-строк) и возвращал id
+ * сезона; веб брал последнюю начатую запись (Date.parse), отображал её в
+ * индекс сезона и дополнительно открывал сезон точки возобновления, когда
+ * начатых нет вовсе. Возврат — id сезона, как у мобильного: индекс — функция
+ * того же списка, и платформа считает его сама (`seasonIndexForMedia` или
+ * findIndex по id).
+ *
+ * Порядок правил: самая свежая начатая серия → сезон точки возобновления
+ * (обычно это та же серия) → первый сезон. Точка возобновления может
+ * указывать на досмотренную запись и всё равно выбрать свой сезон — это
+ * поведение веба, и оно осознанно: «Продолжить» ведёт туда, где остановились.
+ */
+export function pickDefaultSeason(
+  seasons: readonly Season[],
+  progress: Pick<ItemProgressDto, "entries" | "resumeMediaId"> | null | undefined,
+): number | null {
+  if (seasons.length === 0) return null;
+  if (progress) {
+    const byMedia = progressByMedia(progress);
+    let bestSeasonId: number | null = null;
+    let bestAt = Number.NaN;
+    for (const season of seasons) {
+      for (const ep of season.episodes) {
+        if (ep.mediaId == null) continue;
+        const entry = byMedia.get(ep.mediaId);
+        if (entry?.status !== "in_progress") continue;
+        const at = Date.parse(entry.updatedAt);
+        if (Number.isNaN(at)) continue;
+        if (bestSeasonId == null || at > bestAt) {
+          bestSeasonId = season.id;
+          bestAt = at;
+        }
+      }
+    }
+    if (bestSeasonId != null) return bestSeasonId;
+    if (progress.resumeMediaId != null) {
+      const resumeSeason = seasons.find((s) =>
+        s.episodes.some((e) => e.mediaId === progress.resumeMediaId),
+      );
+      if (resumeSeason) return resumeSeason.id;
+    }
+  }
+  return seasons[0]!.id;
+}
+
+/**
+ * Индекс сезона, которому принадлежит media. null — не нашли или seasons нет.
+ * Веб-карточка открывает сезоны вкладками по индексу; мобильный клиент
+ * идёт по id сезона из `pickDefaultSeason`.
+ */
+export function seasonIndexForMedia(
+  item: Pick<ItemDetail, "seasons">,
+  mediaId: number | null,
+): number | null {
+  if (mediaId == null || !item.seasons) return null;
+  const idx = item.seasons.findIndex((s) => s.episodes.some((e) => e.mediaId === mediaId));
+  return idx >= 0 ? idx : null;
 }

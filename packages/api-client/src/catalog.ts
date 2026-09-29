@@ -131,6 +131,33 @@ export const shortcutQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
+/**
+ * Батч карточек: ids — CSV положительных int (максимум 50). Мусорный токен
+ * и превышение cap — обычные ошибки валидации (400 validation_error).
+ */
+export const itemsSummaryQuerySchema = z.object({
+  ids: z.string().transform((raw, ctx) => {
+    const ids: number[] = [];
+    for (const part of raw.split(",")) {
+      const token = part.trim();
+      const n = Number(token);
+      if (token === "" || !Number.isInteger(n) || n <= 0) {
+        ctx.addIssue({
+          code: "custom",
+          message: `ids: «${token}» is not a positive integer`,
+        });
+        continue;
+      }
+      ids.push(n);
+    }
+    if (ids.length > 50) {
+      ctx.addIssue({ code: "custom", message: "ids: maximum 50 values" });
+    }
+    return ids;
+  }),
+});
+export type ItemsSummaryQuery = z.infer<typeof itemsSummaryQuerySchema>;
+
 /* ---------- DTO ---------- */
 
 export const genreRefSchema = z.object({
@@ -238,6 +265,12 @@ export const itemPageSchema = z.object({
   nextCursor: z.string().nullable(),
 });
 export type ItemPage = z.infer<typeof itemPageSchema>;
+
+/** Батч карточек по id: без пагинации, порядок — как в ids запроса. */
+export const itemsSummaryResponseSchema = z.object({
+  items: z.array(itemSummarySchema),
+});
+export type ItemsSummaryResponse = z.infer<typeof itemsSummaryResponseSchema>;
 
 /* ---------- Media links ---------- */
 

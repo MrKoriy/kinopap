@@ -61,6 +61,16 @@ export const apiErrorSchema = z.object({
 });
 export type ApiErrorBody = z.infer<typeof apiErrorSchema>;
 
+/**
+ * Минимальный ответ «готово»: /healthz, DELETE списков, записей истории и
+ * комментариев. Валидируется zod-схемой, а не as-кастом: перекошенный ответ
+ * должен падать в валидации, а не молча притворяться правильным.
+ */
+export const okResponseSchema = z.object({
+  ok: z.boolean(),
+});
+export type OkResponse = z.infer<typeof okResponseSchema>;
+
 /** Человекочитаемые имена типов (для /v1/types и UI). */
 export const ITEM_TYPE_TITLES: Record<ItemType, string> = {
   movie: "Фильмы",
