@@ -13,6 +13,8 @@ import {
   pickDefaultSeason,
   primaryPlay,
   progressByMedia,
+  type SaveDecision,
+  shouldSaveProgress,
   watchStateOf,
 } from "../lib/watch-state";
 
@@ -233,5 +235,44 @@ describe("historyLabel", () => {
   it("иначе — имя media или тайтл", () => {
     expect(historyLabel({ ...base, mediaTitle: "Финал" })).toBe("Финал");
     expect(historyLabel(base)).toBe("Тайтл");
+  });
+});
+
+describe("shouldSaveProgress", () => {
+  function d(over: Partial<SaveDecision> = {}): SaveDecision {
+    return { position: 600, duration: 1800, lastSaved: 590, force: false, ...over };
+  }
+
+  it("обычный ход: позиция ушла вперёд — пишем", () => {
+    expect(shouldSaveProgress(d())).toBe(true);
+  });
+
+  it("позиция почти не сдвинулась — не пишем", () => {
+    expect(shouldSaveProgress(d({ position: 590.5 }))).toBe(false);
+  });
+
+  it("первые секунды — не пишем", () => {
+    expect(shouldSaveProgress(d({ position: 3, lastSaved: 0 }))).toBe(false);
+  });
+
+  it("принудительно (пауза, уход с экрана) — пишем и без сдвига", () => {
+    expect(shouldSaveProgress(d({ position: 590.5, force: true }))).toBe(true);
+    expect(shouldSaveProgress(d({ position: 3, lastSaved: 0, force: true }))).toBe(true);
+  });
+
+  // Вот он, баг: replace() уже обнулил позицию, длительность нового источника
+  // ещё не пришла, а запись принудительная — и на сервер уходил ноль, стирая
+  // точку возобновления. Проверка на длительность стоит до проверки на force.
+  it("длительность неизвестна — не пишем даже принудительно", () => {
+    expect(shouldSaveProgress(d({ position: 0, duration: 0, lastSaved: 1200, force: true }))).toBe(
+      false,
+    );
+    expect(shouldSaveProgress(d({ position: 0, duration: 0, lastSaved: 1200 }))).toBe(false);
+  });
+
+  it("длительность есть — принудительная запись с нулём это действие пользователя", () => {
+    expect(shouldSaveProgress(d({ position: 0, duration: 1800, lastSaved: 1200, force: true }))).toBe(
+      true,
+    );
   });
 });

@@ -28,6 +28,7 @@ import { useTvFocus } from "../../../components/tv-focus";
 import { useAuth } from "../../../lib/auth";
 import { formatTime } from "../../../lib/format";
 import { cueAt, parseVtt, type SubtitleCue } from "../../../lib/subtitles";
+import { shouldSaveProgress } from "../../../lib/watch-state";
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 const SAVE_EVERY_SECONDS = 10;
@@ -76,6 +77,12 @@ export default function WatchScreen() {
   const resumeRef = React.useRef(0);
   const appliedResumeRef = React.useRef(false);
   const lastSaveRef = React.useRef(0);
+  // Последние измеренные значения плеера. Нужны потому, что cleanup на
+  // размонтировании выполняется уже после того, как useVideoPlayer освободил
+  // игрока (release() зарегистрирован раньше наших эффектов) — читать у него
+  // currentTime в этот момент нельзя, объект отвязан от нативного и бросает.
+  const positionRef = React.useRef(0);
+  const durationRef = React.useRef(0);
   const videoRef = React.useRef<React.ComponentRef<typeof VideoView>>(null);
 
   const player = useVideoPlayer(null, (p) => {
@@ -94,6 +101,11 @@ export default function WatchScreen() {
     setError(null);
     setPlaying(false);
     appliedResumeRef.current = false;
+    // Прошлый эпизод: его позицию здесь держать нельзя. Смена media меняет и
+    // mediaIdNum, поэтому запись «на паузе» ниже ушла бы под новую серию с
+    // чужими секундами. Длительность 0 закрывает запись до первого тика.
+    positionRef.current = 0;
+    durationRef.current = 0;
     void (async () => {
       try {
         const [linksRes, progressRes] = await Promise.all([
@@ -179,10 +191,18 @@ export default function WatchScreen() {
   /** Отправка прогресса: пауза, таймер, размонтирование. */
   const saveProgress = React.useCallback(
     (force = false) => {
-      const position = player.currentTime;
-      const total = Number.isFinite(player.duration) ? player.duration : 0;
-      if (!force && position < 5) return;
-      if (Math.abs(position - lastSaveRef.current) < 2 && !force) return;
+      const position = positionRef.current;
+      const total = durationRef.current;
+      if (
+        !shouldSaveProgress({
+          position,
+          duration: total,
+          lastSaved: lastSaveRef.current,
+          force,
+        })
+      ) {
+        return;
+      }
       lastSaveRef.current = position;
       void api
         .saveProgress(mediaIdNum, {
@@ -191,7 +211,7 @@ export default function WatchScreen() {
         })
         .catch(() => {});
     },
-    [api, mediaIdNum, player],
+    [api, mediaIdNum],
   );
 
   // 3. Источник: главный мастер либо персональный мастер выбранного дубляжа.
@@ -222,11 +242,22 @@ export default function WatchScreen() {
     const timer = setInterval(() => {
       const position = player.currentTime;
       const total = Number.isFinite(player.duration) ? player.duration : 0;
+      positionRef.current = position;
+      durationRef.current = total;
       setCurrent(position);
       setDuration(total);
       setPlaying(player.playing);
 
-      if (!appliedResumeRef.current && total > 0) {
+      // Резюме уже применено — значит «точка возобновления» дальше просто равна
+      // текущей позиции. Без этого она навсегда оставалась стартовой, и любая
+      // смена источника уводила плеер назад: loadSource берёт resumeRef, а его
+      // меняли только на входе. Смена источника случается не только по кнопке
+      // дубляжа — фоновые аудио-дорожки подмешиваются сами через 4 секунды
+      // после старта, и позиция сбрасывалась прямо во время просмотра.
+      const resumeApplied = appliedResumeRef.current;
+      if (resumeApplied) resumeRef.current = position;
+
+      if (!resumeApplied && total > 0) {
         appliedResumeRef.current = true;
         if (resumeRef.current > 0 && resumeRef.current < total - 5) {
           player.currentTime = resumeRef.current;
@@ -253,9 +284,16 @@ export default function WatchScreen() {
     [saveProgress],
   );
 
+  /** Перемотка: позицию держим и в ref — тик обновит его только через 250 мс. */
+  const seekTo = (seconds: number) => {
+    const clamped = Math.max(0, Math.min(seconds, duration || Infinity));
+    player.currentTime = clamped;
+    positionRef.current = clamped;
+    setCurrent(clamped);
+  };
+
   const seekBy = (delta: number) => {
-    player.currentTime = Math.max(0, Math.min(player.currentTime + delta, duration || Infinity));
-    setCurrent(player.currentTime);
+    seekTo(player.currentTime + delta);
   };
 
   const changeSpeed = () => {
@@ -293,14 +331,17 @@ export default function WatchScreen() {
     [cues, current, shiftMs],
   );
 
-  /** Дубляж: персональный мастер + восстановление позиции. */
+  /** Дубляж: источник меняет эффект ниже — здесь только запоминаем позицию. */
   const changeAudio = (index: number) => {
     const dub = links?.audios[index];
     if (!dub?.masterUrl || index === activeAudio) return;
-    const at = player.currentTime;
+    // Позицию фиксируем до смены источника: replace() обнуляет currentTime.
+    resumeRef.current = player.currentTime;
+    // loadSource отсюда звать нельзя: setActiveAudio вызовет перерисовку,
+    // sourceUri изменится, и эффект ниже перезагрузит тот же ассет вторым
+    // replace(). На iOS replace() грузит ассет синхронно на главном потоке —
+    // то есть это ещё и двойной фриз на переключении дубляжа.
     setActiveAudio(index);
-    resumeRef.current = at;
-    loadSource(dub.masterUrl, at);
   };
 
   const intro = links?.intro;
@@ -351,8 +392,7 @@ export default function WatchScreen() {
             onPress={(e) => {
               if (!duration || barWidth <= 0) return;
               const ratio = Math.max(0, Math.min(1, e.nativeEvent.locationX / barWidth));
-              player.currentTime = ratio * duration;
-              setCurrent(player.currentTime);
+              seekTo(ratio * duration);
             }}
             accessibilityRole="button"
           >
@@ -419,8 +459,7 @@ export default function WatchScreen() {
             testID="player-skip-intro"
             style={[styles.introButton, focusSkipIntro.ring]}
             onPress={() => {
-              player.currentTime = intro.endSeconds;
-              setCurrent(intro.endSeconds);
+              seekTo(intro.endSeconds);
             }}
             accessibilityRole="button"
             {...focusSkipIntro.props}
@@ -435,7 +474,12 @@ export default function WatchScreen() {
             style={[styles.nextButton, focusNext.ring]}
             // replace: стек не должен расти с каждой серией — back уводит
             // из плеера, а не листает все просмотренные эпизоды.
-            onPress={() => router.replace(`/watch/${itemIdNum}/${nextMedia}`)}
+            // Прогресс фиксируем до ухода: смена mediaId сбросит ref-позицию,
+            // и последние секунды текущей серии ушли бы под следующую.
+            onPress={() => {
+              saveProgress(true);
+              router.replace(`/watch/${itemIdNum}/${nextMedia}`);
+            }}
             accessibilityRole="button"
             {...focusNext.props}
           >
