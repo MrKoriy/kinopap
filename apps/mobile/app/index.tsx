@@ -12,6 +12,7 @@ import {
   ActivityIndicator,
   FlatList,
   Pressable,
+  RefreshControl,
   ScrollView,
   StyleSheet,
   Text,
@@ -44,6 +45,11 @@ export default function HomeScreen() {
     Record<ShortcutKind, ItemSummary[]>
   >({ fresh: [], hot: [], popular: [] });
   const [loading, setLoading] = React.useState(true);
+  // Сетевой сбой отдельным флагом: без него пустые ленты выглядели бы как
+  // «просто ничего нового», а не как «не загрузилось».
+  const [failed, setFailed] = React.useState(false);
+  const [refreshing, setRefreshing] = React.useState(false);
+  const focusRetry = useTvFocus();
   const focusNav = [
     useTvFocus(),
     useTvFocus(),
@@ -52,28 +58,35 @@ export default function HomeScreen() {
     useTvFocus(),
   ];
 
-  React.useEffect(() => {
-    let cancelled = false;
-    void Promise.all(
-      SECTIONS.map((s) => api.getShortcut(s.kind, { limit: 10 })),
-    ).then(
-      (pages) => {
-        if (cancelled) return;
-        setSections({
-          fresh: pages[0]!.items,
-          hot: pages[1]!.items,
-          popular: pages[2]!.items,
-        });
-        setLoading(false);
-      },
-      () => {
-        if (!cancelled) setLoading(false);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
+  // Загрузка вынесена в функцию: её зовут и эффект, и «Повторить», и
+  // pull-to-refresh — один и тот же путь данных.
+  const loadSections = React.useCallback(async () => {
+    try {
+      const pages = await Promise.all(
+        SECTIONS.map((s) => api.getShortcut(s.kind, { limit: 10 })),
+      );
+      setSections({
+        fresh: pages[0]!.items,
+        hot: pages[1]!.items,
+        popular: pages[2]!.items,
+      });
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
   }, [api]);
+
+  React.useEffect(() => {
+    void loadSections();
+  }, [loadSections]);
+
+  const onRefresh = React.useCallback(async () => {
+    setRefreshing(true);
+    await loadSections();
+    setRefreshing(false);
+  }, [loadSections]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>

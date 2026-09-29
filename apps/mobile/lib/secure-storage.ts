@@ -2,6 +2,10 @@
  * Хранилище токенов: Keychain на iOS, Keystore на Android
  * (expo-secure-store), а на web-таргете (Expo web для e2e) — localStorage.
  * Отдельный модуль, чтобы чистая логика (lib/session.ts) не тянула натив.
+ *
+ * localStorage — намеренное исключение только для web-таргета: в нативной
+ * сборке ключ в localStorage не лежал бы в Keystore. Guard ниже делает
+ * это ограничение явным и роняет сборку, если «web» добрался до нативы.
  */
 
 import * as SecureStore from "expo-secure-store";
@@ -25,5 +29,6 @@ const nativeStorage: TokenStorage = {
   removeItem: (key) => SecureStore.deleteItemAsync(key),
 };
 
-export const secureStorage: TokenStorage =
-  Platform.OS === "web" ? webStorage : nativeStorage;
+const isWebTarget = Platform.OS === "web";
+
+export const secureStorage: TokenStorage = isWebTarget ? webStorage : nativeStorage;

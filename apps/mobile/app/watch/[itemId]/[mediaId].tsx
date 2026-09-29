@@ -1,7 +1,9 @@
 "use client";
 
 import type { ItemDetail, MediaLinks } from "@zal/api-client";
+import { episodeGroups, flattenEpisodes, pollMediaTracks } from "@zal/shared";
 import { tokens } from "@zal/ui";
+import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { type TimeUpdateEventPayload, useVideoPlayer, type VideoSource, VideoView } from "expo-video";
 /**
@@ -16,9 +18,9 @@ import { type TimeUpdateEventPayload, useVideoPlayer, type VideoSource, VideoVie
 import * as React from "react";
 import {
   ActivityIndicator,
+  AppState,
   Pressable,
   ScrollView,
-  StyleSheet,
   Text,
   useWindowDimensions,
   View,
@@ -28,11 +30,14 @@ import { useTvFocus } from "../../../components/tv-focus";
 import { useAuth } from "../../../lib/auth";
 import { bufferedBand } from "../../../lib/buffer";
 import { formatTime } from "../../../lib/format";
-import { cueAt, parseVtt, type SubtitleCue } from "../../../lib/subtitles";
+import { cueAt, fetchSubtitleCues, type SubtitleCue } from "../../../lib/subtitles";
 import { shouldSaveProgress } from "../../../lib/watch-state";
+import { styles } from "./[mediaId].styles";
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 const SAVE_EVERY_SECONDS = 10;
+// Тег keep-awake: активация/деактивация ходят парой по одному тегу.
+const KEEP_AWAKE_TAG = "zal-watch";
 
 export default function WatchScreen() {
   const { itemId, mediaId } = useLocalSearchParams<{ itemId: string; mediaId: string }>();
@@ -50,6 +55,10 @@ export default function WatchScreen() {
   const [cues, setCues] = React.useState<SubtitleCue[]>([]);
   const [activeSub, setActiveSub] = React.useState<number | null>(null);
   const [shiftMs, setShiftMs] = React.useState(0);
+  // Дорожка не скачалась: инлайн-сообщение у чипов, дорожка остаётся выключенной.
+  const [subError, setSubError] = React.useState<string | null>(null);
+  // Обрыв потока: оверлей «Видео оборвалось» поверх замершего кадра.
+  const [playbackError, setPlaybackError] = React.useState<string | null>(null);
 
   // Таймер плеера.
   const [current, setCurrent] = React.useState(0);
@@ -78,10 +87,15 @@ export default function WatchScreen() {
   const focusSubOff = useTvFocus();
   const focusShiftBack = useTvFocus();
   const focusShiftFwd = useTvFocus();
+  const focusRetry = useTvFocus();
+  const focusErrBack = useTvFocus();
 
   const resumeRef = React.useRef(0);
   const appliedResumeRef = React.useRef(false);
   const lastSaveRef = React.useRef(0);
+  // Кэш распарсенных субтитров по индексу дорожки: повторный выбор дорожки
+  // не должен гонять второй fetch+parse того же файла.
+  const subCacheRef = React.useRef<Map<number, SubtitleCue[]>>(new Map());
   // Последние измеренные значения плеера. Нужны потому, что cleanup на
   // размонтировании выполняется уже после того, как useVideoPlayer освободил
   // игрока (release() зарегистрирован раньше наших эффектов) — читать у него
@@ -107,6 +121,10 @@ export default function WatchScreen() {
     setShiftMs(0);
     setError(null);
     setPlaying(false);
+    setSubError(null);
+    setPlaybackError(null);
+    // Кэш субтитров прошлой серии к новой отношения не имеет.
+    subCacheRef.current.clear();
     // Буфер прошлой серии к новой отношения не имеет: без сброса серая полоса
     // на мгновение показала бы скачанное из другого файла.
     setBufferedPosition(0);
@@ -151,51 +169,27 @@ export default function WatchScreen() {
 
   const nextMedia = React.useMemo(() => {
     if (!item) return null;
-    const ordered: number[] = [];
-    for (const season of item.seasons ?? []) {
-      for (const ep of season.episodes) {
-        if (ep.mediaId) ordered.push(ep.mediaId);
-      }
-    }
-    for (const part of item.media ?? []) ordered.push(part.id);
-    const idx = ordered.indexOf(mediaIdNum);
-    return idx >= 0 && idx + 1 < ordered.length ? ordered[idx + 1]! : null;
+    // Порядок серий общий с вебом (@zal/shared): сосед в меню и «следующая
+    // серия» — один и тот же слот на обоих клиентах.
+    const groups = episodeGroups(item);
+    const flat = flattenEpisodes(groups);
+    const idx = flat.findIndex((e) => e.mediaId === mediaIdNum);
+    return idx >= 0 && idx + 1 < flat.length ? flat[idx + 1]!.mediaId : null;
   }, [item, mediaIdNum]);
 
   /**
    * 3. Ленивые аудио-дорожки: gst-проба на холодных пирах занимает до 45с,
    * поэтому идёт фоном, пока видео уже играет, и подмешивается в links.
+   * Лестница таймингов общая с веб-плеером (@zal/shared).
    */
   React.useEffect(() => {
     if (!links || links.audios.length > 0) return;
-    let cancelled = false;
-    let attempt = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-
-    const load = () => {
-      void (async () => {
-        try {
-          const res = await api.getMediaTracks(links.itemId, links.mediaId);
-          if (cancelled) return;
-          if (res.audios.length > 0) {
-            setLinks((cur) => (cur ? { ...cur, audios: res.audios } : cur));
-            return;
-          }
-        } catch {
-          // Фоновая дорожка: сбой не должен дёргать играющий плеер.
-        }
-        if (!cancelled && attempt < 2) {
-          attempt += 1;
-          timer = setTimeout(load, 8_000);
-        }
-      })();
-    };
-
-    timer = setTimeout(load, 4_000);
-    return () => {
-      cancelled = true;
-      if (timer) clearTimeout(timer);
-    };
+    return pollMediaTracks(
+      () => api.getMediaTracks(links.itemId, links.mediaId),
+      (audios) => {
+        setLinks((cur) => (cur ? { ...cur, audios } : cur));
+      },
+    );
   }, [api, links]);
 
   /** Отправка прогресса: пауза, таймер, размонтирование. */
@@ -260,6 +254,19 @@ export default function WatchScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceUri, loadSource]);
 
+  /**
+   * Повтор после обрыва: replace того же источника, сохранив позицию.
+   * loadSource зовём прямо из кнопки: sourceUri при этом не меняется, и
+   * эффект выше не делает второй replace (в отличие от смены дубляжа).
+   */
+  const retryPlayback = React.useCallback(() => {
+    if (!sourceUri) return;
+    const at = positionRef.current;
+    lastSaveRef.current = at;
+    setPlaybackError(null);
+    loadSource(sourceUri, at);
+  }, [sourceUri, loadSource]);
+
   // 4. Тик плеера: позиция/длительность + резюме + автосохранение.
   //
   // Раньше здесь стоял собственный setInterval на 250 мс, который сам вычитывал
@@ -320,6 +327,27 @@ export default function WatchScreen() {
     };
   }, [player, saveProgress]);
 
+  // 4b. Ошибки плеера. expo-video не имеет отдельного события ошибок —
+  // единственный канал это `statusChange`: статус становится "error", а в
+  // payload приезжает необязательный error с сообщением. Без подписки обрыв
+  // HLS посреди серии выглядит как замерший кадр: плеер молча останавливается.
+  React.useEffect(() => {
+    const sub = player.addListener("statusChange", ({ status, error: playerError }) => {
+      if (status === "error") {
+        // freeze.playing может ещё стоять true — гасим, чтобы кнопка не
+        // показывала «Пауза» над мёртвым потоком.
+        setPlaying(false);
+        setPlaybackError(playerError?.message ?? "Видео оборвалось");
+        return;
+      }
+      // Любой уход из error (replace → loading) снимает оверлей.
+      setPlaybackError(null);
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [player]);
+
   // 5. Прогресс на паузе и при уходе с экрана.
   React.useEffect(() => {
     if (!playing) saveProgress(true);
@@ -332,6 +360,31 @@ export default function WatchScreen() {
     },
     [saveProgress],
   );
+
+  // 5b. Экран не гаснет, только пока идёт воспроизведение: пауза снимает
+  // удержание. useKeepAwake в expo-keep-awake не умеет active-флаг, поэтому
+  // activate/deactivate в эффекте по `playing`.
+  React.useEffect(() => {
+    if (!playing) return;
+    void activateKeepAwakeAsync(KEEP_AWAKE_TAG);
+    return () => {
+      void deactivateKeepAwake(KEEP_AWAKE_TAG);
+    };
+  }, [playing]);
+
+  // 5c. Уход в фон: фиксируем прогресс и ставим паузу. По умолчанию плеер и
+  // так останавливается (staysActiveInBackground = false), но прогресс без
+  // явной записи терял бы последние секунды до таймера автосохранения.
+  React.useEffect(() => {
+    const sub = AppState.addEventListener("change", (state) => {
+      if (state !== "background") return;
+      saveProgress(true);
+      player.pause();
+    });
+    return () => {
+      sub.remove();
+    };
+  }, [player, saveProgress]);
 
   /** Перемотка: позицию держим и в ref — тик обновит его только через 250 мс. */
   const seekTo = (seconds: number) => {
@@ -351,9 +404,16 @@ export default function WatchScreen() {
     player.playbackRate = SPEEDS[next]!;
   };
 
-  /** Субтитры: повторный клик по дорожке выключает её. */
+  /**
+   * Субтитры: повторный клик по дорожке выключает её. Распарсенные cues
+   * кэшируются по индексу дорожки — повторный выбор уже скачанной дорожки
+   * не ходит в сеть. Сбой загрузки не молчит: инлайн-сообщение, дорожка
+   * остаётся явно выключенной (и не кэшируется, чтобы «Повторить»
+   * действительно ходил в сеть).
+   */
   const selectSubtitle = React.useCallback(
     async (index: number) => {
+      setSubError(null);
       if (activeSub === index) {
         setActiveSub(null);
         setCues([]);
@@ -361,15 +421,23 @@ export default function WatchScreen() {
       }
       const sub = links?.subtitles[index];
       if (!sub?.url) return;
+      const cached = subCacheRef.current.get(index);
+      if (cached) {
+        setCues(cached);
+        setShiftMs(sub.shiftMs ?? 0);
+        setActiveSub(index);
+        return;
+      }
       try {
-        const res = await fetch(sub.url);
-        const parsed = parseVtt(await res.text());
+        const parsed = await fetchSubtitleCues(sub.url);
+        subCacheRef.current.set(index, parsed);
         setCues(parsed);
         setShiftMs(sub.shiftMs ?? 0);
         setActiveSub(index);
       } catch {
         setCues([]);
         setActiveSub(null);
+        setSubError("Дорожка не загрузилась");
       }
     },
     [links, activeSub],
@@ -432,6 +500,32 @@ export default function WatchScreen() {
         {activeCue && (
           <View testID="player-subtitle-overlay" style={styles.subtitleOverlay} pointerEvents="none">
             <Text style={styles.subtitleText}>{activeCue.text}</Text>
+          </View>
+        )}
+        {playbackError && (
+          <View testID="player-error" style={styles.errorOverlay}>
+            <Text style={styles.errorTitle}>Видео оборвалось</Text>
+            <View style={styles.errorButtons}>
+              <Pressable
+                testID="player-retry"
+                style={[styles.playButton, focusRetry.ring]}
+                onPress={retryPlayback}
+                accessibilityRole="button"
+                hasTVPreferredFocus
+                {...focusRetry.props}
+              >
+                <Text style={styles.playText}>Повторить</Text>
+              </Pressable>
+              <Pressable
+                testID="player-error-back"
+                style={[styles.controlButton, focusErrBack.ring]}
+                onPress={() => router.back()}
+                accessibilityRole="button"
+                {...focusErrBack.props}
+              >
+                <Text style={styles.controlText}>Назад</Text>
+              </Pressable>
+            </View>
           </View>
         )}
       </View>
@@ -592,6 +686,11 @@ export default function WatchScreen() {
                 </Pressable>
               )}
             </View>
+            {subError && (
+              <Text testID="player-sub-error" style={styles.muted}>
+                {subError}
+              </Text>
+            )}
             {activeSub != null && (
               <View style={styles.buttonRow}>
                 <Pressable
@@ -679,146 +778,3 @@ function TrackChip({
     </Pressable>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: "#000",
-  },
-  center: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: tokens.color.bg,
-  },
-  videoWrap: {
-    width: "100%",
-    alignSelf: "center",
-    backgroundColor: "#000",
-  },
-  video: {
-    width: "100%",
-    height: "100%",
-  },
-  subtitleOverlay: {
-    position: "absolute",
-    left: tokens.space.md,
-    right: tokens.space.md,
-    bottom: tokens.space.sm,
-    alignItems: "center",
-  },
-  subtitleText: {
-    color: tokens.color.text,
-    backgroundColor: "rgba(0,0,0,0.65)",
-    fontSize: tokens.fontSize.md,
-    textAlign: "center",
-    paddingHorizontal: tokens.space.sm,
-    paddingVertical: 2,
-    borderRadius: tokens.radius.sm,
-  },
-  controls: {
-    flex: 1,
-    backgroundColor: tokens.color.bg,
-  },
-  controlsContent: {
-    padding: tokens.space.md,
-    gap: tokens.space.sm,
-  },
-  timeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: tokens.space.sm,
-  },
-  time: {
-    color: tokens.color.textMuted,
-    fontSize: tokens.fontSize.xs,
-    fontVariant: ["tabular-nums"],
-    minWidth: 44,
-    textAlign: "center",
-  },
-  seekbar: {
-    flex: 1,
-    height: 6,
-    borderRadius: tokens.radius.full,
-    backgroundColor: tokens.color.surfaceHover,
-    overflow: "hidden",
-  },
-  seekFill: {
-    height: "100%",
-    backgroundColor: tokens.color.accent,
-  },
-  /**
-   * Серая полоса скачанного. Цвет задан напрямую, а не токеном: белый с
-   * прозрачностью поверх тёмного трека — это приём, а не цвет палитры, и в
-   * токенах его нет. Ровно так же сделано в веб-плеере (`bg-white/40`), чтобы
-   * полоса выглядела одинаково на обеих платформах.
-   */
-  seekBuffered: {
-    position: "absolute",
-    top: 0,
-    bottom: 0,
-    backgroundColor: "rgba(255, 255, 255, 0.4)",
-  },
-  buttonRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: tokens.space.sm,
-    alignItems: "center",
-  },
-  controlButton: {
-    backgroundColor: tokens.color.surface,
-    borderRadius: tokens.radius.full,
-    borderWidth: 1,
-    borderColor: tokens.color.border,
-    paddingHorizontal: tokens.space.md,
-    paddingVertical: tokens.space.sm,
-  },
-  controlActive: {
-    borderColor: tokens.color.accent,
-    backgroundColor: tokens.color.surfaceHover,
-  },
-  controlOff: {
-    opacity: 0.4,
-  },
-  controlText: {
-    color: tokens.color.text,
-    fontSize: tokens.fontSize.sm,
-    fontWeight: "600",
-  },
-  playButton: {
-    backgroundColor: tokens.color.accent,
-    borderRadius: tokens.radius.full,
-    paddingHorizontal: tokens.space.lg,
-    paddingVertical: tokens.space.sm,
-  },
-  playText: {
-    color: tokens.color.text,
-    fontSize: tokens.fontSize.sm,
-    fontWeight: "700",
-  },
-  introButton: {
-    backgroundColor: tokens.color.surfaceHover,
-    borderRadius: tokens.radius.full,
-    borderWidth: 1,
-    borderColor: tokens.color.accent,
-    alignItems: "center",
-    paddingVertical: tokens.space.sm,
-  },
-  nextButton: {
-    alignItems: "center",
-    paddingVertical: tokens.space.sm,
-  },
-  dubSection: {
-    marginTop: tokens.space.sm,
-    gap: tokens.space.xs,
-  },
-  sectionTitle: {
-    color: tokens.color.text,
-    fontSize: tokens.fontSize.md,
-    fontWeight: "700",
-  },
-  muted: {
-    color: tokens.color.textMuted,
-    fontSize: tokens.fontSize.sm,
-  },
-});
