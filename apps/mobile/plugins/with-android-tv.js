@@ -3,8 +3,11 @@
  *
  * Делает из обычного телефонного APK TV-приложение: ставит категорию
  * LEANBACK_LAUNCHER (иначе APK не появится в лончере Android TV), снимает
- * обязательность тачскрина, добавляет баннер 320×180 и — по желанию —
- * разрешает cleartext HTTP (нужно для домашнего API по http://<ip>:3001).
+ * обязательность тачскрина и добавляет баннер 320×180.
+ *
+ * Разрешение на открытый HTTP отсюда убрано в `with-dev-cleartext`: оно нужно
+ * обеим платформам и управляется одним флагом, а этот плагин — про TV и только
+ * про TV.
  *
  * Применяется на prebuild: `npx expo prebuild --platform android`.
  */
@@ -49,9 +52,7 @@ function addLeanbackLauncher(app) {
 }
 
 module.exports = function withAndroidTv(config) {
-  const allowCleartext = process.env.ZAL_ALLOW_CLEARTEXT === "1";
-
-  // 1. Манифест: leanback, баннер, необязательный тачскрин, cleartext.
+  // 1. Манифест: leanback, баннер, необязательный тачскрин.
   config = withAndroidManifest(config, (cfg) => {
     const manifest = cfg.modResults.manifest;
     usesFeature(manifest, "android.software.leanback", false);
@@ -61,7 +62,6 @@ module.exports = function withAndroidTv(config) {
     if (app) {
       app.$ = app.$ ?? {};
       app.$["android:banner"] = `@drawable/${BANNER_NAME}`;
-      if (allowCleartext) app.$["android:usesCleartextTraffic"] = "true";
       addLeanbackLauncher(app);
     }
     return cfg;
