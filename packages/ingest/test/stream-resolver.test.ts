@@ -398,6 +398,27 @@ describe("StreamResolver — сверка названий релизов", () =
 
     expect(resolved.files).toEqual([]);
   });
+
+  it("двуязычный релиз с ё/е расхождением проходит (живой кейс rutor)", async () => {
+    // Реальная выдача rutor: «Унесённые призраками / Sen to Chihiro…», при
+    // этом тайтл каталога — «Унесённые призраками» (через ё), оригинал —
+    // японский. Двуязычный хвост — перевод, а не сиквел.
+    rutorHtmlOverride = rutorHtmlWith(
+      "Унесённые призраками / Sen to Chihiro no Kamikakushi (2001) BDRip 720p | D",
+    );
+
+    const resolved = await resolver.resolve(
+      query({
+        itemId: 30,
+        mediaId: 30,
+        title: "Унесённые призраками",
+        originalTitle: "千と千尋の神隠し",
+        year: 2001,
+      }),
+    );
+
+    expect(resolved.files.length).toBeGreaterThan(0);
+  });
 });
 
 describe("StreamResolver — аниме: чужой результат поиска AniLibria", () => {

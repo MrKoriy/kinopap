@@ -28,10 +28,11 @@ const WARM_TTL_MS = 10 * 60 * 1000;
  * чужой файл к тайтлу (подмена контента на проде). Ниже — нормализация
  * и щиты, отсеивающие чужие и соседние (сиквелы/части франшиз) релизы. */
 
-/** Нижний регистр, разделители в пробелы, схлопнутые пробелы. */
+/** Нижний регистр, ё→е, разделители в пробелы, схлопнутые пробелы. */
 function normalizeForMatch(s: string): string {
   return s
     .toLowerCase()
+    .replace(/ё/g, "е")
     .replace(/[.:_\-–—·|/]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -41,7 +42,9 @@ function normalizeForMatch(s: string): string {
 function numericMarkers(title: string): string[] {
   const lower = title.toLowerCase().replace(/\b(?:19|20)\d{2}\b/g, " ");
   const arabic = lower.match(/\d+/g) ?? [];
-  const roman = lower.match(/\b[ivxlcdm]{1,8}\b/g) ?? [];
+  // Римские — от двух символов: одиночные буквы (d, c, m…) — это чаще
+  // теги дубляжа из релизного имени, чем «Rocky V».
+  const roman = lower.match(/\b[ivxlcdm]{2,8}\b/g) ?? [];
   return [...arabic, ...roman].sort();
 }
 
@@ -52,6 +55,8 @@ function numericMarkers(title: string): string[] {
  */
 function stripReleaseNoise(title: string): string {
   return normalizeForMatch(title)
+    // Хвост за последней вертикальной чертой — теги дубляжа («| D, P, P2»).
+    .replace(/\s*\|[^|]*$/, " ")
     .replace(/\bs\d{1,2}\s?e\d{1,3}\b/gi, " ")
     .replace(/\b[se]\d{1,3}\b/gi, " ")
     .replace(/\b(?:сезон|season)s?\s+\d+(?:\s?[-–]\s?\d+)?\b/gi, " ")
@@ -94,18 +99,31 @@ function releaseMatchesTitle(
       if (foreign) continue;
     }
     if (!releaseClean.includes(clean)) continue;
-    // Название тайтла — начало названия релиза: хвост обязан быть годами
-    // или упаковкой (COMPLETE). Хвост из двух и более слов — сиквел:
-    // «Мстители: Эра Альтрона».
+    // Название тайтла — начало названия релиза: хвост обязан быть годами,
+    // упаковкой (COMPLETE) или названием на другом языке — двуязычные
+    // релизы («RU / EN») на rutor норма. Хвост из 2+ слов того же языка —
+    // сиквел: «Мстители: Эра Альтрона».
     if (releaseClean.startsWith(`${clean} `)) {
       const rest = releaseClean.slice(clean.length + 1);
       const restTokens = rest.split(" ").filter(Boolean);
       const allYears = restTokens.every((t) => /^(?:19|20)\d{2}$/.test(t));
-      if (restTokens.length >= 2 && !allYears) continue;
+      const candScript = scriptOf(clean);
+      const sameScriptTail =
+        candScript !== "other" &&
+        restTokens.length >= 2 &&
+        restTokens.every((t) => scriptOf(t) === candScript);
+      if (sameScriptTail && !allYears) continue;
     }
     return true;
   }
   return false;
+}
+
+/** Письменность токена: для щита хвоста (перевод ≠ сиквел). */
+function scriptOf(s: string): "cyrl" | "latn" | "other" {
+  if (/[а-я]/i.test(s)) return "cyrl";
+  if (/[a-z]/i.test(s)) return "latn";
+  return "other";
 }
 
 /** Совпадает ли хоть одно из имён с названием тайтла (для AniLibria). */
