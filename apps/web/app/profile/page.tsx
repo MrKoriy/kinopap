@@ -7,6 +7,7 @@ import type {
   UserListDetailDto,
   UserListDto,
 } from "@zal/api-client";
+import { historyPositionLabel } from "@zal/shared";
 import { Film, ListVideo, Trash2, X } from "lucide-react";
 import Link from "next/link";
 /**
@@ -17,12 +18,7 @@ import Link from "next/link";
 import * as React from "react";
 import { PosterImage } from "@/components/poster-image";
 import { useOptionalAuth } from "@/lib/auth";
-import {
-  formatMemberSince,
-  formatRelativeTime,
-  historyPositionLabel,
-  pluralRu,
-} from "@/lib/profile-format";
+import { formatMemberSince, formatRelativeTime, pluralRu } from "@/lib/profile-format";
 
 /** Порядок и подписи счётчиков сводки. */
 const STAT_ITEMS: { key: keyof ProfileStats; label: string }[] = [

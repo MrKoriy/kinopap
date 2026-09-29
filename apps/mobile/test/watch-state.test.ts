@@ -9,7 +9,6 @@ import { describe, expect, it } from "vitest";
 import {
   firstPlayableMediaId,
   historyLabel,
-  mediaLabel,
   pickDefaultSeason,
   primaryPlay,
   progressByMedia,
@@ -135,22 +134,13 @@ describe("pickDefaultSeason", () => {
   });
 });
 
-describe("mediaLabel / firstPlayableMediaId", () => {
+// Подписи слотов («S2E4», «Часть N») проверяются в packages/shared/test/watch.ts:
+// правило общее с вебом, значит и тест у него один. Здесь остаётся то, что
+// принадлежит именно мобильному клиенту, — выбор цели и состава кнопки.
+describe("firstPlayableMediaId", () => {
   const item = makeItem({
     seasons: [season(10, 2, [101, 102])],
     media: [{ id: 5, partNumber: 1, title: null, thumbnailUrl: null, runtime: 0 }],
-  });
-
-  it("серия подписывается S{сезон}E{номер}", () => {
-    expect(mediaLabel(item, 102)).toBe("S2E2");
-  });
-
-  it("часть фильма — «Часть N»", () => {
-    expect(mediaLabel(item, 5)).toBe("Часть 1");
-  });
-
-  it("неизвестный media — null", () => {
-    expect(mediaLabel(item, 999)).toBeNull();
   });
 
   it("первая доступная — первая серия с файлом", () => {
@@ -185,6 +175,21 @@ describe("primaryPlay", () => {
   it("сериал без прогресса — «Смотреть» на первую серию", () => {
     const series = makeItem({ seasons: [season(10, 1, [101, 102])] });
     expect(primaryPlay(series, null)).toEqual({ mediaId: 101, label: "Смотреть" });
+  });
+
+  // Тот самый случай, где клиенты расходились: веб писал «Продолжить», потому
+  // что искал слот только среди серий, а часть фильма слотом не считал.
+  it("многочастевый фильм с resume — «Продолжить Часть 2»", () => {
+    const parts = makeItem({
+      media: [
+        { id: 5, partNumber: 1, title: null, thumbnailUrl: null, runtime: 0 },
+        { id: 6, partNumber: 2, title: null, thumbnailUrl: null, runtime: 0 },
+      ],
+    });
+    expect(primaryPlay(parts, progress([], 6))).toEqual({
+      mediaId: 6,
+      label: "Продолжить Часть 2",
+    });
   });
 
   it("нет играбельного media — null", () => {

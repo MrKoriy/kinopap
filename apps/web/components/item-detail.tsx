@@ -1,7 +1,7 @@
 "use client";
 
 import type { Episode, ItemDetail, ItemProgressDto, ItemProgressEntry } from "@zal/api-client";
-import { resolveTrailer } from "@zal/shared";
+import { primaryPlayLabel, resolveTrailer } from "@zal/shared";
 import { Check, Film, Play, RotateCcw, X } from "lucide-react";
 import Link from "next/link";
 /**
@@ -45,16 +45,6 @@ function seasonIndexForMedia(item: ItemDetail, mediaId: number | null): number |
   if (mediaId == null || !item.seasons) return null;
   const idx = item.seasons.findIndex((s) => s.episodes.some((e) => e.mediaId === mediaId));
   return idx >= 0 ? idx : null;
-}
-
-/** «S2E4» для media-эпизода; null для фильма/части. */
-function episodeLabel(item: ItemDetail, mediaId: number | null): string | null {
-  if (mediaId == null || !item.seasons) return null;
-  for (const season of item.seasons) {
-    const ep = season.episodes.find((e) => e.mediaId === mediaId);
-    if (ep) return `S${season.number}E${ep.number}`;
-  }
-  return null;
 }
 
 /** Строка эпизода: номер, превью, название, длительность и состояние просмотра. */
@@ -259,13 +249,11 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
     return rows;
   }, [item]);
 
-  const resumeLabel = episodeLabel(item, resumeMediaId);
+  // Подпись считает @zal/shared: те же правила у мобильного клиента, и
+  // написанные дважды они успели разойтись — для многочастевого фильма веб
+  // писал «Продолжить» там, где мобильный писал «Продолжить Часть 2».
   const ctaMediaId = resumeMediaId ?? playMediaId;
-  const ctaLabel = resumeMediaId
-    ? resumeLabel
-      ? `Продолжить ${resumeLabel}`
-      : "Продолжить"
-    : "Смотреть";
+  const ctaLabel = primaryPlayLabel(item, resumeMediaId);
   const showStartOver = resumeMediaId != null && resumeMediaId !== playMediaId;
 
   const activeEpisodes = item.seasons?.[activeSeason]?.episodes ?? [];

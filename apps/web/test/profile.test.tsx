@@ -26,12 +26,7 @@ vi.mock("next/link", () => ({
 }));
 
 import ProfilePage from "@/app/profile/page";
-import {
-  formatMemberSince,
-  formatRelativeTime,
-  historyPositionLabel,
-  pluralRu,
-} from "@/lib/profile-format";
+import { formatMemberSince, formatRelativeTime, pluralRu } from "@/lib/profile-format";
 
 afterEach(cleanup);
 beforeEach(() => {
@@ -120,39 +115,8 @@ describe("pluralRu", () => {
   });
 });
 
-describe("historyPositionLabel", () => {
-  const base = {
-    seasonNumber: null,
-    episodeNumber: null,
-    partNumber: null,
-    mediaTitle: null,
-  };
-
-  it("серия: S/E с названием", () => {
-    expect(
-      historyPositionLabel({ ...base, seasonNumber: 2, episodeNumber: 4, mediaTitle: "Серия 4" }),
-    ).toBe("S2E4 · Серия 4");
-  });
-
-  it("серия без названия — только S/E", () => {
-    expect(historyPositionLabel({ ...base, seasonNumber: 1, episodeNumber: 1 })).toBe("S1E1");
-  });
-
-  it("часть", () => {
-    expect(historyPositionLabel({ ...base, partNumber: 2 })).toBe("Часть 2");
-  });
-
-  it("название медиа", () => {
-    expect(historyPositionLabel({ ...base, mediaTitle: "Режиссёрская версия" })).toBe(
-      "Режиссёрская версия",
-    );
-  });
-
-  it("фильм без уточнений — пусто", () => {
-    expect(historyPositionLabel(base)).toBe("");
-  });
-});
-
+// Подпись позиции в истории переехала в packages/shared/test/watch.test.ts:
+// правило общее с мобильным клиентом, поэтому и тест у него один.
 describe("formatMemberSince", () => {
   it("месяц и год", () => {
     expect(formatMemberSince("2026-03-01T00:00:00.000Z")).toBe("март 2026 г.");

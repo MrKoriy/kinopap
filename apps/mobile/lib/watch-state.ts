@@ -3,6 +3,10 @@
  * состоянии серия (начата/досмотрена), куда ведёт главная кнопка и когда
  * отправлять прогресс. Вынесено из экрана — так это покрывается тестами без
  * рендера и без сети.
+ *
+ * Правила слотов и подписей («S2E4», «Часть 2», «Продолжить S2E4») живут в
+ * `@zal/shared`: они одинаковы у веба и мобильного, а написанные дважды успели
+ * разойтись.
  */
 import type {
   HistoryEntryDto,
@@ -11,6 +15,7 @@ import type {
   ItemProgressEntry,
   Season,
 } from "@zal/api-client";
+import { historyPositionLabel, primaryPlayLabel } from "@zal/shared";
 
 /** Состояние серии: ничего, начата (полоска) или досмотрена (галочка). */
 export type WatchState =
@@ -75,62 +80,42 @@ export function firstPlayableMediaId(item: ItemDetail): number | null {
   return firstPart ? firstPart.id : null;
 }
 
-/** Подпись media в терминах сериала: "S2E4" / "Часть 2"; null — не нашли. */
-export function mediaLabel(item: ItemDetail, mediaId: number): string | null {
-  for (const season of item.seasons ?? []) {
-    for (const ep of season.episodes) {
-      if (ep.mediaId === mediaId) return `S${season.number}E${ep.number}`;
-    }
-  }
-  for (const part of item.media ?? []) {
-    if (part.id === mediaId) return `Часть ${part.partNumber}`;
-  }
-  return null;
-}
-
 export interface PrimaryPlay {
   mediaId: number;
   label: string;
 }
 
 /**
- * Главная кнопка карточки. Одночастевый фильм — всегда «Смотреть»: его
- * позицию восстанавливает сам плеер, отдельная надпись тут не нужна.
- * Сериал и многочастевый фильм — «Продолжить S2E4» по resumeMediaId, иначе
- * «Смотреть» с первой доступной серии.
+ * Главная кнопка карточки: куда ведёт и что на ней написано. Подпись считает
+ * `@zal/shared` — правило общее с вебом.
+ *
+ * Здесь остаётся только выбор цели. Одночастевый фильм ведёт на свою
+ * единственную часть, остальное — на точку возобновления, а без неё на первую
+ * доступную серию.
  */
 export function primaryPlay(
   item: ItemDetail,
   progress: ItemProgressDto | null,
 ): PrimaryPlay | null {
-  const single = item.media?.length === 1 ? item.media[0] : null;
-  if (single) return { mediaId: single.id, label: "Смотреть" };
-
-  if (progress?.resumeMediaId != null) {
-    const label = mediaLabel(item, progress.resumeMediaId);
-    return {
-      mediaId: progress.resumeMediaId,
-      label: label ? `Продолжить ${label}` : "Продолжить",
-    };
-  }
-  const first = firstPlayableMediaId(item);
-  return first != null ? { mediaId: first, label: "Смотреть" } : null;
+  const resumeMediaId = progress?.resumeMediaId ?? null;
+  const target = resumeMediaId ?? firstPlayableMediaId(item);
+  if (target == null) return null;
+  return { mediaId: target, label: primaryPlayLabel(item, resumeMediaId) };
 }
 
 /**
  * Человекочитаемая строка записи истории: «S2E4 · Серия 4» для серий,
  * «Часть 2» для частей фильма, иначе — имя media или название тайтла.
+ *
+ * Отличие от веба только в этих двух параметрах: в списке истории мобильного
+ * строка одна, поэтому у неё есть запасное название тайтла и подпись «Серия N»
+ * для серии без своего имени. Веб и то и другое рисует рядом отдельно.
  */
 export function historyLabel(entry: HistoryEntryDto): string {
-  if (entry.seasonNumber != null && entry.episodeNumber != null) {
-    const base = `S${entry.seasonNumber}E${entry.episodeNumber}`;
-    return `${base} · ${entry.mediaTitle ?? `Серия ${entry.episodeNumber}`}`;
-  }
-  if (entry.partNumber != null) {
-    const base = `Часть ${entry.partNumber}`;
-    return entry.mediaTitle ? `${base} · ${entry.mediaTitle}` : base;
-  }
-  return entry.mediaTitle ?? entry.itemTitle;
+  return historyPositionLabel(entry, {
+    fallback: entry.itemTitle,
+    episodeTitle: entry.episodeNumber != null ? `Серия ${entry.episodeNumber}` : null,
+  });
 }
 
 /** Всё, что нужно, чтобы решить, отправлять ли позицию на сервер. */

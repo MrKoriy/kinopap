@@ -1,9 +1,12 @@
 /**
- * Чистые форматтеры личного кабинета: относительное время, подпись позиции
- * в истории и русская плюрализация. Живут вне компонента, чтобы тестировать
- * без DOM и API — вёрстка меняется чаще, чем эти правила.
+ * Чистые форматтеры личного кабинета: относительное время и русская
+ * плюрализация. Живут вне компонента, чтобы тестировать без DOM и API —
+ * вёрстка меняется чаще, чем эти правила.
+ *
+ * Подпись позиции в истории сюда не входит: это правило предметной области, а
+ * не формат личного кабинета, и оно общее с мобильным клиентом — см.
+ * `historyPositionLabel` в `@zal/shared`.
  */
-import type { HistoryEntryDto } from "@zal/api-client";
 
 /** Русская форма по числу: 1 минуту / 2 минуты / 5 минут. */
 export function pluralRu(n: number, one: string, few: string, many: string): string {
@@ -44,28 +47,6 @@ export function formatRelativeTime(iso: string, now: Date = new Date()): string 
     month: "long",
     ...(sameYear ? {} : { year: "numeric" }),
   }).format(then);
-}
-
-/**
- * Подпись позиции в истории: серия «S2E4 · Серия 4», часть «Часть 2» или
- * название медиа. Пустая строка — у фильма без уточнений подпись не нужна,
- * название тайтла строка показывает отдельно.
- */
-export function historyPositionLabel(
-  entry: Pick<
-    HistoryEntryDto,
-    "seasonNumber" | "episodeNumber" | "partNumber" | "mediaTitle"
-  >,
-): string {
-  if (entry.seasonNumber != null && entry.episodeNumber != null) {
-    const se = `S${entry.seasonNumber}E${entry.episodeNumber}`;
-    return entry.mediaTitle ? `${se} · ${entry.mediaTitle}` : se;
-  }
-  if (entry.partNumber != null) {
-    const part = `Часть ${entry.partNumber}`;
-    return entry.mediaTitle ? `${part} · ${entry.mediaTitle}` : part;
-  }
-  return entry.mediaTitle ?? "";
 }
 
 /** «март 2026 г.» — дата регистрации без дня и времени. */

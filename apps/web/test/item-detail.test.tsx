@@ -208,6 +208,61 @@ describe("ItemDetailView — сезонный пикер и прогресс", (
   });
 });
 
+describe("ItemDetailView — подпись главной кнопки у фильма", () => {
+  /** Фильм из `parts` частей: сезонов у него нет, контент лежит в `media`. */
+  const movie = (parts: number): ItemDetail => ({
+    ...itemDetail,
+    type: "movie",
+    seasons: null,
+    media: Array.from({ length: parts }, (_, i) => ({
+      id: 700 + i,
+      partNumber: i + 1,
+      title: null,
+      thumbnailUrl: null,
+      runtime: 3000,
+    })),
+  });
+
+  const resumeAt = (mediaId: number): ItemProgressDto => ({
+    itemId: 1,
+    entries: [],
+    resumeMediaId: mediaId,
+    resumePositionSeconds: 900,
+  });
+
+  // Раньше веб искал слот только среди серий, поэтому на многочастевом фильме
+  // писал просто «Продолжить» — мобильный в том же состоянии писал «Часть 2».
+  // Правило переехало в @zal/shared, и этот тест сторожит, что оно там одно.
+  it("многочастевый фильм называет часть, на которой остановились", async () => {
+    auth.state.api = makeApi(resumeAt(701));
+    auth.state.isAuthed = true;
+    auth.state.user = { id: 1 };
+
+    render(<ItemDetailView item={movie(2)} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watch-button").textContent).toContain("Продолжить Часть 2");
+    });
+    expect(screen.getByTestId("watch-button").getAttribute("href")).toBe("/watch/1/701");
+  });
+
+  // Единственная часть — это не часть, а сам фильм. Позицию восстанавливает
+  // плеер, поэтому «Смотреть» честнее, чем «Продолжить Часть 1».
+  it("одночастевый фильм с точкой возобновления — «Смотреть»", async () => {
+    auth.state.api = makeApi(resumeAt(700));
+    auth.state.isAuthed = true;
+    auth.state.user = { id: 1 };
+
+    render(<ItemDetailView item={movie(1)} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("watch-button").textContent).toContain("Смотреть");
+    });
+    expect(screen.getByTestId("watch-button").textContent).not.toContain("Часть");
+    expect(screen.getByTestId("watch-button").getAttribute("href")).toBe("/watch/1/700");
+  });
+});
+
 describe("ItemDetailView — трейлер", () => {
   it("честно называет поиск, когда трейлера нет", () => {
     render(<ItemDetailView item={itemDetail} />);
