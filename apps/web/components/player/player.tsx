@@ -2,29 +2,41 @@
 
 import type { AudioTrack, MediaLinks, SpriteMetaDto } from "@zal/api-client";
 import type HlsJs from "hls.js";
-import { Volume2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 /**
  * Плеер «Зал»: hls.js + собственный UI. Аудиодорожки, субтитры со сдвигом,
  * резюме просмотра, пропуск интро, автоследующая серия, хоткеи, PiP.
  * hls.js грузится динамически: браузеры с нативным HLS не тянут ~150КБ в чанк.
+ *
+ * Здесь осталось то, что нельзя разложить: состояния у плеера двадцать с
+ * лишним, и инициализация потока читает девятнадцать имён из внешней области
+ * (восемь из них — сеттеры). Показ вынесен в `overlays.tsx`, узкие по
+ * интерфейсу эффекты — в `hooks.ts`, чистая арифметика — в `player-logic.ts`.
  */
 import * as React from "react";
 import { useAuth } from "@/lib/auth";
 import {
   absoluteStreamUrl,
   activeCues,
-  type BufferedSegment,
-  bufferedSegments,
   isIntroVisible,
   isNearEnd,
   nextAliveSource,
   nextEpisode,
   type PlayerEpisodeGroup,
   parseVtt,
+  resolveStreamUrl,
   type SubtitleCue as VttCue,
 } from "@/lib/player-logic";
 import { PlayerControls } from "./controls";
+import { useBufferedRanges, useProgressReporting, useTransport } from "./hooks";
+import {
+  BufferingOverlay,
+  NextEpisodeOverlay,
+  PlaybackError,
+  SkipIntroButton,
+  SubtitleOverlay,
+  UnmuteOverlay,
+} from "./overlays";
 
 export interface PlayerProps {
   links: MediaLinks;
@@ -51,17 +63,6 @@ interface SubtitleTrack {
 }
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
-const PROGRESS_INTERVAL_MS = 10_000;
-/** Минимум просмотра, чтобы считать позицию осмысленной (резюме тоже с 5с). */
-const MIN_REPORT_SECONDS = 5;
-/**
- * Как часто пересчитывать полосу буфера, мс.
- *
- * `progress` на быстром канале сыпется десятки раз в секунду, и каждый вызов —
- * это `setState` и ре-рендер всего контрол-бара. Четырёх раз в секунду полосе
- * хватает с запасом: она меняется на глазах, но не дёргается.
- */
-const BUFFER_SNAPSHOT_MS = 250;
 
 export function Player({
   links,
@@ -81,8 +82,6 @@ export function Player({
   const [playing, setPlaying] = React.useState(false);
   const [currentTime, setCurrentTime] = React.useState(0);
   const [duration, setDuration] = React.useState(0);
-  // Отрезки буфера в долях длительности — для серой полосы в контрол-баре.
-  const [buffered, setBuffered] = React.useState<BufferedSegment[]>([]);
   const [volume, setVolume] = React.useState(1);
   const [muted, setMuted] = React.useState(false);
   const [playbackRate, setPlaybackRate] = React.useState(1);
@@ -97,7 +96,6 @@ export function Player({
   const [controlsVisible, setControlsVisible] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isBuffering, setIsBuffering] = React.useState(false);
-  const [copied, setCopied] = React.useState(false);
   const [activeFileIndex, setActiveFileIndex] = React.useState(0);
   // gst-HLS недоступен (транскодер упал / версия без gst) — откат на прямой
   // HTTP-стрим: картинка и звук родными кодеками есть не у всех браузеров,
@@ -127,11 +125,10 @@ export function Player({
   // (gst выбирает аудио параметром URL), переключаемся сменой источника.
   // Дорожки приходят лениво (media-tracks) — до них играем базовым мастером.
   const audios = lazyAudios.length > 0 ? lazyAudios : links.audios;
+  // Нулевая дорожка — это базовый мастер, а не отдельная дорожка: у
+  // ингест-тайтлов ей соответствует общий манифест.
   const audioMaster = activeAudio > 0 ? audios[activeAudio]?.masterUrl : null;
-  const baseStream = activeFile?.urls.hls ?? activeFile?.urls.http ?? null;
-  const streamUrl = directFallback
-    ? (activeFile?.urls.http ?? baseStream)
-    : (audioMaster ?? baseStream);
+  const streamUrl = resolveStreamUrl({ file: activeFile, directFallback, audioMaster });
   const sprites: SpriteMetaDto | null = links.sprites;
   // Следующая серия — из того же списка, что и меню выбора, чтобы оверлей и
   // соседний пункт меню не могли разойтись. itemId для маршрута берём из links:
@@ -550,51 +547,9 @@ export function Player({
   }, []);
 
   /* ---------- Буфер: серая полоса в контрол-баре ---------- */
-  // Отдельным эффектом от остальных событий видео, потому что слушателей у
-  // него свои: `progress` не участвует ни в одном другом состоянии.
-  React.useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-
-    let lastAt = 0;
-    const snapshot = () => {
-      const now = performance.now();
-      // Троттлинг здесь, а не через debounce: нам нужен последний снимок, а не
-      // отложенный, иначе полоса отстаёт от видео на хвост задержки.
-      if (now - lastAt < BUFFER_SNAPSHOT_MS) return;
-      lastAt = now;
-
-      // `video.buffered` — живой TimeRanges: к моменту рендера в нём уже другие
-      // числа. Поэтому копируем в обычный массив прямо сейчас.
-      const ranges: { start: number; end: number }[] = [];
-      for (let i = 0; i < video.buffered.length; i += 1) {
-        ranges.push({ start: video.buffered.start(i), end: video.buffered.end(i) });
-      }
-      setBuffered(bufferedSegments(ranges, video.duration || 0));
-    };
-
-    video.addEventListener("progress", snapshot);
-    video.addEventListener("timeupdate", snapshot);
-    video.addEventListener("loadedmetadata", snapshot);
-    video.addEventListener("emptied", snapshot);
-    return () => {
-      video.removeEventListener("progress", snapshot);
-      video.removeEventListener("timeupdate", snapshot);
-      video.removeEventListener("loadedmetadata", snapshot);
-      video.removeEventListener("emptied", snapshot);
-    };
-  }, []);
-
-  // Смена источника — новый буфер. Без сброса от старой раздачи остаётся
+  // Смена источника — новый буфер: без сброса от старой раздачи остаётся
   // полоса, которой в новой нет, и она читается как «уже загружено».
-  React.useEffect(() => {
-    // Читаем явно: сбрасывать надо именно на смену источника, а линтер иначе
-    // считает зависимости лишними и предлагает их убрать — тогда эффект
-    // перестал бы срабатывать вовсе.
-    void streamUrl;
-    void sourceEpoch;
-    setBuffered([]);
-  }, [streamUrl, sourceEpoch]);
+  const buffered = useBufferedRanges(videoRef, `${streamUrl ?? ""}|${sourceEpoch}`);
 
   /* ---------- Резюме: стартуем с сохранённой позиции ---------- */
   React.useEffect(() => {
@@ -626,16 +581,18 @@ export function Player({
   }, [api, isAuthed, links.mediaId]);
 
   /* ---------- Прогресс: пишем периодически и на паузе ---------- */
-  const reportProgress = React.useCallback(() => {
-    const video = videoRef.current;
-    if (!video || !isAuthed || !video.duration) return;
-    void api
-      .saveProgress(links.mediaId, {
-        positionSeconds: video.currentTime,
-        durationSeconds: video.duration,
-      })
-      .catch(() => {});
-  }, [api, isAuthed, links.mediaId]);
+  // Хук зовём именно здесь, а не рядом с остальными: его эффект размонтирования
+  // читает `video.currentTime` и обязан отработать РАНЬШЕ, чем эффект
+  // инициализации потока снимет `src`. Поднять его выше по файлу — и последняя
+  // позиция перестанет сохраняться при клиентской навигации: cleanup'ы идут в
+  // обратном порядке регистрации, и нулевая позиция не пройдёт порог в 5с.
+  const reportProgress = useProgressReporting({
+    videoRef,
+    mediaId: links.mediaId,
+    api,
+    enabled: isAuthed,
+    playing,
+  });
 
   // Выбор серии в меню: тот же переход, что и у «Следующей серии», — страница
   // просмотра пересоздаёт плеер по key={itemId:mediaId}. Прогресс фиксируем до
@@ -648,88 +605,16 @@ export function Player({
     [links.itemId, reportProgress, router],
   );
 
-  React.useEffect(() => {
-    if (!playing) return;
-    const id = window.setInterval(reportProgress, PROGRESS_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, [playing, reportProgress]);
-
-  // Прогресс на паузе и при уходе со страницы — детерминированно, без ожидания интервала.
-  // С выгрузки не пишем нулевые позиции: такая зомби-запись затирает свежий прогресс.
-  React.useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    const onPause = () => reportProgress();
-    const onPageHide = () => {
-      // С выгрузки пишем только во время воспроизведения: пауза и так записала,
-      // а зомби-запись с остановленной страницы затирает свежий прогресс.
-      const v = videoRef.current;
-      if (v && !v.paused && v.currentTime >= MIN_REPORT_SECONDS) reportProgress();
-    };
-    video.addEventListener("pause", onPause);
-    window.addEventListener("pagehide", onPageHide);
-    return () => {
-      video.removeEventListener("pause", onPause);
-      window.removeEventListener("pagehide", onPageHide);
-    };
-  }, [reportProgress]);
-
-  // При размонтировании (клиентская навигация) сохраняем осмысленную позицию.
-  // beforeunload не используем: его зомби-запись при перезагрузке затирает
-  // свежий прогресс — выгрузку покрывает pagehide-хук выше.
-  React.useEffect(() => {
-    const video = videoRef.current;
-    return () => {
-      if (video && video.currentTime >= MIN_REPORT_SECONDS) reportProgress();
-    };
-  }, [reportProgress]);
-
   /* ---------- Управление ---------- */
 
-  /** Смена источника (качество/дубляж) с восстановлением позиции. */
-  const swapStream = React.useCallback((mutate: () => void) => {
-    const video = videoRef.current;
-    const prevTime = video?.currentTime ?? 0;
-    const wasPlaying = video ? !video.paused : false;
-    mutate();
-
-    const onLoaded = () => {
-      if (video && prevTime > 0) {
-        video.currentTime = prevTime;
-        if (wasPlaying) void video.play().catch(() => {});
-      }
-      video?.removeEventListener("loadedmetadata", onLoaded);
-    };
-    video?.addEventListener("loadedmetadata", onLoaded);
-  }, []);
-
-  const togglePlay = React.useCallback(() => {
-    const video = videoRef.current;
-    if (!video) return;
-    if (video.paused) void video.play().catch(() => {});
-    else video.pause();
-  }, []);
-
-  const seek = React.useCallback((t: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Math.max(0, Math.min(t, video.duration || t));
-    setCurrentTime(video.currentTime);
-  }, []);
-
-  const changeVolume = React.useCallback((v: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.volume = v;
-    video.muted = v === 0;
-  }, []);
-
-  const changeRate = React.useCallback((r: number) => {
-    const video = videoRef.current;
-    if (!video) return;
-    video.playbackRate = r;
-    setPlaybackRate(r);
-  }, []);
+  // Команды над самим <video>: play/pause, перемотка, громкость, скорость, PiP
+  // и смена источника с восстановлением позиции. Что играть (дорожка, качество,
+  // субтитры) — ниже: те команды читают audios/subtitles/hlsRef и меняют по три
+  // состояния каждая, у них общего с транспортом только имя.
+  const { swapStream, togglePlay, seek, changeVolume, changeRate, togglePip } = useTransport(
+    videoRef,
+    { setCurrentTime, setPlaybackRate },
+  );
 
   /** Реальное переключение дубляжа: hls.js либо нативные audioTracks (Safari). */
   const changeAudio = React.useCallback(
@@ -785,17 +670,8 @@ export function Player({
     [swapStream],
   );
 
-  const togglePip = React.useCallback(async () => {
-    const video = videoRef.current;
-    if (!video) return;
-    try {
-      if (document.pictureInPictureElement) await document.exitPictureInPicture();
-      else if (document.pictureInPictureEnabled) await video.requestPictureInPicture();
-    } catch {
-      // PiP недоступен — молча игнорируем.
-    }
-  }, []);
-
+  // Fullscreen — на контейнере, а не на <video>: вместе с видео уходят и
+  // контролы, и оверлеи. Поэтому он не в useTransport.
   const toggleFullscreen = React.useCallback(async () => {
     const el = containerRef.current;
     if (!el) return;
@@ -950,133 +826,41 @@ export function Player({
       />
 
       {/* Субтитры со сдвигом */}
-      {activeCueList.length > 0 && (
-        <div
-          className="pointer-events-none absolute inset-x-0 bottom-24 flex flex-col items-center gap-1 px-8 text-center"
-          data-testid="subtitle-overlay"
-        >
-          {activeCueList.map((c, i) => (
-            <span
-              key={`${c.start}-${i}`}
-              className="rounded bg-black/70 px-2 py-1 text-lg font-medium text-white"
-            >
-              {c.text}
-            </span>
-          ))}
-        </div>
-      )}
+      <SubtitleOverlay cues={activeCueList} />
 
       {/* Пропустить интро */}
-      {introVisible && (
-        <button
-          type="button"
-          className="absolute bottom-28 right-6 rounded-full bg-white/90 px-5 py-2.5 text-sm font-semibold text-black transition hover:bg-white"
-          onClick={() => seek(links.intro!.endSeconds)}
-          data-testid="skip-intro"
-        >
-          Пропустить интро
-        </button>
-      )}
+      {introVisible && <SkipIntroButton endSeconds={links.intro!.endSeconds} onSkip={seek} />}
 
       {/* Автоплей без звука: политика браузера не дала играть со звуком —
           даём явную кнопку, чтобы не оставить пользователя в тишине. */}
-      {soundBlocked && muted && (
-        <button
-          type="button"
-          onClick={unmute}
-          className="absolute right-4 top-4 inline-flex items-center gap-2 rounded-full bg-white/90 px-4 py-2 text-sm font-semibold text-black transition hover:bg-white"
-          data-testid="unmute-overlay"
-        >
-          <Volume2 className="h-4 w-4" />
-          Включить звук
-        </button>
-      )}
+      {soundBlocked && muted && <UnmuteOverlay onUnmute={unmute} />}
 
       {/* Следующая серия */}
       {nearEnd && (
-        <div
-          className="absolute bottom-28 left-6 rounded-[var(--radius-card)] border border-border bg-black/80 p-4"
-          data-testid="next-episode"
-        >
-          <p className="mb-2 text-sm text-muted">Следующая серия</p>
-          <button
-            type="button"
-            className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
-            onClick={() => {
-              reportProgress();
-              // Маршрут /watch/[itemId]/[mediaId]: itemId берём из links, он
-              // относится к играющему медиа. router.push — клиентская
-              // навигация вместо полной перезагрузки.
-              router.push(`/watch/${links.itemId}/${next!.mediaId}`);
-            }}
-          >
-            {next!.label}
-          </button>
-        </div>
+        <NextEpisodeOverlay
+          next={next!}
+          onPlay={() => {
+            reportProgress();
+            // Маршрут /watch/[itemId]/[mediaId]: itemId берём из links, он
+            // относится к играющему медиа. router.push — клиентская
+            // навигация вместо полной перезагрузки.
+            router.push(`/watch/${links.itemId}/${next!.mediaId}`);
+          }}
+        />
       )}
 
       {/* Индикатор буферизации */}
       {isBuffering && !error && (
-        <div
-          className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/40 text-white"
-          data-testid="player-buffering"
-        >
-          <div className="mb-3 h-8 w-8 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-          <p className="text-sm font-medium text-white/90">
-            {switchingSource
-              ? `Раздача не заиграла — пробуем следующую (${deadFiles.length + 1} из ${links.files.length})…`
-              : "Буферизация потока / поиск пиров в сети..."}
-          </p>
-        </div>
+        <BufferingOverlay
+          switchingSource={switchingSource}
+          deadCount={deadFiles.length}
+          totalFiles={links.files.length}
+        />
       )}
 
       {/* Ошибка воспроизведения с кнопками внешних плееров */}
       {error && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/90 p-6 text-center text-white">
-          <div className="max-w-md">
-            <h3 className="mb-2 text-base font-semibold text-white">
-              Не удалось воспроизвести в браузере
-            </h3>
-            <p className="mb-5 text-sm text-muted">{error}</p>
-            <div className="flex flex-wrap items-center justify-center gap-2">
-              <button
-                type="button"
-                onClick={retryAllSources}
-                className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover"
-                data-testid="player-retry"
-              >
-                Попробовать снова
-              </button>
-              {externalStreamUrl && (
-                <>
-                  <a
-                    href={`iina://weblink?url=${encodeURIComponent(externalStreamUrl)}`}
-                    className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover"
-                  >
-                    Открыть в IINA (Mac)
-                  </a>
-                  <a
-                    href={`vlc://${externalStreamUrl}`}
-                    className="rounded-full border border-border bg-surface-elevated px-4 py-2 text-sm font-semibold text-white transition hover:bg-white/10"
-                  >
-                    Открыть в VLC
-                  </a>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigator.clipboard.writeText(externalStreamUrl);
-                      setCopied(true);
-                      setTimeout(() => setCopied(false), 2000);
-                    }}
-                    className="rounded-full border border-border bg-surface px-4 py-2 text-sm text-white/80 transition hover:bg-white/10"
-                  >
-                    {copied ? "Ссылка скопирована" : "Скопировать поток"}
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-        </div>
+        <PlaybackError error={error} streamUrl={externalStreamUrl} onRetry={retryAllSources} />
       )}
 
       <div className={controlsVisible ? "block" : "hidden"}>

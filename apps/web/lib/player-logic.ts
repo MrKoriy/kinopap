@@ -3,7 +3,7 @@
  * WebVTT-парсер и активные реплики живут в @zal/shared (одинаковы для
  * веба и мобилы), здесь — только реэкспорт для обратной совместимости.
  */
-import type { ItemDetail } from "@zal/api-client";
+import type { ItemDetail, MediaFile } from "@zal/api-client";
 
 export {
   activeCues,
@@ -153,6 +153,43 @@ export function nextAliveSource(dead: readonly number[], total: number): number 
     if (!dead.includes(i)) return i;
   }
   return null;
+}
+
+/* ---------- Адрес потока ---------- */
+
+/**
+ * Адрес, который отдаём в `<video>` или hls.js.
+ *
+ * Три слоя выбора, и порядок между ними неочевиден:
+ * — `directFallback` (gst не собрал манифест) — прямой HTTP;
+ * — дубляж с `masterUrl` (zero-storage: gst выбирает аудио параметром URL) —
+ *   персональный мастер важнее базового;
+ * — базовый: HLS, иначе прямой.
+ *
+ * Сравнения здесь `||`, а не `??`, и это не стилистика. Репозиторий отдаёт
+ * `http: mediaUrl(...) ?? ""` — пустая строка означает «у файла нет ключа», а
+ * не «адрес». С `??` она прошла бы насквозь и стала бы адресом потока: эффект
+ * инициализации выходит по `!streamUrl`, и пользователь получил бы чёрный
+ * прямоугольник без ошибки и без спиннера — худший вид отказа. С `||` пустая
+ * строка проваливается к следующему слою, и раздача идёт обычным путём:
+ * ошибка, перебор, сообщение.
+ *
+ * `audioMaster` приходит снаружи уже с поправкой на «нулевая дорожка — это
+ * базовый мастер»: у ингест-тайтлов дорожке с индексом 0 соответствует общий
+ * манифест, а не отдельная.
+ */
+export function resolveStreamUrl({
+  file,
+  directFallback,
+  audioMaster,
+}: {
+  file: Pick<MediaFile, "urls"> | undefined;
+  directFallback: boolean;
+  audioMaster: string | null | undefined;
+}): string | null {
+  const base = file?.urls.hls || file?.urls.http || null;
+  if (directFallback) return file?.urls.http || base;
+  return audioMaster || base;
 }
 
 /**

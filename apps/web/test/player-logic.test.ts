@@ -12,6 +12,7 @@ import {
   nextAliveSource,
   nextEpisode,
   parseVtt,
+  resolveStreamUrl,
   spriteTileFor,
 } from "@/lib/player-logic";
 
@@ -210,6 +211,90 @@ function seasonOf(
 function partOf(id: number, partNumber: number, title: string | null = null): PartInput {
   return { id, partNumber, title, thumbnailUrl: null, runtime: 600 };
 }
+
+describe("resolveStreamUrl", () => {
+  const file = (http: string, hls: string | null) => ({ urls: { http, hls } });
+
+  it("базовый выбор — HLS, если он есть", () => {
+    expect(
+      resolveStreamUrl({
+        file: file("/stream?f=1", "/gst/master.m3u8"),
+        directFallback: false,
+        audioMaster: null,
+      }),
+    ).toBe("/gst/master.m3u8");
+  });
+
+  it("без HLS — прямой адрес", () => {
+    expect(
+      resolveStreamUrl({
+        file: file("/stream?f=1", null),
+        directFallback: false,
+        audioMaster: null,
+      }),
+    ).toBe("/stream?f=1");
+  });
+
+  it("дубляж с персональным мастером важнее базового потока", () => {
+    expect(
+      resolveStreamUrl({
+        file: file("/stream?f=1", "/gst/master.m3u8"),
+        directFallback: false,
+        audioMaster: "/gst/master.m3u8?audio=2",
+      }),
+    ).toBe("/gst/master.m3u8?audio=2");
+  });
+
+  it("откат на прямой стрим игнорирует мастер дубляжа", () => {
+    // gst не собрал манифест — дорожки с masterUrl тоже манифесты, толку от них нет.
+    expect(
+      resolveStreamUrl({
+        file: file("/stream?f=1", "/gst/master.m3u8"),
+        directFallback: true,
+        audioMaster: "/gst/master.m3u8?audio=2",
+      }),
+    ).toBe("/stream?f=1");
+  });
+
+  it("пустой прямой адрес — это «ключа нет», а не адрес", () => {
+    // Репозиторий отдаёт `http: mediaUrl(...) ?? ""`. С `??` пустая строка
+    // прошла бы насквозь, эффект инициализации вышел бы по `!streamUrl` — и
+    // получился бы чёрный прямоугольник без ошибки и без спиннера.
+    expect(
+      resolveStreamUrl({
+        file: { urls: { http: "", hls: "/gst/master.m3u8" } },
+        directFallback: false,
+        audioMaster: null,
+      }),
+    ).toBe("/gst/master.m3u8");
+  });
+
+  it("откат без прямого адреса возвращает базовый поток, а не пустоту", () => {
+    expect(
+      resolveStreamUrl({
+        file: { urls: { http: "", hls: "/gst/master.m3u8" } },
+        directFallback: true,
+        audioMaster: null,
+      }),
+    ).toBe("/gst/master.m3u8");
+  });
+
+  it("пустой мастер дубляжа не перебивает базовый поток", () => {
+    expect(
+      resolveStreamUrl({
+        file: file("/stream?f=1", "/gst/master.m3u8"),
+        directFallback: false,
+        audioMaster: "",
+      }),
+    ).toBe("/gst/master.m3u8");
+  });
+
+  it("раздачи нет — null, а не пустая строка", () => {
+    expect(
+      resolveStreamUrl({ file: undefined, directFallback: false, audioMaster: null }),
+    ).toBeNull();
+  });
+});
 
 describe("episodeGroups", () => {
   it("группирует серии по сезонам с ярлыками S/E", () => {
