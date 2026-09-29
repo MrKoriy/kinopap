@@ -1,7 +1,7 @@
 "use client";
 
-import type { ItemDetail, MediaLinks } from "@zal/api-client";
-import { episodeGroups, flattenEpisodes, pollMediaTracks } from "@zal/shared";
+import type { AudioTrack, ItemDetail, MediaLinks, Subtitle } from "@zal/api-client";
+import { episodeGroups, flattenEpisodes, PLAYBACK_SPEEDS, pollMediaTracks } from "@zal/shared";
 import { tokens } from "@zal/ui";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useLocalSearchParams, useRouter } from "expo-router";
@@ -34,7 +34,6 @@ import { cueAt, fetchSubtitleCues, type SubtitleCue } from "../../../lib/subtitl
 import { shouldSaveProgress } from "../../../lib/watch-state";
 import { styles } from "./[mediaId].styles";
 
-const SPEEDS = [0.75, 1, 1.25, 1.5, 2];
 const SAVE_EVERY_SECONDS = 10;
 // Тег keep-awake: активация/деактивация ходят парой по одному тегу.
 const KEEP_AWAKE_TAG = "zal-watch";
@@ -50,7 +49,9 @@ export default function WatchScreen() {
   const [item, setItem] = React.useState<ItemDetail | null>(null);
   const [error, setError] = React.useState<string | null>(null);
   const [activeAudio, setActiveAudio] = React.useState(0);
-  const [speedIdx, setSpeedIdx] = React.useState(1);
+  // Индекс 1× в общей лестнице PLAYBACK_SPEEDS ([0.5, 0.75, 1, …]) — старт
+  // с обычной скорости, сама лестница общая с вебом.
+  const [speedIdx, setSpeedIdx] = React.useState(2);
   // Субтитры: внешние WebVTT рисуем оверлеем, сдвиг — в миллисекундах.
   const [cues, setCues] = React.useState<SubtitleCue[]>([]);
   const [activeSub, setActiveSub] = React.useState<number | null>(null);
@@ -74,19 +75,9 @@ export default function WatchScreen() {
   const { width: winWidth, height: winHeight } = useWindowDimensions();
   const videoHeight = Math.min((winWidth * 9) / 16, winHeight * 0.72);
   // Фокус для пульта: у плеера нет тача, всё ходит по focusable-контролам.
-  const focusPlay = useTvFocus();
   const focusSeekBar = useTvFocus();
-  const focusControls = [
-    useTvFocus(),
-    useTvFocus(),
-    useTvFocus(),
-    useTvFocus(),
-  ];
   const focusSkipIntro = useTvFocus();
   const focusNext = useTvFocus();
-  const focusSubOff = useTvFocus();
-  const focusShiftBack = useTvFocus();
-  const focusShiftFwd = useTvFocus();
   const focusRetry = useTvFocus();
   const focusErrBack = useTvFocus();
 
@@ -251,7 +242,6 @@ export default function WatchScreen() {
 
   React.useEffect(() => {
     if (sourceUri) loadSource(sourceUri, resumeRef.current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sourceUri, loadSource]);
 
   /**
@@ -351,7 +341,6 @@ export default function WatchScreen() {
   // 5. Прогресс на паузе и при уходе с экрана.
   React.useEffect(() => {
     if (!playing) saveProgress(true);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, saveProgress]);
 
   React.useEffect(
@@ -399,9 +388,9 @@ export default function WatchScreen() {
   };
 
   const changeSpeed = () => {
-    const next = (speedIdx + 1) % SPEEDS.length;
+    const next = (speedIdx + 1) % PLAYBACK_SPEEDS.length;
     setSpeedIdx(next);
-    player.playbackRate = SPEEDS[next]!;
+    player.playbackRate = PLAYBACK_SPEEDS[next]!;
   };
 
   /**
@@ -582,51 +571,14 @@ export default function WatchScreen() {
           </Text>
         </View>
 
-        <View style={styles.buttonRow}>
-          <Pressable
-            style={[styles.controlButton, focusControls[0]!.ring]}
-            onPress={() => seekBy(-10)}
-            accessibilityRole="button"
-            {...focusControls[0]!.props}
-          >
-            <Text style={styles.controlText}>−10с</Text>
-          </Pressable>
-          <Pressable
-            testID="player-play"
-            style={[styles.playButton, focusPlay.ring]}
-            onPress={() => (player.playing ? player.pause() : player.play())}
-            accessibilityRole="button"
-            hasTVPreferredFocus
-            {...focusPlay.props}
-          >
-            <Text style={styles.playText}>{playing ? "Пауза" : "Играть"}</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.controlButton, focusControls[1]!.ring]}
-            onPress={() => seekBy(10)}
-            accessibilityRole="button"
-            {...focusControls[1]!.props}
-          >
-            <Text style={styles.controlText}>+10с</Text>
-          </Pressable>
-          <Pressable
-            testID="player-speed"
-            style={[styles.controlButton, focusControls[2]!.ring]}
-            onPress={changeSpeed}
-            accessibilityRole="button"
-            {...focusControls[2]!.props}
-          >
-            <Text style={styles.controlText}>{SPEEDS[speedIdx]}×</Text>
-          </Pressable>
-          <Pressable
-            style={[styles.controlButton, focusControls[3]!.ring]}
-            onPress={() => void videoRef.current?.enterFullscreen()}
-            accessibilityRole="button"
-            {...focusControls[3]!.props}
-          >
-            <Text style={styles.controlText}>На весь</Text>
-          </Pressable>
-        </View>
+        <ControlsRow
+          playing={playing}
+          speed={PLAYBACK_SPEEDS[speedIdx]}
+          onTogglePlay={() => (player.playing ? player.pause() : player.play())}
+          onSeekBy={seekBy}
+          onChangeSpeed={changeSpeed}
+          onEnterFullscreen={() => void videoRef.current?.enterFullscreen()}
+        />
 
         {inIntro && intro && (
           <Pressable
@@ -662,82 +614,18 @@ export default function WatchScreen() {
         )}
 
         {links && links.subtitles.length > 0 && (
-          <View style={styles.dubSection}>
-            <Text style={styles.sectionTitle}>Субтитры</Text>
-            <View style={styles.buttonRow}>
-              {links.subtitles.map((s, i) => (
-                <TrackChip
-                  key={s.id}
-                  testID={`player-subtitle-${i}`}
-                  label={s.title ?? s.lang.toUpperCase()}
-                  active={i === activeSub}
-                  disabled={!s.url}
-                  onPress={() => void selectSubtitle(i)}
-                />
-              ))}
-              {activeSub != null && (
-                <Pressable
-                  style={[styles.controlButton, focusSubOff.ring]}
-                  onPress={() => void selectSubtitle(activeSub)}
-                  accessibilityRole="button"
-                  {...focusSubOff.props}
-                >
-                  <Text style={styles.controlText}>Выкл</Text>
-                </Pressable>
-              )}
-            </View>
-            {subError && (
-              <Text testID="player-sub-error" style={styles.muted}>
-                {subError}
-              </Text>
-            )}
-            {activeSub != null && (
-              <View style={styles.buttonRow}>
-                <Pressable
-                  style={[styles.controlButton, focusShiftBack.ring]}
-                  onPress={() => setShiftMs((v) => v - 100)}
-                  accessibilityRole="button"
-                  {...focusShiftBack.props}
-                >
-                  <Text style={styles.controlText}>−0.1с</Text>
-                </Pressable>
-                <Text style={styles.muted}>
-                  сдвиг {shiftMs > 0 ? "+" : ""}
-                  {(shiftMs / 1000).toFixed(1)}с
-                </Text>
-                <Pressable
-                  style={[styles.controlButton, focusShiftFwd.ring]}
-                  onPress={() => setShiftMs((v) => v + 100)}
-                  accessibilityRole="button"
-                  {...focusShiftFwd.props}
-                >
-                  <Text style={styles.controlText}>+0.1с</Text>
-                </Pressable>
-              </View>
-            )}
-          </View>
+          <SubtitlesSection
+            subtitles={links.subtitles}
+            activeSub={activeSub}
+            subError={subError}
+            shiftMs={shiftMs}
+            onSelect={(i) => void selectSubtitle(i)}
+            onShift={(d) => setShiftMs((v) => v + d)}
+          />
         )}
 
         {links && links.audios.length > 1 && (
-          <View style={styles.dubSection}>
-            <Text style={styles.sectionTitle}>Дубляж</Text>
-            <View style={styles.buttonRow}>
-              {links.audios.map((a, i) => (
-                <TrackChip
-                  key={a.id}
-                  testID={`player-audio-${i}`}
-                  label={
-                    a.author.shortTitle ??
-                    a.author.title ??
-                    `${a.type} (${a.lang})`
-                  }
-                  active={i === activeAudio}
-                  disabled={!a.masterUrl}
-                  onPress={() => changeAudio(i)}
-                />
-              ))}
-            </View>
-          </View>
+          <DubbingSection audios={links.audios} activeAudio={activeAudio} onChoose={changeAudio} />
         )}
       </ScrollView>
     </SafeAreaView>
@@ -776,5 +664,185 @@ function TrackChip({
     >
       <Text style={styles.controlText}>{label}</Text>
     </Pressable>
+  );
+}
+
+/**
+ * Ряд управления плеером: перемотка, пауза, скорость, полный экран.
+ * Выделен ради читаемости экрана; фокус-хуки пульта живут здесь же.
+ */
+function ControlsRow({
+  playing,
+  speed,
+  onTogglePlay,
+  onSeekBy,
+  onChangeSpeed,
+  onEnterFullscreen,
+}: {
+  playing: boolean;
+  speed: number;
+  onTogglePlay: () => void;
+  onSeekBy: (delta: number) => void;
+  onChangeSpeed: () => void;
+  onEnterFullscreen: () => void;
+}) {
+  const focusPlay = useTvFocus();
+  const focusControls = [useTvFocus(), useTvFocus(), useTvFocus(), useTvFocus()];
+  return (
+    <View style={styles.buttonRow}>
+      <Pressable
+        style={[styles.controlButton, focusControls[0]!.ring]}
+        onPress={() => onSeekBy(-10)}
+        accessibilityRole="button"
+        {...focusControls[0]!.props}
+      >
+        <Text style={styles.controlText}>−10с</Text>
+      </Pressable>
+      <Pressable
+        testID="player-play"
+        style={[styles.playButton, focusPlay.ring]}
+        onPress={onTogglePlay}
+        accessibilityRole="button"
+        hasTVPreferredFocus
+        {...focusPlay.props}
+      >
+        <Text style={styles.playText}>{playing ? "Пауза" : "Играть"}</Text>
+      </Pressable>
+      <Pressable
+        style={[styles.controlButton, focusControls[1]!.ring]}
+        onPress={() => onSeekBy(10)}
+        accessibilityRole="button"
+        {...focusControls[1]!.props}
+      >
+        <Text style={styles.controlText}>+10с</Text>
+      </Pressable>
+      <Pressable
+        testID="player-speed"
+        style={[styles.controlButton, focusControls[2]!.ring]}
+        onPress={onChangeSpeed}
+        accessibilityRole="button"
+        {...focusControls[2]!.props}
+      >
+        <Text style={styles.controlText}>{speed}×</Text>
+      </Pressable>
+      <Pressable
+        style={[styles.controlButton, focusControls[3]!.ring]}
+        onPress={onEnterFullscreen}
+        accessibilityRole="button"
+        {...focusControls[3]!.props}
+      >
+        <Text style={styles.controlText}>На весь</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+/**
+ * Секция субтитров: чипы дорожек, «Выкл», инлайн-ошибка загрузки и сдвиг
+ * синхронизации по 0.1с. Загрузкой дорожек и кэшем владеет экран — здесь
+ * только разметка.
+ */
+function SubtitlesSection({
+  subtitles,
+  activeSub,
+  subError,
+  shiftMs,
+  onSelect,
+  onShift,
+}: {
+  subtitles: Subtitle[];
+  activeSub: number | null;
+  subError: string | null;
+  shiftMs: number;
+  onSelect: (index: number) => void;
+  onShift: (deltaMs: number) => void;
+}) {
+  const focusSubOff = useTvFocus();
+  const focusShiftBack = useTvFocus();
+  const focusShiftFwd = useTvFocus();
+  return (
+    <View style={styles.dubSection}>
+      <Text style={styles.sectionTitle}>Субтитры</Text>
+      <View style={styles.buttonRow}>
+        {subtitles.map((s, i) => (
+          <TrackChip
+            key={s.id}
+            testID={`player-subtitle-${i}`}
+            label={s.title ?? s.lang.toUpperCase()}
+            active={i === activeSub}
+            disabled={!s.url}
+            onPress={() => onSelect(i)}
+          />
+        ))}
+        {activeSub != null && (
+          <Pressable
+            style={[styles.controlButton, focusSubOff.ring]}
+            onPress={() => onSelect(activeSub)}
+            accessibilityRole="button"
+            {...focusSubOff.props}
+          >
+            <Text style={styles.controlText}>Выкл</Text>
+          </Pressable>
+        )}
+      </View>
+      {subError && (
+        <Text testID="player-sub-error" style={styles.muted}>
+          {subError}
+        </Text>
+      )}
+      {activeSub != null && (
+        <View style={styles.buttonRow}>
+          <Pressable
+            style={[styles.controlButton, focusShiftBack.ring]}
+            onPress={() => onShift(-100)}
+            accessibilityRole="button"
+            {...focusShiftBack.props}
+          >
+            <Text style={styles.controlText}>−0.1с</Text>
+          </Pressable>
+          <Text style={styles.muted}>
+            сдвиг {shiftMs > 0 ? "+" : ""}
+            {(shiftMs / 1000).toFixed(1)}с
+          </Text>
+          <Pressable
+            style={[styles.controlButton, focusShiftFwd.ring]}
+            onPress={() => onShift(100)}
+            accessibilityRole="button"
+            {...focusShiftFwd.props}
+          >
+            <Text style={styles.controlText}>+0.1с</Text>
+          </Pressable>
+        </View>
+      )}
+    </View>
+  );
+}
+
+/** Секция дубляжа: чипы персональных мастеров дорожек. */
+function DubbingSection({
+  audios,
+  activeAudio,
+  onChoose,
+}: {
+  audios: AudioTrack[];
+  activeAudio: number;
+  onChoose: (index: number) => void;
+}) {
+  return (
+    <View style={styles.dubSection}>
+      <Text style={styles.sectionTitle}>Дубляж</Text>
+      <View style={styles.buttonRow}>
+        {audios.map((a, i) => (
+          <TrackChip
+            key={a.id}
+            testID={`player-audio-${i}`}
+            label={a.author.shortTitle ?? a.author.title ?? `${a.type} (${a.lang})`}
+            active={i === activeAudio}
+            disabled={!a.masterUrl}
+            onPress={() => onChoose(i)}
+          />
+        ))}
+      </View>
+    </View>
   );
 }

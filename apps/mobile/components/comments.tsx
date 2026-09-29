@@ -1,10 +1,11 @@
 "use client";
 
-import type { CommentDto } from "@zal/api-client";
+import { useComments } from "@zal/shared/react";
 import { tokens } from "@zal/ui";
 /**
  * Дерево комментариев: плоский список из API собирается в дерево на клиенте.
- * Ответы, правка и мягкое удаление — как на вебе.
+ * Ответы, правка и мягкое удаление — как на вебе. Логика загрузки и правок —
+ * общий хук `@zal/shared/react`, здесь только RN-разметка.
  */
 import * as React from "react";
 import {
@@ -56,6 +57,8 @@ function BodyForm({ label, testId, initial = "", onSubmit, onCancel }: BodyFormP
               await onSubmit(body.trim());
               setBody("");
               onCancel();
+            } catch {
+              // Сбой записи: текст остаётся в форме, ошибку покажет хук.
             } finally {
               setBusy(false);
             }
@@ -171,70 +174,23 @@ function CommentRow({ node, currentUserId, onReply, onEdit, onDelete }: CommentR
 export function Comments({ itemId }: { itemId: number }) {
   const { user, api } = useAuth();
   const focusMore = useTvFocus();
-  const [flat, setFlat] = React.useState<CommentDto[]>([]);
-  const [nextOffset, setNextOffset] = React.useState<number | null>(null);
-  const [total, setTotal] = React.useState(0);
+  // Клиент передаётся в хук напрямую: ApiClient структурно удовлетворяет
+  // CommentsApi, обёрток нет. Оптимистичные правки и откат — внутри хука.
+  const { comments, total, nextOffset, error, add, edit, remove, loadMore } =
+    useComments(api, itemId, { author: user });
 
-  React.useEffect(() => {
-    let cancelled = false;
-    api.listComments(itemId).then(
-      (res) => {
-        if (cancelled) return;
-        setFlat(res.items);
-        setNextOffset(res.nextOffset);
-        setTotal(res.total);
-      },
-      () => {},
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [api, itemId]);
-
-  const add = React.useCallback(
-    async (parentId: number | null, body: string) => {
-      const res = await api.postComment(itemId, { body, parentId });
-      setFlat((prev) => [...prev, res.comment]);
-      if (parentId === null) setTotal((t) => t + 1);
-    },
-    [api, itemId],
-  );
-
-  const edit = React.useCallback(
-    async (id: number, body: string) => {
-      const res = await api.editComment(id, { body });
-      setFlat((prev) => prev.map((c) => (c.id === id ? res.comment : c)));
-    },
-    [api],
-  );
-
-  const remove = React.useCallback(
-    async (id: number) => {
-      await api.deleteComment(id);
-      setFlat((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, deleted: true, body: "" } : c)),
-      );
-    },
-    [api],
-  );
-
-  const loadMore = React.useCallback(async () => {
-    if (nextOffset == null) return;
-    const res = await api.listComments(itemId, { offset: nextOffset });
-    setFlat((prev) => {
-      const seen = new Set(prev.map((c) => c.id));
-      return [...prev, ...res.items.filter((c) => !seen.has(c.id))];
-    });
-    setNextOffset(res.nextOffset);
-  }, [api, itemId, nextOffset]);
-
-  const tree = buildCommentTree(flat);
+  const tree = buildCommentTree(comments);
 
   return (
     <View style={styles.root} testID="comments">
       <Text style={styles.title} testID="comments-total">
         Комментарии ({total})
       </Text>
+      {error && (
+        <Text testID="comments-error" style={styles.mutedText}>
+          {error}
+        </Text>
+      )}
 
       {user ? (
         <BodyForm

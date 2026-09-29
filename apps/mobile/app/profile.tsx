@@ -8,6 +8,7 @@ import type {
   UserListDetailDto,
   UserListDto,
 } from "@zal/api-client";
+import { useProfileActions } from "@zal/shared/react";
 import { tokens } from "@zal/ui";
 import { Link, useRouter } from "expo-router";
 /**
@@ -72,49 +73,21 @@ export default function ProfileScreen() {
     };
   }, [api, user]);
 
-  const deleteHistory = React.useCallback(
-    async (mediaId: number) => {
-      const prevHistory = history;
-      const prevStats = stats;
-      setHistory((cur) => cur.filter((h) => h.mediaId !== mediaId));
-      setStats((s) => (s ? { ...s, history: Math.max(0, s.history - 1) } : s));
-      try {
-        await api.deleteHistoryEntry(mediaId);
-      } catch {
-        setHistory(prevHistory);
-        setStats(prevStats);
-      }
-    },
-    [api, history, stats],
-  );
+  // Общий цикл оптимистичных апдейтов (снимок → сеттеры → API → откат) —
+  // хук из @zal/shared/react. Мобильный при сбое счётчики сводки не
+  // возвращает — политика передана явно, а не спрятана внутри.
+  const actions = useProfileActions({
+    api,
+    state: { stats, history, favorites, lists, openList },
+    setters: { setStats, setHistory, setFavorites, setLists, setOpenList },
+    revertStatsOnFailure: false,
+  });
 
+  // Панель подтверждения скрывается сразу и откатом не возвращается.
   const clearHistory = React.useCallback(async () => {
-    const prevHistory = history;
-    const prevStats = stats;
-    setHistory([]);
     setConfirmClear(false);
-    setStats((s) => (s ? { ...s, history: 0 } : s));
-    try {
-      await api.clearHistory();
-    } catch {
-      setHistory(prevHistory);
-      setStats(prevStats);
-    }
-  }, [api, history, stats]);
-
-  const removeFavorite = React.useCallback(
-    async (itemId: number) => {
-      const prev = favorites;
-      setFavorites((cur) => cur.filter((f) => f.itemId !== itemId));
-      setStats((s) => (s ? { ...s, favorites: Math.max(0, s.favorites - 1) } : s));
-      try {
-        await api.removeFavorite(itemId);
-      } catch {
-        setFavorites(prev);
-      }
-    },
-    [api, favorites],
-  );
+    await actions.clearHistory();
+  }, [actions]);
 
   const createList = React.useCallback(async () => {
     const title = newListTitle.trim();
@@ -128,21 +101,6 @@ export default function ProfileScreen() {
       // Ошибка создания — просто не добавляем строку; ввод остаётся в поле.
     }
   }, [api, newListTitle]);
-
-  const deleteList = React.useCallback(
-    async (listId: number) => {
-      const prev = lists;
-      setLists((cur) => cur.filter((l) => l.id !== listId));
-      if (openList?.id === listId) setOpenList(null);
-      setStats((s) => (s ? { ...s, lists: Math.max(0, s.lists - 1) } : s));
-      try {
-        await api.deleteList(listId);
-      } catch {
-        setLists(prev);
-      }
-    },
-    [api, lists, openList],
-  );
 
   /** Повторный тап по подборке сворачивает её — не держим лишний запрос. */
   const toggleList = React.useCallback(
@@ -273,7 +231,7 @@ export default function ProfileScreen() {
               key={h.mediaId}
               entry={h}
               onOpen={() => router.push(`/watch/${h.itemId}/${h.mediaId}`)}
-              onDelete={() => void deleteHistory(h.mediaId)}
+              onDelete={() => void actions.removeHistoryEntry(h.mediaId)}
             />
           ))
         )}
@@ -289,7 +247,7 @@ export default function ProfileScreen() {
               <FavoriteCell
                 key={f.itemId}
                 fav={f}
-                onRemove={() => void removeFavorite(f.itemId)}
+                onRemove={() => void actions.removeFavorite(f.itemId)}
               />
             ))}
           </View>
@@ -321,7 +279,7 @@ export default function ProfileScreen() {
               list={l}
               detail={openList?.id === l.id ? openList : null}
               onToggle={() => void toggleList(l.id)}
-              onDelete={() => void deleteList(l.id)}
+              onDelete={() => void actions.deleteList(l.id)}
               onRemoveItem={(itemId) => void removeFromList(l.id, itemId)}
             />
           ))

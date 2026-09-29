@@ -13,9 +13,15 @@ import type {
   ItemDetail,
   ItemProgressDto,
   ItemProgressEntry,
-  Season,
 } from "@zal/api-client";
 import { historyPositionLabel, primaryPlayLabel } from "@zal/shared";
+
+/**
+ * Выбор сезона по умолчанию и карта mediaId → запись прогресса — тоже код
+ * `@zal/shared`. Семантика общая с вебом: сезон самой свежей начатой серии,
+ * при её отсутствии — сезон точки возобновления, иначе первый.
+ */
+export { pickDefaultSeason, progressByMedia } from "@zal/shared";
 
 /** Состояние серии: ничего, начата (полоска) или досмотрена (галочка). */
 export type WatchState =
@@ -30,43 +36,6 @@ export function watchStateOf(entry: ItemProgressEntry | null | undefined): Watch
   if (entry.status === "watched") return { kind: "done" };
   if (entry.progress > 0) return { kind: "progress", progress: Math.min(1, entry.progress) };
   return { kind: "none" };
-}
-
-/** Карта mediaId → запись прогресса: строки серий ищут себя одним проходом. */
-export function progressByMedia(
-  progress: ItemProgressDto | null,
-): Map<number, ItemProgressEntry> {
-  return new Map((progress?.entries ?? []).map((e) => [e.mediaId, e]));
-}
-
-/**
- * Сезон по умолчанию: с самой свежей начатой серией, иначе — первый.
- * Так после перерыва карточка открывается там, где пользователь остановился.
- */
-export function pickDefaultSeason(
-  seasons: Season[],
-  progress: ItemProgressDto | null,
-): number | null {
-  if (seasons.length === 0) return null;
-  if (progress) {
-    const byMedia = progressByMedia(progress);
-    let bestSeasonId: number | null = null;
-    let bestAt = "";
-    for (const season of seasons) {
-      for (const ep of season.episodes) {
-        if (ep.mediaId == null) continue;
-        const entry = byMedia.get(ep.mediaId);
-        if (entry?.status !== "in_progress") continue;
-        // updatedAt — ISO-строка, лексикографически совпадает с порядком дат.
-        if (entry.updatedAt > bestAt) {
-          bestAt = entry.updatedAt;
-          bestSeasonId = season.id;
-        }
-      }
-    }
-    if (bestSeasonId != null) return bestSeasonId;
-  }
-  return seasons[0]!.id;
 }
 
 /** Первая серия/часть с файлом — цель кнопки «Смотреть» без прогресса. */
