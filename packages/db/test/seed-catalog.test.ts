@@ -57,12 +57,15 @@ function makeTmdbFetch(): { fetch: typeof fetch; state: MockState } {
       });
     }
     if (url.pathname === "/3/genre/movie/list" || url.pathname === "/3/genre/tv/list") {
+      // Живой TMDb: movie-жанры с заглавной, tv — в нижнем регистре
+      // («драма»). Регистронезависимая сверка обязана мапить оба.
+      const movieList = url.pathname === "/3/genre/movie/list";
       return json({
         genres: [
-          { id: 18, name: "Драма" },
-          { id: 35, name: "Комедия" },
+          { id: 18, name: movieList ? "Драма" : "драма" },
+          { id: 35, name: movieList ? "Комедия" : "комедия" },
           // Алиас: имя TMDb «Преступление» мапится в локальный «Криминал».
-          { id: 80, name: "Преступление" },
+          { id: 80, name: movieList ? "Преступление" : "преступление" },
           // Локального жанра нет — id должен отбрасываться.
           { id: 9999, name: "Несуществующий" },
         ],

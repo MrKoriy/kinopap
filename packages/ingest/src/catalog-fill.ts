@@ -387,7 +387,11 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
 
   /* ---------- 2. Жанровая карта TMDb → локальные жанры ---------- */
   const localGenres = await listLocalGenres(opts.db);
-  const byTitle = new Map(localGenres.map((g) => [g.title, g.id]));
+  // TMDb отдаёт tv-жанры в нижнем регистре («драма»), movie — с заглавной,
+  // локальный справочник — с заглавной. Сверка без учёта регистра, иначе
+  // сериалы остаются без жанров.
+  const byTitle = new Map(localGenres.map((g) => [g.title.toLowerCase(), g.id]));
+  const byLower = (name: string): number | null => byTitle.get(name.toLowerCase()) ?? null;
   const tmdbToLocal = new Map<number, number | null>();
   for (const kind of ["movie", "tv"] as const) {
     const list = await tmdb.get<{ genres?: Array<{ id?: number; name?: string }> }>(
@@ -395,8 +399,9 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
     );
     for (const g of list?.genres ?? []) {
       if (typeof g.id !== "number") continue;
-      const alias = GENRE_ALIASES[g.name ?? ""] ?? g.name ?? "";
-      tmdbToLocal.set(g.id, byTitle.get(alias) ?? byTitle.get(g.name ?? "") ?? null);
+      const raw = g.name ?? "";
+      const alias = GENRE_ALIASES[raw] ?? GENRE_ALIASES[raw.toLowerCase()] ?? raw;
+      tmdbToLocal.set(g.id, byLower(alias) ?? byLower(raw));
     }
   }
 

@@ -143,6 +143,14 @@ async function tmdbGenreMap(
 ): Promise<Map<number, number>> {
   const map = new Map<number, number>();
   if (!key) return map;
+  // TMDb отдаёт tv-жанры в нижнем регистре («драма»), movie — с заглавной
+  // («Драма»), а локальный справочник — с заглавной. Сверка без учёта
+  // регистра, иначе сериалы остаются без жанров.
+  const localLower = new Map(
+    [...localByTitle.entries()].map(([t, id]) => [t.toLowerCase(), id]),
+  );
+  const byLower = (name: string): number | null =>
+    localLower.get(name.toLowerCase()) ?? null;
   for (const kind of ["movie", "tv"] as const) {
     const url = new URL(`${TMDB_BASE}/genre/${kind}/list`);
     url.searchParams.set("api_key", key);
@@ -153,8 +161,8 @@ async function tmdbGenreMap(
       const data = (await res.json()) as { genres?: Array<{ id?: unknown; name?: unknown }> };
       for (const g of data.genres ?? []) {
         if (typeof g.id !== "number" || typeof g.name !== "string") continue;
-        const local =
-          localByTitle.get(GENRE_ALIASES[g.name] ?? g.name) ?? localByTitle.get(g.name);
+        const alias = GENRE_ALIASES[g.name] ?? GENRE_ALIASES[g.name.toLowerCase()] ?? g.name;
+        const local = byLower(alias) ?? byLower(g.name);
         if (local != null) map.set(g.id, local);
       }
     } catch {
