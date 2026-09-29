@@ -1,6 +1,7 @@
 import {
   itemDetailSchema,
   itemPageSchema,
+  itemsSummaryResponseSchema,
   mediaLinksSchema,
 } from "@zal/api-client";
 import { describe, expect, it } from "vitest";
@@ -22,9 +23,25 @@ describe("catalog routes", () => {
     expect(genres.statusCode).toBe(200);
     expect(genres.json().genres.map((g: { id: number }) => g.id)).toContain(ids.genre);
 
+    const typedGenres = await app.inject({ method: "GET", url: "/v1/genres?type=movie" });
+    expect(typedGenres.statusCode).toBe(200);
+    expect(typedGenres.json().genres.map((g: { id: number }) => g.id)).toContain(ids.genre);
+
     const countries = await app.inject({ method: "GET", url: "/v1/countries" });
     expect(countries.statusCode).toBe(200);
     expect(countries.json().countries[0].title).toBeTruthy();
+  });
+
+  it("повторённый type в query /genres — 400, а не 500", async () => {
+    const { app } = await createTestApp();
+
+    // Раньше /genres парсил query raw-`.parse`: ZodError падала в unified
+    // error handler как 500 internal. fastify склеивает повторённый ключ
+    // в массив, z.string() его отвергает.
+    const res = await app.inject({ method: "GET", url: "/v1/genres?type=a&type=b" });
+    expect(res.statusCode).toBe(400);
+    expect(res.json().error.code).toBe("validation_error");
+    expect(res.json().error.details.length).toBeGreaterThan(0);
   });
 
   it("lists items with filters and cursor pagination", async () => {
@@ -64,6 +81,55 @@ describe("catalog routes", () => {
     const secondPage = itemPageSchema.parse(second.json());
     expect(secondPage.items[0]!.id).toBe(ids.movie);
     expect(secondPage.nextCursor).toBeNull();
+  });
+
+  it("serves items summary batch by ids", async () => {
+    const { app, db } = await createTestApp();
+    const ids = await makeFixtures(db);
+
+    // Порядок ответа — порядок ids; отсутствующие id пропускаются.
+    const res = await app.inject({
+      method: "GET",
+      url: `/v1/items/summary?ids=${ids.serial},${ids.movie},99999`,
+    });
+    expect(res.statusCode).toBe(200);
+    // Форма DTO — как у списка каталога (валидна схемой api-client).
+    const body = itemsSummaryResponseSchema.parse(res.json());
+    expect(body.items.map((i) => i.id)).toEqual([ids.serial, ids.movie]);
+    expect(body.items[1]!.title).toBe("Матрица");
+
+    // Пустой результат — валидный пустой items, а не 404.
+    const empty = await app.inject({
+      method: "GET",
+      url: "/v1/items/summary?ids=99998,99999",
+    });
+    expect(empty.statusCode).toBe(200);
+    expect(itemsSummaryResponseSchema.parse(empty.json()).items).toEqual([]);
+  });
+
+  it("validates items summary ids: required, int, cap 50", async () => {
+    const { app, db } = await createTestApp();
+    await makeFixtures(db);
+
+    const missing = await app.inject({ method: "GET", url: "/v1/items/summary" });
+    expect(missing.statusCode).toBe(400);
+    expect(missing.json().error.code).toBe("validation_error");
+
+    const garbage = await app.inject({
+      method: "GET",
+      url: "/v1/items/summary?ids=1,abc",
+    });
+    expect(garbage.statusCode).toBe(400);
+    expect(garbage.json().error.code).toBe("validation_error");
+
+    // Cap: 51 валидный id — уже 400.
+    const overflow = Array.from({ length: 51 }, (_, i) => i + 1).join(",");
+    const tooMany = await app.inject({
+      method: "GET",
+      url: `/v1/items/summary?ids=${overflow}`,
+    });
+    expect(tooMany.statusCode).toBe(400);
+    expect(tooMany.json().error.code).toBe("validation_error");
   });
 
   it("searches by title and cast", async () => {

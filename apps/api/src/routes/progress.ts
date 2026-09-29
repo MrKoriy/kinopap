@@ -14,12 +14,10 @@ import {
 } from "@zal/db";
 import { eq } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
-import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
+import { mediaIdParamsSchema } from "../lib/params";
 import { requireProfileId } from "../plugins/auth";
-
-const idParamsSchema = z.object({ mediaId: z.coerce.number().int().positive() });
 
 export function toProgressDto(row: ProgressRow): ProgressDto {
   return {
@@ -47,15 +45,21 @@ export async function progressRoutes(
 
   /** Прогресс по media (для резюме при открытии плеера). */
   app.get("/progress/:mediaId", { preHandler: app.authenticate }, async (request) => {
-    const { mediaId } = parseOrThrow(idParamsSchema, request.params);
+    const { mediaId } = parseOrThrow(mediaIdParamsSchema, request.params);
     const profileId = await requireProfileId(db, request);
     const row = await getProgress(db, profileId, mediaId);
     return { progress: row ? toProgressDto(row) : null };
   });
 
   /** Сохранить позицию (плеер шлёт каждые ~10 секунд и на паузе). */
-  app.put("/progress/:mediaId", { preHandler: app.authenticate }, async (request) => {
-    const { mediaId } = parseOrThrow(idParamsSchema, request.params);
+  app.put(
+    "/progress/:mediaId",
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
+    },
+    async (request) => {
+    const { mediaId } = parseOrThrow(mediaIdParamsSchema, request.params);
     const body = parseOrThrow(progressPutSchema, request.body);
 
     const mediaRows = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);

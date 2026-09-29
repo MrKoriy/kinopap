@@ -35,9 +35,9 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { badRequest, forbidden, notFound, parseOrThrow } from "../lib/http";
+import { idParamsSchema } from "../lib/params";
 import { optionalUser, requireProfileId } from "../plugins/auth";
 
-const idParamsSchema = z.object({ id: z.coerce.number().int().positive() });
 const subParamsSchema = z.object({ itemId: z.coerce.number().int().positive() });
 
 export async function socialRoutes(
@@ -82,7 +82,13 @@ export async function socialRoutes(
     return listCommentsPage(db, id, q.limit, q.offset);
   });
 
-  app.post("/items/:id/comments", { preHandler: app.authenticate }, async (request, reply) => {
+  app.post(
+    "/items/:id/comments",
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const body = parseOrThrow(commentPostSchema, request.body);
     await assertItem(id);
@@ -149,7 +155,13 @@ export async function socialRoutes(
     return { vote };
   });
 
-  app.put("/items/:id/vote", { preHandler: app.authenticate }, async (request) => {
+  app.put(
+    "/items/:id/vote",
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    },
+    async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const body = parseOrThrow(votePutSchema, request.body);
     await assertItem(id);
@@ -177,7 +189,13 @@ export async function socialRoutes(
     return listNewEpisodes(db, profileId);
   });
 
-  app.put("/subscriptions/:itemId", { preHandler: app.authenticate }, async (request) => {
+  app.put(
+    "/subscriptions/:itemId",
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    },
+    async (request) => {
     const { itemId } = parseOrThrow(subParamsSchema, request.params);
     const body = parseOrThrow(subscriptionPutSchema, request.body ?? {});
     await assertItem(itemId);

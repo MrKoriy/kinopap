@@ -27,6 +27,7 @@ import {
   itemProgressSchema,
   itemSocialResponseSchema,
   itemSummarySchema,
+  itemsSummaryResponseSchema,
   loginSchema,
   mediaLinksSchema,
   mediaTracksSchema,
@@ -65,6 +66,20 @@ const errorResponse = {
   },
 };
 
+/** 429 от @fastify/rate-limit: единая форма ошибки, code = rate_limited. */
+const rateLimitResponse = {
+  description: "Лимит запросов исчерпан",
+  headers: {
+    "retry-after": {
+      schema: { type: "integer" },
+      description: "Секунды до сброса лимита",
+    },
+  },
+  content: {
+    "application/json": { schema: { $ref: "#/components/schemas/ApiError" } },
+  },
+};
+
 function jsonBody(schemaRef: string, description = "OK") {
   return {
     description,
@@ -96,6 +111,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
             201: jsonBody("AuthResponse"),
             400: errorResponse,
             409: errorResponse,
+            429: rateLimitResponse,
           },
         },
       },
@@ -103,14 +119,22 @@ export function buildOpenApiSpec(): Record<string, unknown> {
         post: {
           summary: "Вход (email + пароль)",
           requestBody: jsonBody("LoginInput"),
-          responses: { 200: jsonBody("AuthResponse"), 401: errorResponse },
+          responses: {
+            200: jsonBody("AuthResponse"),
+            401: errorResponse,
+            429: rateLimitResponse,
+          },
         },
       },
       "/v1/auth/refresh": {
         post: {
           summary: "Ротация refresh-токена",
           requestBody: jsonBody("RefreshInput"),
-          responses: { 200: jsonBody("RefreshResponse"), 401: errorResponse },
+          responses: {
+            200: jsonBody("RefreshResponse"),
+            401: errorResponse,
+            429: rateLimitResponse,
+          },
         },
       },
       "/v1/auth/logout": {
@@ -147,7 +171,13 @@ export function buildOpenApiSpec(): Record<string, unknown> {
             "без Redis — синхронный прогон с summary в ответе.",
           security: [{ bearerAuth: [] }],
           requestBody: jsonBody("DiscoverInput"),
-          responses: { 200: jsonBody("DiscoverResponse"), 400: errorResponse, 401: errorResponse, 403: errorResponse },
+          responses: {
+            200: jsonBody("DiscoverResponse"),
+            400: errorResponse,
+            401: errorResponse,
+            403: errorResponse,
+            429: rateLimitResponse,
+          },
         },
       },
       "/v1/discover/status": {
@@ -199,6 +229,21 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           responses: { 200: jsonBody("ItemPage") },
         },
       },
+      "/v1/items/summary": {
+        get: {
+          summary: "Батч карточек по id (порядок — как в ids)",
+          parameters: [
+            {
+              name: "ids",
+              in: "query",
+              required: true,
+              schema: { type: "string" },
+              description: "CSV положительных int, максимум 50",
+            },
+          ],
+          responses: { 200: jsonBody("ItemsSummaryResponse") },
+        },
+      },
       "/v1/items/search": {
         get: {
           summary: "Поиск по title/director/cast",
@@ -207,7 +252,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
             { name: "field", in: "query", schema: { type: "string", enum: ["title", "director", "cast"] } },
             { name: "limit", in: "query", schema: { type: "integer", default: 20 } },
           ],
-          responses: { 200: jsonBody("ItemPage") },
+          responses: { 200: jsonBody("ItemPage"), 429: rateLimitResponse },
         },
       },
       "/v1/items/fresh": { get: { summary: "Свежие", responses: { 200: jsonBody("ItemPage") } } },
@@ -227,7 +272,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
             { name: "id", in: "path", required: true, schema: { type: "integer" } },
             { name: "mid", in: "query", required: true, schema: { type: "integer" } },
           ],
-          responses: { 200: jsonBody("MediaLinks"), 404: errorResponse },
+          responses: { 200: jsonBody("MediaLinks"), 404: errorResponse, 429: rateLimitResponse },
         },
       },
       "/v1/items/{id}/media-tracks": {
@@ -274,6 +319,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
             400: errorResponse,
             401: errorResponse,
             404: errorResponse,
+            429: rateLimitResponse,
           },
         },
       },
@@ -314,7 +360,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           security: [{ bearerAuth: [] }],
           parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
           requestBody: jsonBody("VotePut"),
-          responses: { 200: jsonBody("VoteResponse"), 401: errorResponse, 404: errorResponse },
+          responses: { 200: jsonBody("VoteResponse"), 401: errorResponse, 404: errorResponse, 429: rateLimitResponse },
         },
         delete: {
           summary: "Снять голос",
@@ -343,7 +389,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           security: [{ bearerAuth: [] }],
           parameters: [{ name: "itemId", in: "path", required: true, schema: { type: "integer" } }],
           requestBody: jsonBody("SubscriptionPut"),
-          responses: { 200: jsonBody("SubscriptionResponse"), 401: errorResponse, 404: errorResponse },
+          responses: { 200: jsonBody("SubscriptionResponse"), 401: errorResponse, 404: errorResponse, 429: rateLimitResponse },
         },
         delete: {
           summary: "Отписаться",
@@ -360,6 +406,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           responses: {
             202: jsonBody("IngestResponse", "Задача поставлена в очередь"),
             403: errorResponse,
+            409: errorResponse,
             503: errorResponse,
           },
         },
@@ -391,7 +438,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           security: [{ bearerAuth: [] }],
           parameters: [{ name: "mediaId", in: "path", required: true, schema: { type: "integer" } }],
           requestBody: jsonBody("ProgressPut"),
-          responses: { 200: jsonBody("ProgressResponse"), 404: errorResponse },
+          responses: { 200: jsonBody("ProgressResponse"), 404: errorResponse, 429: rateLimitResponse },
         },
       },
       "/v1/profile/overview": {
@@ -614,6 +661,7 @@ export function buildOpenApiSpec(): Record<string, unknown> {
         ItemSummary: z.toJSONSchema(itemSummarySchema),
         ItemDetail: z.toJSONSchema(itemDetailSchema),
         ItemPage: z.toJSONSchema(itemPageSchema),
+        ItemsSummaryResponse: z.toJSONSchema(itemsSummaryResponseSchema),
         MediaLinks: z.toJSONSchema(mediaLinksSchema),
         MediaTracks: z.toJSONSchema(mediaTracksSchema),
         Genre: z.toJSONSchema(genreSchema),

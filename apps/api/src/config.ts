@@ -22,9 +22,10 @@ const envSchema = z.object({
   /** Secure-флаг cookie: включать только за TLS-прокси (COOKIE_SECURE=1).
    * stringbool: coerce.boolean читал "false"/"0" как true. */
   COOKIE_SECURE: z.stringbool().default(false),
-  /** Доверять X-Forwarded-For (прод за nginx). Прямой доступ к порту —
-   * TRUST_PROXY=0, иначе подделка заголовка обходит per-IP rate limit. */
-  TRUST_PROXY: z.stringbool().default(true),
+  /** Доверять X-Forwarded-For. Безопасный дефолт — false: при прямом
+    * доступе к порту подделка заголовка обходит per-IP rate limit.
+    * За nginx (прод) включать явно: TRUST_PROXY=1. */
+  TRUST_PROXY: z.stringbool().default(false),
 });
 
 export interface Config {

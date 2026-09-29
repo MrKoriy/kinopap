@@ -108,6 +108,24 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     // всё это сворачивалось в 500 и ложило шум в лог.
     const fwStatus = (error as { statusCode?: unknown }).statusCode;
     const status = typeof fwStatus === "number" ? fwStatus : 500;
+    // 429 от @fastify/rate-limit — до общей 4xx-ветки: bad_request и
+    // "Malformed request" тут врут, а message плагина ("Rate limit
+    // exceeded, retry in ...") говорит клиенту, сколько ждать. Заголовки
+    // retry-after / x-ratelimit-* плагин уже поставил сам — не дублируем.
+    if (status === 429) {
+      const fwMessage = (error as { message?: unknown }).message;
+      request.log.warn(error);
+      reply.code(429).send({
+        error: {
+          code: "rate_limited",
+          message:
+            typeof fwMessage === "string" && fwMessage
+              ? fwMessage
+              : "Too many requests",
+        },
+      });
+      return;
+    }
     if (status >= 400 && status < 500) {
       request.log.warn(error);
       reply.code(status).send({

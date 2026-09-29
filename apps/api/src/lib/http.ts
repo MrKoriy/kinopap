@@ -29,8 +29,8 @@ export function forbidden(message = "Forbidden"): HttpError {
   return new HttpError(403, "forbidden", message);
 }
 
-export function conflict(code: string, message: string): HttpError {
-  return new HttpError(409, code, message);
+export function conflict(code: string, message: string, details?: unknown): HttpError {
+  return new HttpError(409, code, message, details);
 }
 
 /** Валидация входа через zod; ошибки схемы → 400 с issues. */

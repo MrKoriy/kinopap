@@ -53,10 +53,13 @@ const db = createDb(pool);
   }
 }
 
-// Очередь ingest: BullMQ поверх Redis. Без Redis — честный 503 из
+// Очереди ingest + fill: BullMQ поверх Redis. Без Redis — честный 503 из
 // noop-очереди: старый memory-fallback молча логировал и возвращал 202,
 // задача висела в pending вечно.
 let ingestQueue: IngestQueue = noopIngestQueue;
+// Очередь наполнения каталога. Своя от транскода: fill идёт минутами и не
+// должен задерживать ingest. Без Redis роут выполняет fill синхронно.
+let catalogQueue: CatalogFillQueue = noopCatalogFillQueue;
 
 // Ресурсы для graceful shutdown: без явного закрытия держат event loop
 // до force-exit.
@@ -65,14 +68,21 @@ const bullQueues: Queue[] = [];
 
 if (process.env.REDIS_URL) {
   try {
+    // Один коннект на обе очереди: Queue использует только неблокирующие
+    // команды и по правилам BullMQ может делить ioredis-инстанс.
+    // Dedicated-коннект требуют Worker и QueueEvents (блокирующие
+    // команды) — они живут в apps/worker, не здесь.
     const redis = new Redis(process.env.REDIS_URL, {
       maxRetriesPerRequest: null,
       lazyConnect: true,
     });
     await redis.connect();
-    const queue = new Queue("transcode", { connection: redis });
     redisClients.push(redis);
-    bullQueues.push(queue);
+
+    const queue = new Queue("transcode", { connection: redis });
+    const fillQueue = new Queue("catalog", { connection: redis });
+    bullQueues.push(queue, fillQueue);
+
     ingestQueue = {
       async enqueueIngest(payload: IngestJobPayload) {
         // maxRetriesPerRequest: null + умерший Redis = queue.add висит
@@ -108,25 +118,7 @@ if (process.env.REDIS_URL) {
         }
       },
     };
-    console.log("redis: connected, queue ready");
-  } catch (_err) {
-    console.warn("redis: unavailable, running without transcode queue");
-  }
-}
 
-// Очередь наполнения каталога. Своя от транскода: fill идёт минутами и не
-// должен задерживать ingest. Без Redis роут выполняет fill синхронно.
-let catalogQueue: CatalogFillQueue = noopCatalogFillQueue;
-if (process.env.REDIS_URL) {
-  try {
-    const redis = new Redis(process.env.REDIS_URL, {
-      maxRetriesPerRequest: null,
-      lazyConnect: true,
-    });
-    await redis.connect();
-    const fillQueue = new Queue("catalog", { connection: redis });
-    redisClients.push(redis);
-    bullQueues.push(fillQueue);
     catalogQueue = {
       async enqueue(payload) {
         const job = await fillQueue.add("fill", payload, {
@@ -164,9 +156,9 @@ if (process.env.REDIS_URL) {
         };
       },
     };
-    console.log("redis: catalog-fill queue ready");
+    console.log("redis: connected, ingest + catalog-fill queues ready");
   } catch (_err) {
-    console.warn("redis: unavailable, catalog fill runs inline");
+    console.warn("redis: unavailable, running without transcode queue (fill inline)");
   }
 }
 

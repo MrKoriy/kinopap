@@ -3,6 +3,7 @@ import {
   ITEM_TYPE_TITLES,
   ITEM_TYPES,
   type ItemPage,
+  itemsSummaryQuerySchema,
   type MediaFile,
   type MediaTracks,
   parseCatalogQuery,
@@ -14,6 +15,7 @@ import {
   type Db,
   episodes,
   getItem,
+  getItemsByIds,
   getSource,
   isSourceFresh,
   items,
@@ -35,11 +37,12 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
+import { idParamsSchema } from "../lib/params";
 import { hydrateSerialSeasons, tmdbLookup } from "../lib/tmdb";
 import { optionalUser } from "../plugins/auth";
 
-const idParamsSchema = z.object({ id: z.coerce.number().int().positive() });
 const mediaLinksQuerySchema = z.object({ mid: z.coerce.number().int().positive() });
+const genresQuerySchema = z.object({ type: z.string().optional() });
 
 /** TTL кэша on-the-fly резолва стримов: повторное открытие watch-страницы
  * не должно снова ходить в rutor (до ~12с латентности). */
@@ -133,7 +136,7 @@ export async function catalogRoutes(
   }));
 
   app.get("/genres", async (request) => {
-    const q = z.object({ type: z.string().optional() }).parse(request.query ?? {});
+    const q = parseOrThrow(genresQuerySchema, request.query ?? {});
     return { genres: await listGenres(db, q.type) };
   });
 
@@ -145,6 +148,13 @@ export async function catalogRoutes(
   app.get("/items", async (request) => {
     const filters = parseCatalogQuery(request.query ?? {});
     return listItems(db, filters);
+  });
+
+  /** Батч карточек по id: ленты с известными ids («продолжить смотреть»)
+   * берут всё одним запросом вместо N getItem. */
+  app.get("/items/summary", async (request) => {
+    const q = parseOrThrow(itemsSummaryQuerySchema, request.query ?? {});
+    return { items: await getItemsByIds(db, q.ids) };
   });
 
   app.get(

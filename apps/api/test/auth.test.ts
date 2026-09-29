@@ -113,6 +113,22 @@ describe("auth", () => {
     }
   });
 
+  it("несуществующий email — тот же 401 и та же структура ответа", async () => {
+    // Timing-оракул: логин с несуществующим адресом должен проходить
+    // тот же путь (scrypt против dummy-хэша) и отвечать той же формой,
+    // что и неверный пароль существующего юзера.
+    const { app } = await createTestApp();
+    const res = await app.inject({
+      method: "POST",
+      url: "/v1/auth/login",
+      payload: { email: "ghost-timing@zal.local", password: "whatever-password" },
+    });
+    expect(res.statusCode).toBe(401);
+    expect(res.json()).toEqual({
+      error: { code: "unauthorized", message: "Invalid email or password" },
+    });
+  });
+
   it("rotates refresh tokens and detects reuse", async () => {
     const { app, db } = await createTestApp();
     const { invite } = await makeOwnerWithInvite(db);

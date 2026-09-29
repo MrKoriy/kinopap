@@ -32,6 +32,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
+import { idParamsSchema } from "../lib/params";
 import { requireProfileId } from "../plugins/auth";
 import { toUserDto } from "./auth";
 
@@ -41,7 +42,6 @@ const listItemParamsSchema = z.object({
   listId: z.coerce.number().int().positive(),
   itemId: z.coerce.number().int().positive(),
 });
-const idParamsSchema = z.object({ id: z.coerce.number().int().positive() });
 const mediaParamsSchema = z.object({ mediaId: z.coerce.number().int().positive() });
 const historyQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(200).default(50),

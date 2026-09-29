@@ -45,6 +45,12 @@ export function toUserDto(row: UserRow): User {
 /** httpOnly-cookie с refresh-токеном для веба; мобила шлёт токен телом. */
 const REFRESH_COOKIE = "zal_rt";
 
+/** Муляж-хэш для логина с несуществующим email: scrypt-прогон всегда
+ * происходит (формат тот же, что у hashPassword), чтобы ответ на
+ * неизвестный адрес не прилетал быстрее — timing-оракул перечисления. */
+const DUMMY_PASSWORD_HASH =
+  "scrypt$a096ef5f42e73b504e24b426e085d793$5c27841c5491dd9d0d7f48acbfe212ce8db018d6580dcf9458cd57695dc130c5";
+
 function setRefreshCookie(reply: FastifyReply, config: Config, raw: string): void {
   reply.setCookie(REFRESH_COOKIE, raw, {
     httpOnly: true,
@@ -145,8 +151,13 @@ export async function authRoutes(
     async (request, reply) => {
     const body = parseOrThrow(loginSchema, request.body);
     const user = await findUserByEmail(db, body.email);
-    // Единый ответ на неверный email/пароль — не даём перебирать.
-    if (!user?.isActive || !(await verifyPassword(body.password, user.passwordHash))) {
+    // Единый ответ на неверный email/пароль — не даём перебирать. Хэш
+    // считаем всегда (нет юзера — против DUMMY), чтобы и время совпадало.
+    const passwordOk = await verifyPassword(
+      body.password,
+      user?.isActive ? user.passwordHash : DUMMY_PASSWORD_HASH,
+    );
+    if (!user?.isActive || !passwordOk) {
       throw unauthorized("Invalid email or password");
     }
     const tokens = await issueTokens(app, db, user, reply, deps.config, {
