@@ -8,6 +8,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { items } from "./catalog";
+import { ingestJobStatus } from "./enums";
 import { media } from "./media";
 
 /**
@@ -20,7 +21,8 @@ export const ingestJobs = pgTable(
     id: serial("id").primaryKey(),
     sourceType: varchar("source_type", { length: 16 }).notNull(),
     sourceRef: text("source_ref").notNull(),
-    status: varchar("status", { length: 16 }).notNull().default("queued"),
+    // Раньше varchar(16): мусорные статусы проходили в таблицу молча.
+    status: ingestJobStatus("status").notNull().default("queued"),
     itemId: integer("item_id").references(() => items.id, { onDelete: "set null" }),
     mediaId: integer("media_id").references(() => media.id, { onDelete: "set null" }),
     error: text("error"),
@@ -34,4 +36,4 @@ export const ingestJobs = pgTable(
   ],
 );
 
-export type IngestJobStatus = "queued" | "running" | "done" | "failed";
+export type IngestJobStatus = (typeof ingestJobStatus.enumValues)[number];

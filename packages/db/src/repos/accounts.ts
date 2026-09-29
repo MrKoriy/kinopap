@@ -54,6 +54,63 @@ export async function deleteUser(db: Db, id: number): Promise<void> {
   await db.delete(users).where(eq(users.id, id));
 }
 
+/* ---------- Регистрация ---------- */
+
+export type RegisterResult =
+  | { ok: true; user: UserRow; profileId: number }
+  | { ok: false; reason: "email_taken" | "invalid_invite" };
+
+/**
+ * Регистрация одной транзакцией: раньше это были три отдельные записи с
+ * компенсирующим deleteUser — краш между шагами оставлял пользователя,
+ * списавшего инвайт без профиля, а гонка двух одинаковых email поднимала
+ * 500 вместо 409.
+ */
+export async function registerUserWithInvite(
+  db: Db,
+  input: {
+    email: string;
+    passwordHash: string;
+    name: string;
+    inviteCode: string;
+  },
+): Promise<RegisterResult> {
+  // Сигналы раннего выхода из транзакции: drizzle коммитит при обычном
+  // return, поэтому отказ инвайта/занятый email должны бросаться, чтобы
+  // откатить уже вставленного пользователя.
+  class InviteRejected extends Error {}
+  class EmailTaken extends Error {}
+  try {
+    return await db.transaction(async (tx) => {
+      const existing = await findUserByEmail(tx, input.email);
+      if (existing) throw new EmailTaken();
+
+      const user = await createUser(tx, {
+        email: input.email,
+        passwordHash: input.passwordHash,
+        name: input.name,
+      });
+      const consumed = await consumeInvite(tx, input.inviteCode, user.id);
+      if (!consumed) throw new InviteRejected();
+
+      const profile = await createProfile(tx, {
+        userId: user.id,
+        name: input.name,
+      });
+      return { ok: true as const, user, profileId: profile.id };
+    });
+  } catch (err) {
+    if (err instanceof EmailTaken) return { ok: false, reason: "email_taken" };
+    if (err instanceof InviteRejected) return { ok: false, reason: "invalid_invite" };
+    // Гонка двух регистраций одним email: unique violation → email_taken.
+    const pgCode = (err as { code?: string }).code;
+    if (pgCode === "23505" || /duplicate key/i.test(String(err))) {
+      return { ok: false, reason: "email_taken" };
+    }
+    throw err;
+  }
+}
+
 /* ---------- Refresh-токены ---------- */
 
 export async function createRefreshToken(

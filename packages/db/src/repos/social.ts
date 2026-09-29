@@ -149,11 +149,16 @@ const WATCHED_JOIN = and(
 /**
  * Лента «новое по подпискам»: недосмотренные серии сериалов и новые
  * части фильмов (partNumber > 1). Свежие сверху, total — для badge.
+ *
+ * scanCap — потолок сканирования (вынесен параметром для тестов).
+ * orderBy до limit обязателен: без него limit срезал произвольные
+ * строки, и самые свежие серии могли выпасть ещё до JS-сортировки.
  */
 export async function listNewEpisodes(
   db: Db,
   profileId: number,
   limit = 20,
+  scanCap = NEW_EPISODES_SCAN_CAP,
 ): Promise<NewEpisodesFeed> {  const epRows = await db
     .select({
       itemId: items.id,
@@ -177,7 +182,8 @@ export async function listNewEpisodes(
     // Раньше оба запроса тянули ВСЮ ленту подписок в память ради total —
     // на большой библиотеке это O(все media) на каждый запрос. Потолок
     // достаточен для ленты: total = min(реальный, потолок).
-    .limit(NEW_EPISODES_SCAN_CAP);
+    .orderBy(desc(media.createdAt), desc(media.id))
+    .limit(scanCap);
 
   const partRows = await db
     .select({
@@ -197,7 +203,8 @@ export async function listNewEpisodes(
     )
     .leftJoin(watchProgress, WATCHED_JOIN)
     .where(and(eq(subscriptions.profileId, profileId), NOT_WATCHED))
-    .limit(NEW_EPISODES_SCAN_CAP);
+    .orderBy(desc(media.createdAt), desc(media.id))
+    .limit(scanCap);
 
   const merged: NewEpisodeDto[] = [
     ...epRows.map((r) => ({
@@ -485,6 +492,16 @@ export async function getComment(db: Db, id: number): Promise<CommentDto | null>
  * Новый комментарий: ответ привязывается к родителю того же тайтла,
  * глубина зажимается MAX_COMMENT_DEPTH.
  */
+/** Родительский комментарий не найден/чужой: доменная ошибка вместо
+ * строкового сообщения (стринг-матч в роуте молча превращался в 500
+ * при любом переименовании). */
+export class ParentCommentNotFoundError extends Error {
+  constructor() {
+    super("parent_not_found");
+    this.name = "ParentCommentNotFoundError";
+  }
+}
+
 export async function addComment(
   db: Db,
   input: {
@@ -503,7 +520,7 @@ export async function addComment(
       .limit(1);
     const parent = parents[0];
     if (!parent || parent.itemId !== input.itemId) {
-      throw new Error("parent_not_found");
+      throw new ParentCommentNotFoundError();
     }
     depth = Math.min(parent.depth + 1, MAX_COMMENT_DEPTH);
   }

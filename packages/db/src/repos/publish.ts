@@ -4,7 +4,7 @@
  */
 
 import type { AudioDubType, ItemType } from "@zal/api-client";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   audioTracks,
@@ -417,63 +417,67 @@ export interface Enrichment {
   countries?: string[];
 }
 
-/** Дозапись метаданных (TMDb) в уже опубликованный item. */
+/** Дозапись метаданных (TMDb) в уже опубликованный item.
+ * Жанры/страны — пачками (insert onConflictDoNothing + один select
+ * недостающих), без N+1; всё вместе с апдейтом item — в транзакции. */
 export async function applyEnrichment(
   db: Db,
   itemId: number,
   e: Enrichment,
 ): Promise<void> {
-  await db
-    .update(items)
-    .set({
-      ...(e.plot !== undefined ? { plot: e.plot } : {}),
-      ...(e.originalTitle !== undefined ? { originalTitle: e.originalTitle } : {}),
-      ...(e.year !== undefined ? { year: e.year } : {}),
-      ...(e.tmdbId !== undefined ? { tmdbId: e.tmdbId } : {}),
-      ...(e.tmdbRating !== undefined ? { tmdbRating: e.tmdbRating } : {}),
-      ...(e.tmdbVotes !== undefined ? { tmdbVotes: e.tmdbVotes } : {}),
-      ...(e.posterSmall !== undefined ? { posterSmall: e.posterSmall } : {}),
-      ...(e.posterMedium !== undefined ? { posterMedium: e.posterMedium } : {}),
-      ...(e.posterBig !== undefined ? { posterBig: e.posterBig } : {}),
-      ...(e.trailerId !== undefined ? { trailerId: e.trailerId } : {}),
-      ...(e.trailerUrl !== undefined ? { trailerUrl: e.trailerUrl } : {}),
-      updatedAt: new Date(),
-    })
-    .where(eq(items.id, itemId));
+  await db.transaction(async (tx) => {
+    await tx
+      .update(items)
+      .set({
+        ...(e.plot !== undefined ? { plot: e.plot } : {}),
+        ...(e.originalTitle !== undefined ? { originalTitle: e.originalTitle } : {}),
+        ...(e.year !== undefined ? { year: e.year } : {}),
+        ...(e.tmdbId !== undefined ? { tmdbId: e.tmdbId } : {}),
+        ...(e.tmdbRating !== undefined ? { tmdbRating: e.tmdbRating } : {}),
+        ...(e.tmdbVotes !== undefined ? { tmdbVotes: e.tmdbVotes } : {}),
+        ...(e.posterSmall !== undefined ? { posterSmall: e.posterSmall } : {}),
+        ...(e.posterMedium !== undefined ? { posterMedium: e.posterMedium } : {}),
+        ...(e.posterBig !== undefined ? { posterBig: e.posterBig } : {}),
+        ...(e.trailerId !== undefined ? { trailerId: e.trailerId } : {}),
+        ...(e.trailerUrl !== undefined ? { trailerUrl: e.trailerUrl } : {}),
+        updatedAt: new Date(),
+      })
+      .where(eq(items.id, itemId));
 
-  for (const title of e.genres ?? []) {
-    const [g] = await db
-      .insert(genres)
-      .values({ type: "movie", title })
-      .onConflictDoNothing({ target: [genres.type, genres.title] })
-      .returning({ id: genres.id });
-    const genreId =
-      g?.id ??
-      (await db.select({ id: genres.id }).from(genres).where(eq(genres.title, title)).limit(1))[0]
-        ?.id;
-    if (genreId) {
-      await db
-        .insert(itemGenres)
-        .values({ itemId, genreId })
-        .onConflictDoNothing({ target: [itemGenres.itemId, itemGenres.genreId] });
+    const genreTitles = [...new Set(e.genres ?? [])];
+    if (genreTitles.length > 0) {
+      await tx
+        .insert(genres)
+        .values(genreTitles.map((title) => ({ type: "movie" as const, title })))
+        .onConflictDoNothing({ target: [genres.type, genres.title] });
+      const genreRows = await tx
+        .select({ id: genres.id })
+        .from(genres)
+        .where(and(eq(genres.type, "movie"), inArray(genres.title, genreTitles)));
+      if (genreRows.length > 0) {
+        await tx
+          .insert(itemGenres)
+          .values(genreRows.map((r) => ({ itemId, genreId: r.id })))
+          .onConflictDoNothing({ target: [itemGenres.itemId, itemGenres.genreId] });
+      }
     }
-  }
 
-  for (const title of e.countries ?? []) {
-    const [c] = await db
-      .insert(countries)
-      .values({ title })
-      .onConflictDoNothing({ target: [countries.title] })
-      .returning({ id: countries.id });
-    const countryId =
-      c?.id ??
-      (await db.select({ id: countries.id }).from(countries).where(eq(countries.title, title)).limit(1))[0]
-        ?.id;
-    if (countryId) {
-      await db
-        .insert(itemCountries)
-        .values({ itemId, countryId })
-        .onConflictDoNothing({ target: [itemCountries.itemId, itemCountries.countryId] });
+    const countryTitles = [...new Set(e.countries ?? [])];
+    if (countryTitles.length > 0) {
+      await tx
+        .insert(countries)
+        .values(countryTitles.map((title) => ({ title })))
+        .onConflictDoNothing({ target: [countries.title] });
+      const countryRows = await tx
+        .select({ id: countries.id })
+        .from(countries)
+        .where(inArray(countries.title, countryTitles));
+      if (countryRows.length > 0) {
+        await tx
+          .insert(itemCountries)
+          .values(countryRows.map((r) => ({ itemId, countryId: r.id })))
+          .onConflictDoNothing({ target: [itemCountries.itemId, itemCountries.countryId] });
+      }
     }
-  }
+  });
 }

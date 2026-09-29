@@ -28,6 +28,17 @@ export function isSourceFresh(row: { resolvedAt: Date }, maxAgeMs: number, now =
   return now - row.resolvedAt.getTime() < maxAgeMs;
 }
 
+/**
+ * Потолок массивов в jsonb: резолв приносит до ~8 релизов с дорожками,
+ * аномально длинный список — признак битого ответа источника, тащить
+ * его в кэш незачем.
+ */
+const MAX_CACHED_TRACKS = 64;
+
+function clampTracks<T>(list: T[]): T[] {
+  return list.length > MAX_CACHED_TRACKS ? list.slice(0, MAX_CACHED_TRACKS) : list;
+}
+
 export async function getSource(
   db: Db,
   itemId: number,
@@ -47,14 +58,16 @@ export async function saveSource(
   input: Omit<CachedSource, "resolvedAt">,
 ): Promise<void> {
   const at = new Date();
+  const files = clampTracks(input.files);
+  const audios = clampTracks(input.audios);
   await db
     .insert(mediaSources)
-    .values({ ...input, resolvedAt: at })
+    .values({ ...input, files, audios, resolvedAt: at })
     .onConflictDoUpdate({
       target: [mediaSources.itemId, mediaSources.mediaId],
       set: {
-        files: input.files,
-        audios: input.audios,
+        files,
+        audios,
         intro: input.intro,
         warm: input.warm,
         resolvedAt: at,
@@ -88,5 +101,6 @@ export async function purgeStaleSources(db: Db, maxAgeMs: number): Promise<numbe
   const deleted = await db
     .delete(mediaSources)
     .where(lt(mediaSources.resolvedAt, new Date(Date.now() - maxAgeMs)));
-  return deleted.changes ?? 0;
+  // node-postgres отдаёт rowCount, PGlite — changes; берём что есть.
+  return deleted.rowCount ?? deleted.changes ?? 0;
 }

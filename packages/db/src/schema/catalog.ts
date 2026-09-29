@@ -75,7 +75,9 @@ export const items = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
-    index("items_type_idx").on(t.type),
+    // items_type_idx удалён: полностью покрывается тремя (type, …)
+    // композитами ниже — отдельный индекс по type был чистой
+    // write-амплфикацией на insert-heavy заливке каталога.
     index("items_year_idx").on(t.year),
     index("items_rating_idx").on(t.rating),
     index("items_views_idx").on(t.views),

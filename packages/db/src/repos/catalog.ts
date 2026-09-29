@@ -104,25 +104,27 @@ async function attachRefs(db: Db, ids: number[]): Promise<Map<number, ItemRefs>>
   }
   if (!ids.length) return refs;
 
-  const genreRows = await db
-    .select({ itemId: itemGenres.itemId, id: genres.id, title: genres.title })
-    .from(itemGenres)
-    .innerJoin(genres, eq(itemGenres.genreId, genres.id))
-    .where(inArray(itemGenres.itemId, ids));
+  // Три независимых выборки — параллельно: последовательно это три RT
+  // к БД на каждую страницу каталога.
+  const [genreRows, countryRows, peopleRows] = await Promise.all([
+    db
+      .select({ itemId: itemGenres.itemId, id: genres.id, title: genres.title })
+      .from(itemGenres)
+      .innerJoin(genres, eq(itemGenres.genreId, genres.id))
+      .where(inArray(itemGenres.itemId, ids)),
+    db
+      .select({ itemId: itemCountries.itemId, id: countries.id, title: countries.title })
+      .from(itemCountries)
+      .innerJoin(countries, eq(itemCountries.countryId, countries.id))
+      .where(inArray(itemCountries.itemId, ids)),
+    db
+      .select({ itemId: itemPeople.itemId, name: people.name, role: itemPeople.role })
+      .from(itemPeople)
+      .innerJoin(people, eq(itemPeople.personId, people.id))
+      .where(inArray(itemPeople.itemId, ids)),
+  ]);
   for (const g of genreRows) refs.get(g.itemId)?.genres.push({ id: g.id, title: g.title });
-
-  const countryRows = await db
-    .select({ itemId: itemCountries.itemId, id: countries.id, title: countries.title })
-    .from(itemCountries)
-    .innerJoin(countries, eq(itemCountries.countryId, countries.id))
-    .where(inArray(itemCountries.itemId, ids));
   for (const c of countryRows) refs.get(c.itemId)?.countries.push({ id: c.id, title: c.title });
-
-  const peopleRows = await db
-    .select({ itemId: itemPeople.itemId, name: people.name, role: itemPeople.role })
-    .from(itemPeople)
-    .innerJoin(people, eq(itemPeople.personId, people.id))
-    .where(inArray(itemPeople.itemId, ids));
   for (const p of peopleRows) {
     const ref = refs.get(p.itemId);
     if (!ref) continue;
@@ -327,12 +329,17 @@ export async function searchItems(db: Db, opts: SearchOptions): Promise<ItemPage
   if (!opts.field || opts.field === "cast") {
     conds.push(personFilter("actor", opts.q));
   }
-  if (opts.type) conds.push(eq(items.type, opts.type));
+
+  // type — отдельным AND, а не в or(): в or() он расширяет выдачу
+  // (q + type возвращал и другой тип) и не даёт задействовать
+  // композитные индексы (type, ...).
+  const textCond = or(...conds);
+  const where = textCond && opts.type ? and(textCond, eq(items.type, opts.type)) : textCond;
 
   const rows = await db
     .select(itemColumns)
     .from(items)
-    .where(or(...conds))
+    .where(where)
     .orderBy(
       desc(
         sql`greatest(
@@ -504,21 +511,24 @@ export async function mediaLinks(
   const m = mediaRows[0];
   if (!m || m.itemId !== itemId) return null;
 
-  const files = await db
-    .select()
-    .from(mediaFiles)
-    .where(eq(mediaFiles.mediaId, mediaId))
-    .orderBy(desc(mediaFiles.height));
-  const audios = await db
-    .select()
-    .from(audioTracks)
-    .where(eq(audioTracks.mediaId, mediaId))
-    .orderBy(audioTracks.trackIndex);
-  const subs = await db
-    .select()
-    .from(subtitles)
-    .where(eq(subtitles.mediaId, mediaId))
-    .orderBy(subtitles.lang);
+  // Три независимые выборки — параллельно.
+  const [files, audios, subs] = await Promise.all([
+    db
+      .select()
+      .from(mediaFiles)
+      .where(eq(mediaFiles.mediaId, mediaId))
+      .orderBy(desc(mediaFiles.height)),
+    db
+      .select()
+      .from(audioTracks)
+      .where(eq(audioTracks.mediaId, mediaId))
+      .orderBy(audioTracks.trackIndex),
+    db
+      .select()
+      .from(subtitles)
+      .where(eq(subtitles.mediaId, mediaId))
+      .orderBy(subtitles.lang),
+  ]);
 
   return {
     mediaId: m.id,

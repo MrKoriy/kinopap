@@ -1,6 +1,7 @@
 import {
   AUDIO_DUB_TYPES,
   GENRE_TYPES,
+  INGEST_JOB_STATUSES,
   ITEM_TYPES,
   PERSON_ROLES,
   USER_ROLES,
@@ -15,3 +16,4 @@ export const personRole = pgEnum("person_role", [...PERSON_ROLES]);
 export const audioDubType = pgEnum("audio_dub_type", [...AUDIO_DUB_TYPES]);
 export const watchStatus = pgEnum("watch_status", [...WATCH_STATUSES]);
 export const userRole = pgEnum("user_role", [...USER_ROLES]);
+export const ingestJobStatus = pgEnum("ingest_job_status", [...INGEST_JOB_STATUSES]);

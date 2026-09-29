@@ -72,46 +72,51 @@ export async function upsertProgress(
   const status: WatchStatus = ratio >= 0.95 ? "watched" : "in_progress";
   const now = new Date();
 
-  // onConflictDoNothing: два устройства, пишущие позицию одновременно,
-  // раньше устраивали гонку SELECT→INSERT и unique-нарушение → 500.
-  const inserted = await db
-    .insert(watchProgress)
-    .values({
-      profileId: input.profileId,
-      itemId: input.itemId,
-      mediaId: input.mediaId,
-      positionSeconds: Math.round(input.positionSeconds),
-      durationSeconds: Math.round(input.durationSeconds),
-      status,
-    })
-    .onConflictDoNothing({
-      target: [watchProgress.profileId, watchProgress.mediaId],
-    })
-    .returning();
+  // Одна транзакция: строка прогресса и инкремент views не расходятся
+  // при падении между стейтментами.
+  return db.transaction(async (tx) => {
+    // onConflictDoNothing: два устройства, пишущие позицию одновременно,
+    // раньше устраивали гонку SELECT→INSERT и unique-нарушение → 500.
+    const inserted = await tx
+      .insert(watchProgress)
+      .values({
+        profileId: input.profileId,
+        itemId: input.itemId,
+        mediaId: input.mediaId,
+        positionSeconds: Math.round(input.positionSeconds),
+        durationSeconds: Math.round(input.durationSeconds),
+        status,
+      })
+      .onConflictDoNothing({
+        target: [watchProgress.profileId, watchProgress.mediaId],
+      })
+      .returning();
 
-  if (inserted[0]) {
-    // Первый прогресс по media = состоявшийся просмотр (счётчик для «горячих»).
-    await db
-      .update(items)
-      .set({ views: sql`${items.views} + 1` })
-      .where(eq(items.id, input.itemId));
-    return inserted[0];
-  }
+    if (inserted[0]) {
+      // Первый прогресс по media = состоявшийся просмотр (счётчик для «горячих»).
+      await tx
+        .update(items)
+        .set({ views: sql`${items.views} + 1` })
+        .where(eq(items.id, input.itemId));
+      return inserted[0];
+    }
 
-  const [row] = await db
-    .update(watchProgress)
-    .set({
-      positionSeconds: Math.round(input.positionSeconds),
-      durationSeconds: Math.round(input.durationSeconds),
-      status,
-      completedAt: status === "watched" ? now : undefined,
-      updatedAt: now,
-    })
-    .where(
-      and(eq(watchProgress.profileId, input.profileId), eq(watchProgress.mediaId, input.mediaId)),
-    )
-    .returning();
-  return row!;
+    const [row] = await tx
+      .update(watchProgress)
+      .set({
+        positionSeconds: Math.round(input.positionSeconds),
+        durationSeconds: Math.round(input.durationSeconds),
+        status,
+        // Возврат к недосмотру гасит отметку о завершении.
+        completedAt: status === "watched" ? now : null,
+        updatedAt: now,
+      })
+      .where(
+        and(eq(watchProgress.profileId, input.profileId), eq(watchProgress.mediaId, input.mediaId)),
+      )
+      .returning();
+    return row!;
+  });
 }
 
 /** Лента «продолжить просмотр»: свежие незавершённые. */

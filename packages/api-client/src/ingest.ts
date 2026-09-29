@@ -38,11 +38,15 @@ export const ingestRequestSchema = z.object({
 });
 export type IngestRequest = z.infer<typeof ingestRequestSchema>;
 
+/** Статусы ingest-задачи: единый источник для zod-схемы и pgEnum в БД. */
+export const INGEST_JOB_STATUSES = ["queued", "running", "done", "failed"] as const;
+export type IngestJobStatus = (typeof INGEST_JOB_STATUSES)[number];
+
 export const ingestJobStatusSchema = z.object({
   id: z.number().int(),
   sourceType: z.string(),
   sourceRef: z.string(),
-  status: z.enum(["queued", "running", "done", "failed"]),
+  status: z.enum(INGEST_JOB_STATUSES),
   itemId: z.number().int().nullable(),
   mediaId: z.number().int().nullable(),
   error: z.string().nullable(),
@@ -66,10 +70,21 @@ export const progressSchema = z.object({
 });
 export type ProgressDto = z.infer<typeof progressSchema>;
 
-export const progressPutSchema = z.object({
-  positionSeconds: z.number().min(0),
-  durationSeconds: z.number().min(0),
-});
+export const progressPutSchema = z
+  .object({
+    positionSeconds: z.number().min(0),
+    durationSeconds: z.number().min(0),
+  })
+  /** Битый клиент не должен отравлять резюме: позиция дальше конца
+   * или гигантские числа — это 400, а не молчаливый мусор в БД. */
+  .refine((p) => p.positionSeconds <= p.durationSeconds, {
+    message: "positionSeconds must not exceed durationSeconds",
+    path: ["positionSeconds"],
+  })
+  .refine((p) => p.durationSeconds <= 24 * 60 * 60 * 30, {
+    message: "durationSeconds is implausibly large",
+    path: ["durationSeconds"],
+  });
 export type ProgressPut = z.infer<typeof progressPutSchema>;
 
 export const progressResponseSchema = z.object({

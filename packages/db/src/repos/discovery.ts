@@ -52,6 +52,10 @@ export async function listLocalGenres(
  * Дедуп: сначала по индексу `items_tmdb_id_idx`, потом по паре
  * (lower(title), year) — составной индекс `items_title_year_idx` держит
  * оба прохода без seq-scan'а на 20к строк.
+ *
+ * Атомарно (db.transaction): падение на середине больше не оставляет
+ * полузалитый батч. Ремонт существующих — одним UPDATE ... FROM (VALUES),
+ * а не по запросу на тайтл.
  */
 export async function insertCatalogBatch(
   db: Db,
@@ -61,125 +65,133 @@ export async function insertCatalogBatch(
   const result: CatalogBatchResult = { added: 0, skipped: 0, repaired: 0 };
   if (drafts.length === 0) return result;
 
-  const unique = new Map<string, CatalogDraft>();
-  for (const d of drafts) unique.set(`${d.type}:${d.tmdbId}`, d);
-  const batch = [...unique.values()];
+  return db.transaction(async (tx) => {
+    const unique = new Map<string, CatalogDraft>();
+    for (const d of drafts) unique.set(`${d.type}:${d.tmdbId}`, d);
+    const batch = [...unique.values()];
 
-  // 1. Уже есть по tmdbId.
-  const existingByTmdb = await db
-    .select({
-      id: items.id,
-      tmdbId: items.tmdbId,
-      posterMedium: items.posterMedium,
-      plot: items.plot,
-      originalTitle: items.originalTitle,
-      rating: items.rating,
-    })
-    .from(items)
-    .where(inArray(items.tmdbId, batch.map((d) => d.tmdbId)));
-  const known = new Map(existingByTmdb.map((r) => [r.tmdbId as number, r]));
-
-  const rest = batch.filter((d) => !known.has(d.tmdbId));
-
-  // 2. Дедуп по (lower(title), year): тайтл мог прийти из другого источника
-  //    (сида, прошлого fill) с тем же названием, но другим tmdbId.
-  const titled = rest.filter((d) => d.year != null);
-  const dupeKeys = new Set<string>();
-  for (let i = 0; i < titled.length; i += 200) {
-    const chunk = titled.slice(i, i + 200);
-    const tuples = sql.join(
-      chunk.map((d) => sql`(${d.title.toLowerCase()}, ${d.year})`),
-      sql`, `,
-    );
-    const rows = await db
-      .select({ title: items.title, year: items.year, posterMedium: items.posterMedium })
+    // 1. Уже есть по tmdbId.
+    const existingByTmdb = await tx
+      .select({
+        id: items.id,
+        tmdbId: items.tmdbId,
+        posterMedium: items.posterMedium,
+      })
       .from(items)
-      .where(sql`(lower(${items.title}), ${items.year}) IN (${tuples})`);
-    for (const r of rows) dupeKeys.add(`${String(r.title).toLowerCase()}|${r.year}`);
-  }
+      .where(inArray(items.tmdbId, batch.map((d) => d.tmdbId)));
+    const known = new Map(existingByTmdb.map((r) => [r.tmdbId as number, r]));
 
-  const toInsert: CatalogDraft[] = [];
-  for (const d of rest) {
-    if (d.year != null && dupeKeys.has(`${d.title.toLowerCase()}|${d.year}`)) {
-      result.skipped++;
-      continue;
+    const rest = batch.filter((d) => !known.has(d.tmdbId));
+
+    // 2. Дедуп по (lower(title), year): тайтл мог прийти из другого источника
+    //    (сида, прошлого fill) с тем же названием, но другим tmdbId.
+    const titled = rest.filter((d) => d.year != null);
+    const dupeKeys = new Set<string>();
+    for (let i = 0; i < titled.length; i += 200) {
+      const chunk = titled.slice(i, i + 200);
+      const tuples = sql.join(
+        chunk.map((d) => sql`(${d.title.toLowerCase()}, ${d.year})`),
+        sql`, `,
+      );
+      const rows = await tx
+        .select({ title: items.title, year: items.year })
+        .from(items)
+        .where(sql`(lower(${items.title}), ${items.year}) IN (${tuples})`);
+      for (const r of rows) dupeKeys.add(`${String(r.title).toLowerCase()}|${r.year}`);
     }
-    toInsert.push(d);
-  }
 
-  // 3. Ремонт метаданных у существующих (битые/пустые постера сида).
-  for (const d of batch) {
-    const row = known.get(d.tmdbId);
-    if (!row) continue;
-    result.skipped++;
-    if (!row.posterMedium && d.posterMedium) {
-      await db
-        .update(items)
-        .set({
-          posterSmall: d.posterSmall,
-          posterMedium: d.posterMedium,
-          posterBig: d.posterBig,
-          plot: d.plot,
-          originalTitle: d.originalTitle,
-          rating: d.rating > 0 ? d.rating : undefined,
-          updatedAt: new Date(),
-        })
-        .where(eq(items.id, row.id));
-      result.repaired++;
-    }
-  }
-
-  // 4. Пачечная вставка новичков + жанры + media.
-  for (let i = 0; i < toInsert.length; i += 200) {
-    const chunk = toInsert.slice(i, i + 200);
-    const inserted = await db
-      .insert(items)
-      .values(
-        chunk.map((d) => ({
-          type: d.type,
-          title: d.title,
-          originalTitle: d.originalTitle,
-          year: d.year,
-          plot: d.plot,
-          rating: d.rating,
-          quality: 1080,
-          posterSmall: d.posterSmall,
-          posterMedium: d.posterMedium,
-          posterBig: d.posterBig,
-          tmdbId: d.tmdbId,
-        })),
-      )
-      .returning({ id: items.id, tmdbId: items.tmdbId });
-
-    const byTmdb = new Map(chunk.map((d, idx) => [d.tmdbId, chunk[idx]!]));
-    const idByTmdb = new Map(inserted.map((r) => [r.tmdbId as number, r.id]));
-
-    const genreRows: Array<{ itemId: number; genreId: number }> = [];
-    const mediaRows: Array<{ itemId: number; title: string; runtime: number }> = [];
-    for (const d of chunk) {
-      const itemId = idByTmdb.get(d.tmdbId);
-      if (itemId == null) continue;
-      const draft = byTmdb.get(d.tmdbId);
-      const seen = new Set<number>();
-      for (const gid of draft?.genreIds ?? []) {
-        const local = tmdbToLocalGenre.get(gid);
-        if (local == null || seen.has(local)) continue;
-        seen.add(local);
-        genreRows.push({ itemId, genreId: local });
+    const toInsert: CatalogDraft[] = [];
+    for (const d of rest) {
+      if (d.year != null && dupeKeys.has(`${d.title.toLowerCase()}|${d.year}`)) {
+        result.skipped++;
+        continue;
       }
-      mediaRows.push({ itemId, title: d.title, runtime: d.runtime ?? 0 });
+      toInsert.push(d);
     }
 
-    if (genreRows.length) {
-      await db.insert(itemGenres).values(genreRows).onConflictDoNothing();
+    // 3. Ремонт метаданных у существующих (битые/пустые постера сида) —
+    //    один UPDATE на всю пачку, не по запросу на тайтл.
+    const repair: Array<{ id: number; d: CatalogDraft }> = [];
+    for (const d of batch) {
+      const row = known.get(d.tmdbId);
+      if (!row) continue;
+      result.skipped++;
+      if (!row.posterMedium && d.posterMedium) repair.push({ id: row.id, d });
     }
-    if (mediaRows.length) {
-      await db.insert(media).values(mediaRows);
+    if (repair.length > 0) {
+      const tuples = sql.join(
+        repair.map(
+          (r) => sql`(${r.id}::int, ${r.d.posterSmall}::text, ${r.d.posterMedium}::text, ${r.d.posterBig}::text, ${r.d.plot}::text, ${r.d.originalTitle}::text, ${r.d.rating}::double precision)`,
+        ),
+        sql`, `,
+      );
+      await tx.execute(sql`
+        update ${items} as i set
+          poster_small = v.poster_small,
+          poster_medium = v.poster_medium,
+          poster_big = v.poster_big,
+          plot = v.plot,
+          original_title = v.original_title,
+          rating = case when v.rating > 0 then v.rating else i.rating end,
+          updated_at = now()
+        from (values ${tuples}) as v(id, poster_small, poster_medium, poster_big, plot, original_title, rating)
+        where i.id = v.id
+      `);
+      result.repaired += repair.length;
     }
-    result.added += inserted.length;
-  }
 
-  return result;
+    // 4. Пачечная вставка новичков + жанры + media.
+    for (let i = 0; i < toInsert.length; i += 200) {
+      const chunk = toInsert.slice(i, i + 200);
+      const inserted = await tx
+        .insert(items)
+        .values(
+          chunk.map((d) => ({
+            type: d.type,
+            title: d.title,
+            originalTitle: d.originalTitle,
+            year: d.year,
+            plot: d.plot,
+            rating: d.rating,
+            quality: 1080,
+            posterSmall: d.posterSmall,
+            posterMedium: d.posterMedium,
+            posterBig: d.posterBig,
+            tmdbId: d.tmdbId,
+          })),
+        )
+        .returning({ id: items.id, tmdbId: items.tmdbId });
+
+      const byTmdb = new Map(chunk.map((d, idx) => [d.tmdbId, chunk[idx]!]));
+      const idByTmdb = new Map(inserted.map((r) => [r.tmdbId as number, r.id]));
+
+      const genreRows: Array<{ itemId: number; genreId: number }> = [];
+      const mediaRows: Array<{ itemId: number; title: string; runtime: number }> = [];
+      for (const d of chunk) {
+        const itemId = idByTmdb.get(d.tmdbId);
+        if (itemId == null) continue;
+        const draft = byTmdb.get(d.tmdbId);
+        const seen = new Set<number>();
+        for (const gid of draft?.genreIds ?? []) {
+          const local = tmdbToLocalGenre.get(gid);
+          if (local == null || seen.has(local)) continue;
+          seen.add(local);
+          genreRows.push({ itemId, genreId: local });
+        }
+        mediaRows.push({ itemId, title: d.title, runtime: d.runtime ?? 0 });
+      }
+
+      if (genreRows.length) {
+        await tx.insert(itemGenres).values(genreRows).onConflictDoNothing();
+      }
+      if (mediaRows.length) {
+        await tx.insert(media).values(mediaRows);
+      }
+      result.added += inserted.length;
+    }
+
+    return result;
+  });
 }
 
 /** Какие из tmdbId уже есть в каталоге — чтобы не тянуть детали чужих. */
