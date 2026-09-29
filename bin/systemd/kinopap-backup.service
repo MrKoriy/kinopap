@@ -1,0 +1,14 @@
+[Unit]
+Description=Ночной бэкап «Зала» (pg_dump + media)
+# Без After=postgres: контейнер не systemd-юнит, порядок задаёт сам скрипт —
+# он обращается к контейнеру по имени и падает, если тот не поднят. Падение
+# видно в journalctl, а не растворяется в тишине.
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kinopap/bin/backup.sh
+# Бэкап не должен мешать сайту: дамп 82 МБ читает диск и греет CPU.
+Nice=10
+IOSchedulingClass=idle

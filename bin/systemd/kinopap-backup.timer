@@ -1,0 +1,15 @@
+[Unit]
+Description=Ночной бэкап «Зала» в 04:40 UTC
+
+[Timer]
+# 04:40 UTC — 07:40 по Москве. Специально не 00:00: рядом dpkg-db-backup.timer
+# (00:00) и musaic-backup.timer (04:30); разносим, чтобы дампы не совпали по
+# диску и CPU.
+OnCalendar=*-*-* 04:40:00
+RandomizedDelaySec=10m
+# Persistent: если сервер лежал в момент запуска, бэкап снимется при подъёме.
+# Без этого пропущенная ночь остаётся незамеченной.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
