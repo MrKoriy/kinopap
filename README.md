@@ -92,7 +92,7 @@ title/director/cast, media-links (лестница качеств http+hls, ау
 Auth: JWT access (15 мин) + refresh (30 дней, ротация с guard от гонок).
 Регистрация по инвайт-коду (CSPRNG; создаёт owner через `POST /v1/invites`).
 Rate limit: точечные лимиты на login/register/refresh/search/discover,
-лёгкий глобальный потолок.
+комментарии/голоса/подписки/прогресс, лёгкий глобальный потолок.
 
 ## Социалка
 
