@@ -2,6 +2,13 @@
 // должен быть JWT_SECRET (например `env $(cat /opt/kinopap/.env) pm2 start`).
 // Публичные адреса при желании тоже перекрываются env'ом.
 //
+// cwd приложений — /opt/kinopap/current, симлинк на живой релиз, а не на
+// /opt/kinopap. Код деплоится в releases/<ts>, и каталог приложений обязан
+// следовать за переключением симлинка. Обратная сторона: pm2 хранит pm_cwd,
+// разобранный при старте, поэтому перезапускать приложения нужно через
+// `delete` + `start` (это делает bin/restart-apps.sh) — `pm2 reload` оставил бы
+// их работать из прежнего релиза, отрапортовав успех.
+//
 // DATABASE_URL обязателен и без значения по умолчанию: раньше здесь лежал
 // `postgres://zal:zal@localhost:5433/zal`, то есть пароль базы в публичном
 // репозитории. Запасное значение к тому же маскировало бы отсутствие env —
@@ -14,6 +21,10 @@ if (!DATABASE_URL) {
   );
 }
 
+// Каталог релиза. Торрсервер стоит вне него: бинарь и данные раздач живут в
+// /opt/kinopap/{bin,data} и переживают любой деплой.
+const RELEASE_DIR = "/opt/kinopap/current";
+
 module.exports = {
   apps: [
     {
@@ -25,7 +36,7 @@ module.exports = {
     },
     {
       name: "kinopap-api",
-      cwd: "/opt/kinopap",
+      cwd: RELEASE_DIR,
       script: "pnpm",
       args: "--filter @zal/api exec tsx src/server.ts",
       autorestart: true,
@@ -50,7 +61,7 @@ module.exports = {
     },
     {
       name: "kinopap-worker",
-      cwd: "/opt/kinopap",
+      cwd: RELEASE_DIR,
       script: "pnpm",
       args: "--filter @zal/worker exec tsx src/index.ts",
       autorestart: true,
@@ -67,7 +78,7 @@ module.exports = {
     },
     {
       name: "kinopap-web",
-      cwd: "/opt/kinopap",
+      cwd: RELEASE_DIR,
       script: "pnpm",
       args: "--filter @zal/web start -p 7000",
       autorestart: true,

@@ -1,18 +1,54 @@
 #!/usr/bin/env bash
-# Деплой «Зал» на сервер (одна SSH-сессия через мультиплексинг).
-# Локально: ./bin/deploy.sh
+# Деплой «Зала» на сервер (одна SSH-сессия через мультиплексинг).
+#
+#   ./bin/deploy.sh              # выложить новый релиз
+#   ./bin/deploy.sh --rollback   # вернуться на предыдущий релиз
+#
 # Требует: ssh-доступ root@94.103.1.126 (Host kinopap в ~/.ssh/config).
+#
+# Раскладка на сервере:
+#
+#   /opt/kinopap/releases/<ts>/   код релиза целиком (свой node_modules и .next)
+#   /opt/kinopap/current          симлинк на живой релиз
+#   /opt/kinopap/previous         симлинк на предыдущий (для отката)
+#   /opt/kinopap/.env             общий, вне релиза
+#   /opt/kinopap/media/           MEDIA_ROOT, вне релиза — иначе деплой осиротит залитое
+#   /opt/kinopap/data/            состояние torrserver, вне релиза
+#   /opt/kinopap/bin/             torrserver (61 МБ) и скрипты сервера, вне релиза
+#
+# Зачем. Раньше код лежал прямо в /opt/kinopap и обновлялся rsync'ом на месте:
+# в любой момент времени там была смесь старых и новых файлов, а сборка и
+# миграции шли поверх работающего сайта. Теперь релиз собирается целиком рядом,
+# и переключается один симлинк — состояния «половина новая» не существует.
+# Откат — переключение симлинка назад, а не восстановление из бэкапа.
 set -euo pipefail
 
 SERVER=kinopap
 APP_DIR=/opt/kinopap
+RELEASES_DIR=$APP_DIR/releases
+CURRENT=$APP_DIR/current
+PREVIOUS=$APP_DIR/previous
 PUBLIC_URL="http://94.103.1.126"
 # HTTPS-адрес: имя в зоне sslip.io резолвится в тот же IP, сертификат Let's Encrypt
 # выпущен (vhost zal-ssl). Нужен потому, что мобильные браузеры по умолчанию идут
 # на HTTPS, а на 443 за голым IP отвечает чужой сертификат — телефон блокирует сайт.
 HTTPS_URL="https://zal.94-103-1-126.sslip.io"
 API_INTERNAL="http://127.0.0.1:7001"
-TMDB_KEY="${TMDB_API_KEY:?export TMDB_API_KEY=... перед запуском}"
+
+MODE=deploy
+if [ "${1:-}" = "--rollback" ]; then MODE=rollback; fi
+
+# Ключ TMDb нужен только сборке нового релиза. Требовать его для отката нельзя:
+# откат нужен именно тогда, когда что-то сломалось, и лишняя переменная в этот
+# момент — это ещё одна причина не откатиться.
+TMDB_KEY=""
+if [ "$MODE" = "deploy" ]; then
+  : "${TMDB_API_KEY:?export TMDB_API_KEY=... перед запуском}"
+  TMDB_KEY="$TMDB_API_KEY"
+fi
+
+# Метка релиза считается локально и подставляется в heredoc как $TS.
+TS=$(date -u +%Y%m%d-%H%M%S)
 
 # Проверка идёт до rsync, а не после: она про то, что уедет на сервер. Отдельным
 # шагом её держать нельзя — про неё забывают, а цена забывчивости уже известна
@@ -20,9 +56,51 @@ TMDB_KEY="${TMDB_API_KEY:?export TMDB_API_KEY=... перед запуском}"
 echo "==> 0/6: тело heredoc — локальные подстановки экранированы"
 "$(dirname "$0")/audit-heredoc.sh"
 
-echo "==> 1/6: код на сервер (rsync, без node_modules/.next/.env/data/bin)"
+if [ "$MODE" = "rollback" ]; then
+  echo "==> откат: переключаю current на previous"
+  ssh "$SERVER" bash -s <<REMOTE
+set -euo pipefail
+
+TARGET=\$(readlink -f $PREVIOUS || true)
+NOW=\$(readlink -f $CURRENT || true)
+# readlink -f возвращает сам путь, если его нет, — «не каталог» и означает
+# «такого релиза нет».
+[ -d "\$TARGET" ] || TARGET=""
+[ -d "\$NOW" ] || NOW=""
+if [ -z "\$TARGET" ]; then
+  echo "ОШИБКА: предыдущего релиза нет ($PREVIOUS)" >&2
+  exit 1
+fi
+
+echo "  было:  \$(basename "\${NOW:-нет}")"
+echo "  станет: \$(basename "\$TARGET")"
+
+# Меняем местами, чтобы откат был обратим: повторный --rollback вернёт назад.
+ln -sfn "\$TARGET" $CURRENT.tmp && mv -T $CURRENT.tmp $CURRENT
+if [ -n "\$NOW" ]; then
+  ln -sfn "\$NOW" $PREVIOUS.tmp && mv -T $PREVIOUS.tmp $PREVIOUS
+fi
+
+if ! $APP_DIR/bin/restart-apps.sh; then
+  echo "  ОШИБКА: откаченный релиз не поднялся — возвращаю \${NOW:-нет}" >&2
+  if [ -n "\$NOW" ]; then
+    ln -sfn "\$NOW" $CURRENT.tmp && mv -T $CURRENT.tmp $CURRENT
+    $APP_DIR/bin/restart-apps.sh || true
+  fi
+  exit 1
+fi
+REMOTE
+  echo "==> откат выполнен."
+  exit 0
+fi
+
+echo "==> 1/6: релиз $TS — код на сервер"
+ssh "$SERVER" "mkdir -p '$RELEASES_DIR/$TS'"
 # media/ исключён намеренно: это MEDIA_ROOT, рабочий каталог сервера. Локально
 # его нет, и без --exclude rsync --delete вычистил бы оттуда всё залитое.
+# .env исключён тоже: он общий для всех релизов и лежит в $APP_DIR; в релизе
+# появится симлинком (см. шаг 2), иначе docker compose искал бы его в каталоге
+# compose-файла, то есть в релизе.
 # .workbuddy-ai — заметки агента, на сервере не нужны.
 rsync -az --delete \
   --exclude node_modules --exclude .next --exclude .turbo --exclude .expo \
@@ -30,16 +108,33 @@ rsync -az --delete \
   --exclude media --exclude .workbuddy-ai \
   --exclude test-results --exclude dist-e2e --exclude dist --exclude coverage \
   --exclude ios --exclude android \
-  ./ "$SERVER:$APP_DIR/"
+  ./ "$SERVER:$RELEASES_DIR/$TS/"
 
-echo "==> 2/6: серверная часть (env, redis, nginx, install, миграции, build, pm2)"
+# Скрипты сервера лежат вне релиза: их пути зашиты в systemd-юнит и в этот же
+# деплой, поэтому обязаны быть стабильными. Из основного rsync bin/ исключён
+# (там 61 МБ torrserver) — и именно поэтому bin/fill-catalog.sh на сервере
+# отставал от репозитория на несколько правок, а заметить это было нечем:
+# локальный файл выглядел рабочим, а на сервере работал старый.
+rsync -az bin/backup.sh bin/fill-catalog.sh bin/restart-apps.sh \
+  "$SERVER:$APP_DIR/bin/"
+rsync -az bin/systemd/ "$SERVER:$APP_DIR/bin/systemd/"
+
+echo "==> 2/6: сборка релиза (env, redis, postgres, nginx, install, миграции, build)"
 # Неквотированный heredoc: локальные переменные подставляются здесь,
 # удалённые — экранированы (\$).
 ssh "$SERVER" bash -s <<REMOTE
 set -euo pipefail
-cd $APP_DIR
+
+RELEASE=$RELEASES_DIR/$TS
+if [ ! -f "\$RELEASE/package.json" ] || [ ! -f "\$RELEASE/docker-compose.yml" ]; then
+  echo "ОШИБКА: релиз \$RELEASE залит не целиком" >&2
+  exit 1
+fi
 
 # --- env: дополняем недостающее, существующее перезаписываем актуальным ---
+# Файл общий для всех релизов и лежит вне них — иначе каждая новая версия
+# начиналась бы с пустого .env.
+cd $APP_DIR
 add_env() {
   local key=\$1 val=\$2
   if ! grep -q "^\${key}=" .env 2>/dev/null; then
@@ -124,6 +219,10 @@ fi
 echo "  redis: \$REDIS_HOST:\$REDIS_PORT отвечает"
 
 # --- контейнеры: compose — единственный источник правды ---
+# Файл берём из релиза, а переменные — из общего .env, который к этому моменту
+# загружен в окружение (compose подставляет их из env раньше, чем из файла).
+# Имя проекта в compose зафиксировано, том назван явно — поэтому запуск из
+# каталога релиза не создаёт ни нового проекта, ни нового тома.
 # База когда-то была поднята руками через docker run. Такой контейнер compose
 # не признаёт своим и падает на конфликте имён, поэтому пересоздаём его: данные
 # лежат в томе kinopap_pgdata, объявленном external, и пересоздание их не трогает.
@@ -133,7 +232,7 @@ if [ "\$COMPOSE_PROJECT" != "kinopap" ]; then
   echo "  контейнер kinopap-postgres не под управлением compose (метка: '\${COMPOSE_PROJECT:-нет}') — пересоздаю"
   docker rm -f kinopap-postgres >/dev/null
 fi
-docker compose up -d postgres
+docker compose -f "\$RELEASE/docker-compose.yml" up -d postgres
 # Ждём healthy: миграции ниже упадут, если база ещё поднимается.
 for i in \$(seq 1 30); do
   if docker exec kinopap-postgres pg_isready -U zal -d zal >/dev/null 2>&1; then break; fi
@@ -146,6 +245,7 @@ echo "  postgres: \$(docker inspect kinopap-postgres --format '{{.State.Health.S
 # -R, а не -r: в sites-enabled лежат симлинки, и «grep -r» по ним не идёт —
 # с -r список всегда пуст, поэтому весь блок ниже молча пропускался, и nginx на
 # деплое не проверялся и не перезагружался. С -R находится ровно vhost сайта.
+# Алиас указывает на $APP_DIR/media, а не на релиз: медиа переживает деплой.
 NGINX_SITE=\$(grep -Rl "7001" /etc/nginx/sites-enabled/ 2>/dev/null | head -1 || true)
 if [ -n "\$NGINX_SITE" ]; then
   if ! grep -q "location /media/" "\$NGINX_SITE"; then
@@ -194,11 +294,16 @@ PY
 fi
 mkdir -p "$APP_DIR/media"
 
-# --- зависимости ---
-pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -1
-
-# --- миграции + сид (владелец/инвайты/жанры; идемпотентно) ---
-pnpm db:setup 2>&1 | tail -2
+# --- ночной бэкап: юниты из репозитория, а не «когда-то поставленные руками» ---
+# Иначе после пересборки машины бэкапов не будет, и узнается об этом при
+# восстановлении. Установка идемпотентна, включение таймера тоже.
+if [ -d "$APP_DIR/bin/systemd" ]; then
+  install -m 644 "$APP_DIR/bin/systemd/kinopap-backup.service" /etc/systemd/system/
+  install -m 644 "$APP_DIR/bin/systemd/kinopap-backup.timer" /etc/systemd/system/
+  chmod +x "$APP_DIR/bin/backup.sh" "$APP_DIR/bin/fill-catalog.sh" "$APP_DIR/bin/restart-apps.sh"
+  systemctl daemon-reload
+  systemctl enable --now kinopap-backup.timer >/dev/null 2>&1 || true
+fi
 
 # --- кэш media_sources: выкидываем ссылки с зашитым хостом ---
 # Разрешённые ссылки лежат в БД до 6 часов и хранятся целиком, вместе с URL,
@@ -225,33 +330,119 @@ else
   echo "  кэш ссылок: протухших нет (в таблице \$TOTAL)"
 fi
 
-# --- веб-сборка: NEXT_PUBLIC_API_URL инлайнится в бандл при билде ---
-# Пустое значение — намеренно: адрес API берётся из origin окна, поэтому один и
-# тот же бандл работает и по http://<ip>, и по https://<имя>.
+# --- сборка релиза ---
+cd "\$RELEASE"
+# Симлинк на общий .env: docker compose подставляет переменные сначала из
+# окружения, и без .env в релизе он тоже работает — проверено на копии
+# compose-файла в каталоге без .env. Симлинк всё равно ставим: с ним релиз
+# самодостаточен, и «docker compose» руками внутри current ведёт себя так же,
+# как в деплое, а не «работает, пока кто-то помнит про set -a».
+ln -sfn $APP_DIR/.env "\$RELEASE/.env"
+pnpm install --frozen-lockfile --prefer-offline 2>&1 | tail -1
+
+# Миграции обязаны быть аддитивными: до переключения симлинка на этом же коде
+# продолжает работать прежний релиз, и удалённая колонка уронит живой сайт.
+# Обратной совместимости здесь не на чем стоять — её обеспечивает только
+# порядок «сначала добавили, потом убрали в следующем релизе».
+pnpm db:setup 2>&1 | tail -2
+
+# NEXT_PUBLIC_API_URL инлайнится в бандл при билде. Пустое значение — намеренно:
+# адрес API берётся из origin окна, поэтому один и тот же бандл работает и по
+# http://<ip>, и по https://<имя>.
 NEXT_PUBLIC_API_URL="" INTERNAL_API_URL="$API_INTERNAL" \
   pnpm --filter @zal/web build 2>&1 | tail -2
-
-# --- PM2: воркер теперь в ecosystem; env уже в окружении из .env ---
-pm2 startOrReload ecosystem.config.cjs
-pm2 save
-pm2 ls
 REMOTE
 
-echo "==> 3/6: ждём здоровья API"
-for i in $(seq 1 30); do
-  if ssh "$SERVER" "curl -sf http://127.0.0.1:7001/healthz" >/dev/null 2>&1; then
-    echo "  api: ok"; break
+echo "==> 3/6: переключение current и последовательный перезапуск"
+ssh "$SERVER" bash -s <<REMOTE
+set -euo pipefail
+
+RELEASE=$RELEASES_DIR/$TS
+# readlink -f возвращает сам путь, если его нет, а не пустую строку: на первом
+# деплое PREV оказался бы строкой «/opt/kinopap/current». Поэтому «не каталог»
+# явно превращаем в «предыдущего релиза нет».
+PREV=\$(readlink -f $CURRENT || true)
+[ -d "\$PREV" ] || PREV=""
+
+# Переключение атомарно: ln -sfn сначала удаляет старый симлинк, и в этот
+# момент current не существует вовсе. mv -T поверх симлинка — одна операция.
+if [ -n "\$PREV" ]; then
+  ln -sfn "\$PREV" $PREVIOUS.tmp && mv -T $PREVIOUS.tmp $PREVIOUS
+fi
+ln -sfn "\$RELEASE" $CURRENT.tmp && mv -T $CURRENT.tmp $CURRENT
+echo "  current -> \$(basename "\$RELEASE")"
+
+# Приложения поднимаются по одному, API первым и с проверкой здоровья: если он
+# не поднялся, остальные ещё работают на прежнем релизе, и откат стоит одного
+# переключения симлинка.
+if ! $APP_DIR/bin/restart-apps.sh; then
+  echo "  ОШИБКА: релиз \$(basename "\$RELEASE") не поднялся" >&2
+  if [ -n "\$PREV" ]; then
+    echo "  откат на \$(basename "\$PREV")" >&2
+    ln -sfn "\$PREV" $CURRENT.tmp && mv -T $CURRENT.tmp $CURRENT
+    $APP_DIR/bin/restart-apps.sh || true
+  else
+    echo "  предыдущего релиза нет — откатывать некуда" >&2
   fi
-  if [ "$i" = 30 ]; then
-    echo "  api не поднялся:"; ssh "$SERVER" "pm2 logs kinopap-api --lines 40 --nostream"
-    exit 1
-  fi
-  sleep 2
+  exit 1
+fi
+
+# --- первый деплой в раскладке releases/ ---
+# До перехода код лежал прямо в $APP_DIR, и там же были .env/media/data/bin.
+# Теперь код уезжает в релиз, а общее остаётся на месте.
+#
+# Убираем старый код только здесь — после того, как новый релиз поднялся и
+# ответил. Раньше нельзя: файлы читают живые процессы (Next.js дочитывает чанки
+# из .next, tsx компилирует модули на лету), и перенос из-под работающего сайта
+# — это ровно тот случай, когда «просто mv» роняет прод, причём тихо.
+#
+# И ничего не удаляем: переносим целиком, чтобы переход можно было отыграть
+# назад. 1.2 ГБ node_modules там уже мусор, но решать это не деплою.
+if [ -d "$APP_DIR/apps" ]; then
+  LEGACY=$APP_DIR/legacy-$TS
+  mkdir -p "\$LEGACY"
+  for p in apps packages node_modules docs .github .next pnpm-lock.yaml pnpm-workspace.yaml package.json ecosystem.config.cjs docker-compose.yml biome.json tsconfig.base.json turbo.json README.md AGENTS.md .env.example; do
+    if [ -e "$APP_DIR/\$p" ]; then mv "$APP_DIR/\$p" "\$LEGACY/"; fi
+  done
+  echo "  старый код перенесён в \$LEGACY"
+  echo "  выбросить, когда всё устоится: rm -rf \$LEGACY"
+fi
+
+# --- уборка старых релизов ---
+# Держим три самых свежих. Считаем по mtime, а не по возрасту: релизы создаёт
+# сам деплой, поэтому счётчик здесь не может спрятать сломанный конвейер —
+# в отличие от бэкапов, где ротация по возрасту выбрана ровно из-за этого.
+# current и previous не удаляем никогда, даже если они оказались самыми старыми:
+# именно на них держится откат.
+CURRENT_TARGET=\$(readlink -f $CURRENT || true)
+PREV_TARGET=\$(readlink -f $PREVIOUS || true)
+# readlink -f возвращает сам путь, если его нет, а не пустую строку — поэтому
+# «не каталог» здесь и означает «такого релиза нет».
+[ -d "\$CURRENT_TARGET" ] || CURRENT_TARGET=""
+[ -d "\$PREV_TARGET" ] || PREV_TARGET=""
+# tail -n +4, а не head -n -3: список идёт от свежих к старым, и «всё, кроме
+# последних трёх» означало бы «всё, кроме самых старых» — то есть уборка
+# удаляла бы свежие релизы и не трогала старьё. Проверено на пяти каталогах.
+# 4 = три оставляемых релиза + 1.
+for OLD in \$(ls -1dt $RELEASES_DIR/*/ 2>/dev/null | tail -n +4 || true); do
+  OLD=\${OLD%/}
+  if [ "\$OLD" = "\$CURRENT_TARGET" ] || [ "\$OLD" = "\$PREV_TARGET" ]; then continue; fi
+  case "\$OLD" in
+    $RELEASES_DIR/*)
+      echo "  убираю релиз \$(basename "\$OLD")"
+      rm -rf "\$OLD"
+      ;;
+    *)
+      echo "  пропускаю \$OLD: не похоже на релиз" >&2
+      ;;
+  esac
 done
+echo "  релизов на диске: \$(ls -1d $RELEASES_DIR/*/ 2>/dev/null | wc -l)"
+REMOTE
 
 echo "==> 4/6: постеры сида: метаданные из TMDb (битые URL чинятся на месте)"
 ssh "$SERVER" bash -s <<REMOTE
-cd $APP_DIR
+cd $CURRENT
 set -a; . ./.env; set +a
 cd packages/db
 npx tsx src/seed-catalog.ts 2>&1 | tail -3
@@ -259,6 +450,7 @@ REMOTE
 
 echo "==> 5/6: смоук"
 ssh "$SERVER" bash -s <<REMOTE
+cd $CURRENT
 # Порт 80 теперь только редиректит на HTTPS: 301 здесь — ожидаемый ответ, а 200
 # означал бы, что сайт снова отдаётся по http, где Secure-cookie не отправится.
 echo -n "  http/ip:          "; curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" "$PUBLIC_URL/"
@@ -287,8 +479,15 @@ if [ -n "\$PAIR" ]; then
     echo "АБСОЛЮТНЫХ \$ABS — на HTTPS браузер их заблокирует"
   fi
 fi
+echo -n "  cwd API:          "; pm2 jlist | python3 -c "
+import json,sys
+for a in json.load(sys.stdin):
+    if a['name'] == 'kinopap-api':
+        print(a['pm2_env']['pm_cwd'])
+"
 pm2 ls | grep kinopap
 REMOTE
 
-echo "==> 6/6: готово."
+echo "==> 6/6: готово. Релиз $TS"
+echo "Откат: ./bin/deploy.sh --rollback"
 echo "Наполнить каталог: POST $HTTPS_URL/v1/discover (owner/admin, {\"pages\":2})"
