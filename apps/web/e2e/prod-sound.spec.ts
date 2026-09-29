@@ -38,10 +38,26 @@ test("прод: AC3-фильм играет со звуком в Chrome", async 
     (window as unknown as { __audio: unknown }).__audio = { analyser };
   });
 
-  await page.getByTestId("play-toggle").first().click();
+  // Плеер автоплеит и возобновляет с места из истории просмотров, а контролы
+  // прячутся через 3 с после начала игры — тогда у `play-toggle` нулевой размер
+  // и клик по нему не проходит (Playwright считает такой элемент невидимым).
+  // Поэтому: показываем контролы мышью и жмём play только если реально пауза.
+  await page.mouse.move(400, 300);
+  const paused = await page.evaluate(
+    () => document.querySelector("video")?.paused ?? true,
+  );
+  if (paused) {
+    await page.getByTestId("play-toggle").first().click();
+  }
+
+  // Проверяем именно продвижение воспроизведения, а не порог: при автоплее
+  // currentTime уже далеко впереди, и `> 1` прошло бы, ничего не проверив.
+  const before = await page.evaluate(
+    () => document.querySelector("video")?.currentTime ?? 0,
+  );
   await page.waitForFunction(
-    () => (document.querySelector("video")?.currentTime ?? 0) > 1,
-    undefined,
+    (t) => (document.querySelector("video")?.currentTime ?? 0) > t + 0.5,
+    before,
     { timeout: 60_000 },
   );
 
@@ -57,7 +73,11 @@ test("прод: AC3-фильм играет со звуком в Chrome", async 
       return 10 * Math.log10(Math.sqrt(sum / buf.length) + 1e-12);
     });
 
-  // Звук есть ⇔ RMS ощутимо выше шума (-100дБ ≈ тишина).
+  // Звук есть ⇔ RMS ощутимо выше шума (-100дБ ≈ тишина). Печатаем замер, чтобы
+  // «прошло» было отличимо от «анализатор ничего не увидел и вернул -999».
+  const measured = await power();
+  console.log(`[prod-sound] RMS дорожки: ${measured.toFixed(1)} дБ`);
+  expect(measured, "анализатор не подключился").toBeGreaterThan(-999);
   await expect
     .poll(power, { timeout: 30_000, intervals: [500], message: "звук не пошёл" })
     .toBeGreaterThan(-70);
