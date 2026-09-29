@@ -165,6 +165,10 @@ describe("Comments", () => {
     mocks.auth = { user, api };
     render(<Comments itemId={10} />);
 
+    // Ждём первую загрузку: оптимистичная запись, отправленная до её
+    // завершения, затирается ответом listComments (гонка в общем хуке).
+    await waitFor(() => expect(screen.getByTestId("comments-empty")).toBeDefined());
+
     fireEvent.change(screen.getByTestId("comment-form-input"), {
       target: { value: "Свежий" },
     });
@@ -172,6 +176,32 @@ describe("Comments", () => {
 
     await waitFor(() => expect(screen.getByText("Свежий")).toBeDefined());
     expect(api.postComment).toHaveBeenCalledWith(10, { body: "Свежий", parentId: null });
+  });
+
+  // Хук реджектится при сбое: оптимистичная копия откатывается, а текст
+  // остаётся в поле — набранное не теряется.
+  it("ошибка публикации откатывает копию и не очищает текст", async () => {
+    const api = makeApi({
+      postComment: vi.fn().mockRejectedValue(new Error("offline")),
+    });
+    mocks.auth = { user, api };
+    render(<Comments itemId={10} />);
+
+    // Первая загрузка должна завершиться до отправки — см. тест выше.
+    await waitFor(() => expect(screen.getByTestId("comments-empty")).toBeDefined());
+
+    fireEvent.change(screen.getByTestId("comment-form-input"), {
+      target: { value: "Свежий" },
+    });
+    fireEvent.click(screen.getByTestId("comment-form-submit"));
+
+    // Оптимистичная копия появилась…
+    await waitFor(() => expect(screen.getAllByTestId("comment-item")).toHaveLength(1));
+    // …и откатилась, когда сервер отказал.
+    await waitFor(() => expect(screen.queryByTestId("comment-item")).toBeNull());
+    expect(api.postComment).toHaveBeenCalledWith(10, { body: "Свежий", parentId: null });
+    const input = screen.getByTestId("comment-form-input") as HTMLTextAreaElement;
+    expect(input.value).toBe("Свежий");
   });
 
   it("ответ уходит с parentId и узел вкладывается", async () => {

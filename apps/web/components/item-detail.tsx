@@ -1,7 +1,7 @@
 "use client";
 
 import type { Episode, ItemDetail, ItemProgressDto, ItemProgressEntry } from "@zal/api-client";
-import { pluralRu, primaryPlayLabel, resolveTrailer } from "@zal/shared";
+import { pickDefaultSeason, pluralRu, primaryPlayLabel, progressByMedia, resolveTrailer } from "@zal/shared";
 import { Check, Film, Play, RotateCcw, X } from "lucide-react";
 import Link from "next/link";
 /**
@@ -21,20 +21,17 @@ import { buttonVariants } from "@/components/ui/button";
 import { useOptionalAuth } from "@/lib/auth";
 import { formatDuration } from "@/lib/format";
 
-/** Последняя начатая серия — по ней выбираем активный сезон и точку resume. */
-function latestInProgress(progress: ItemProgressDto): ItemProgressEntry | null {
-  let best: ItemProgressEntry | null = null;
-  for (const entry of progress.entries) {
-    if (entry.status !== "in_progress") continue;
-    if (!best || Date.parse(entry.updatedAt) > Date.parse(best.updatedAt)) best = entry;
-  }
-  return best;
-}
-
-/** Индекс сезона, которому принадлежит media. null — не нашли. */
-function seasonIndexForMedia(item: ItemDetail, mediaId: number | null): number | null {
-  if (mediaId == null || !item.seasons) return null;
-  const idx = item.seasons.findIndex((s) => s.episodes.some((e) => e.mediaId === mediaId));
+/**
+ * Тонкий адаптер: pickDefaultSeason выбирает сезон по id, а веб-карточка
+ * открывает сезоны вкладками по индексу. null — сезон не нашли.
+ */
+function defaultSeasonIndex(
+  item: Pick<ItemDetail, "seasons">,
+  progress: ItemProgressDto | null,
+): number | null {
+  const seasons = item.seasons ?? [];
+  const id = pickDefaultSeason(seasons, progress);
+  const idx = seasons.findIndex((s) => s.id === id);
   return idx >= 0 ? idx : null;
 }
 
@@ -172,16 +169,11 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
   // серия), иначе первый. Пока прогресс не пришёл, показываем первый сезон.
   React.useEffect(() => {
     if (seasonPickedByUser.current || !progress) return;
-    const latest = latestInProgress(progress);
-    const idx = seasonIndexForMedia(item, latest?.mediaId ?? progress.resumeMediaId);
+    const idx = defaultSeasonIndex(item, progress);
     if (idx != null) setActiveSeason(idx);
   }, [progress, item]);
 
-  const entries = React.useMemo(() => {
-    const map = new Map<number, ItemProgressEntry>();
-    for (const entry of progress?.entries ?? []) map.set(entry.mediaId, entry);
-    return map;
-  }, [progress]);
+  const entries = React.useMemo(() => progressByMedia(progress), [progress]);
 
   // Тихий прогрев стримов, пока пользователь читает карточку: резолвер
   // положит релиз в TorrServer и кэш API — переход «Смотреть» откроется

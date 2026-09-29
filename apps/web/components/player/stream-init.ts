@@ -75,6 +75,10 @@ export function useStreamSetup(params: StreamSetupParams): void {
     let cancelled = false;
     let hls: HlsJs | null = null;
     let mediaRecoveries = 0;
+    // Таймер gst-ретрая манифеста: живёт вместе со стримом. После hls.destroy()
+    // колбэк должен сработать разве что вхолостую — гасим явно, а не надеемся
+    // на guard hlsRef.current === hls.
+    let gstRetryTimer: number | null = null;
 
     void (async () => {
       if (isHls && canMse) {
@@ -150,7 +154,8 @@ export function useStreamSetup(params: StreamSetupParams): void {
                 // Первый ретрай скоро (тёплый торрент уже есть в кэше),
                 // второй позже — холодным пиром нужно время на подключение.
                 const delay = gstRetryRef.current === 1 ? 2_000 : 4_000;
-                window.setTimeout(() => {
+                gstRetryTimer = window.setTimeout(() => {
+                  gstRetryTimer = null;
                   if (hls && hlsRef.current === hls) hls.loadSource(streamUrl);
                 }, delay);
                 return;
@@ -201,6 +206,10 @@ export function useStreamSetup(params: StreamSetupParams): void {
 
     return () => {
       cancelled = true;
+      if (gstRetryTimer !== null) {
+        window.clearTimeout(gstRetryTimer);
+        gstRetryTimer = null;
+      }
       hls?.destroy();
       hlsRef.current = null;
       // Пауза до removeAttribute: часть браузеров доигрывает буфер старого

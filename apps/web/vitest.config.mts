@@ -6,6 +6,9 @@ export default defineConfig({
     alias: {
       "@": path.resolve(import.meta.dirname),
     },
+    // @zal/shared/react импортирует react из исходников пакета: без dedupe
+    // vite может отрезолвить вторую копию react, и хук увидит чужой dispatcher.
+    dedupe: ["react"],
   },
   test: {
     environment: "jsdom",

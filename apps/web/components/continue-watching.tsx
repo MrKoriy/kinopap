@@ -24,6 +24,39 @@ function formatLeft(seconds: number): string {
   return `осталось ${Math.floor(m / 60)} ч ${m % 60} мин`;
 }
 
+/** Отбор записей ленты: незавершённые, свежие первыми, без дублей по
+ * тайтлу (несколько media одного item — оставляем самую свежую позицию). */
+export function selectContinueProgress(progressRows: ProgressDto[]): ProgressDto[] {
+  const watching = progressRows
+    .filter(
+      (p) =>
+        p.durationSeconds > 0 &&
+        p.positionSeconds / p.durationSeconds >= 0.02 &&
+        p.positionSeconds / p.durationSeconds < 0.95,
+    )
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+    .slice(0, MAX_ENTRIES);
+  const seen = new Set<number>();
+  return watching.filter((p) => {
+    if (seen.has(p.itemId)) return false;
+    seen.add(p.itemId);
+    return true;
+  });
+}
+
+/** Матч отобранного прогресса с карточками батча по id: тайтл без карточки
+ * (удалён из каталога) молча выпадает — как раньше при ошибке getItem. */
+export function matchContinueItems(
+  progress: ProgressDto[],
+  items: ItemSummary[],
+): ContinueEntry[] {
+  const byId = new Map(items.map((it) => [it.id, it]));
+  return progress.flatMap((p) => {
+    const item = byId.get(p.itemId);
+    return item ? [{ progress: p, item }] : [];
+  });
+}
+
 function Card({ entry }: { entry: ContinueEntry }) {
   const { item, progress } = entry;
   const ratio =
@@ -85,30 +118,11 @@ export function ContinueWatching() {
     void (async () => {
       try {
         const { items: progressRows } = await api.listProgress();
-        const watching = progressRows
-          .filter(
-            (p) =>
-              p.durationSeconds > 0 &&
-              p.positionSeconds / p.durationSeconds >= 0.02 &&
-              p.positionSeconds / p.durationSeconds < 0.95,
-          )
-          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-          .slice(0, MAX_ENTRIES);
-        // Один item может быть в прогрессе несколько раз (несколько media) —
-        // оставляем самую свежую позицию.
-        const seen = new Set<number>();
-        const unique = watching.filter((p) => {
-          if (seen.has(p.itemId)) return false;
-          seen.add(p.itemId);
-          return true;
-        });
-        const resolved = await Promise.all(
-          unique.map((p): Promise<ContinueEntry | null> =>
-            api.getItem(p.itemId).then((it) => ({ progress: p, item: it })).catch(() => null),
-          ),
-        );
+        const unique = selectContinueProgress(progressRows);
+        // Один батч-запрос вместо getItem на каждую запись (было до 8 RT).
+        const { items } = await api.getItemsSummary(unique.map((p) => p.itemId));
         if (cancelled) return;
-        setEntries(resolved.filter((e): e is ContinueEntry => e != null));
+        setEntries(matchContinueItems(unique, items));
       } catch {
         // Прогресс недоступен — лента просто не показывается.
       } finally {

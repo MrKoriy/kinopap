@@ -13,6 +13,7 @@ import {
   nextEpisode,
   parseVtt,
   resolveStreamUrl,
+  segmentsEqual,
   spriteTileFor,
 } from "@/lib/player-logic";
 
@@ -480,5 +481,48 @@ describe("bufferedSegments", () => {
 
   it("бесконечная длительность — пусто, а не NaN", () => {
     expect(bufferedSegments([{ start: 0, end: 10 }], Number.POSITIVE_INFINITY)).toEqual([]);
+  });
+});
+
+describe("segmentsEqual", () => {
+  it("пустые списки равны", () => {
+    expect(segmentsEqual([], [])).toBe(true);
+  });
+
+  it("равные значения равны, даже когда массивы разные", () => {
+    // Каждый тик useBufferedRanges собирает новый массив: равенство имеет
+    // смысл только по значениям, ссылка всегда новая.
+    const a = [{ start: 0, end: 0.5 }];
+    const b = [{ start: 0, end: 0.5 }];
+    expect(a).not.toBe(b);
+    expect(segmentsEqual(a, b)).toBe(true);
+  });
+
+  it("разная длина — не равны", () => {
+    expect(segmentsEqual([], [{ start: 0, end: 1 }])).toBe(false);
+    expect(
+      segmentsEqual([{ start: 0, end: 1 }], [
+        { start: 0, end: 0.5 },
+        { start: 0.6, end: 1 },
+      ]),
+    ).toBe(false);
+  });
+
+  it("различие в start или end — не равны", () => {
+    expect(segmentsEqual([{ start: 0, end: 0.5 }], [{ start: 0.1, end: 0.5 }])).toBe(false);
+    expect(segmentsEqual([{ start: 0, end: 0.5 }], [{ start: 0, end: 0.6 }])).toBe(false);
+    // Дырка в буфере: второй отрезок сдвинулся — полоса меняется.
+    expect(
+      segmentsEqual(
+        [
+          { start: 0, end: 0.3 },
+          { start: 0.6, end: 1 },
+        ],
+        [
+          { start: 0, end: 0.3 },
+          { start: 0.7, end: 1 },
+        ],
+      ),
+    ).toBe(false);
   });
 });

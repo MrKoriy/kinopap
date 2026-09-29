@@ -34,7 +34,8 @@ export interface PlayerControlsProps {
   volume: number;
   muted: boolean;
   playbackRate: number;
-  speeds: number[];
+  /** readonly: лестница скоростей приезжает из @zal/shared как const-кортеж. */
+  speeds: readonly number[];
   shiftMs: number;
   audioTracks: TrackOption[];
   activeAudio: number;

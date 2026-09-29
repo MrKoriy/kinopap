@@ -50,6 +50,12 @@ export async function generateMetadata({
       type: SERIAL_TYPES.has(item.type) ? "video.tv_show" : "video.movie",
       images: poster ? [{ url: poster }] : undefined,
     },
+    twitter: {
+      card: "summary_large_image",
+      title,
+      description,
+      images: poster ? [{ url: poster }] : undefined,
+    },
   };
 }
 

@@ -1,6 +1,5 @@
 "use client";
 
-import type { CommentDto } from "@zal/api-client";
 import { buildCommentTree, type CommentNode as CommentNodeType } from "@zal/shared";
 /**
  * Дерево комментариев: плоский список из API собирается в дерево на клиенте.
@@ -8,6 +7,7 @@ import { buildCommentTree, type CommentNode as CommentNodeType } from "@zal/shar
  * догружает следующие. Удалённые узлы остаются в ветке.
  * Сборка дерева — @zal/shared, тот же код на мобиле.
  */
+import { useComments } from "@zal/shared/react";
 import * as React from "react";
 import { useOptionalAuth } from "@/lib/auth";
 import { formatDate } from "@/lib/format";
@@ -40,6 +40,8 @@ function BodyForm({ onSubmit, onCancel, testId, label, initial = "" }: BodyFormP
           await onSubmit(body.trim());
           setBody("");
           onCancel();
+        } catch {
+          // Сервер отверг: текст остаётся в поле, чтобы не терять набранное.
         } finally {
           setBusy(false);
         }
@@ -181,75 +183,16 @@ export function Comments({ itemId }: { itemId: number }) {
   const auth = useOptionalAuth();
   const api = auth?.api ?? null;
   const user = auth?.user ?? null;
-  const [flat, setFlat] = React.useState<CommentDto[]>([]);
-  const [nextOffset, setNextOffset] = React.useState<number | null>(null);
-  const [total, setTotal] = React.useState(0);
-  const [loaded, setLoaded] = React.useState(false);
-
-  React.useEffect(() => {
-    if (!api) return;
-    let cancelled = false;
-    api.listComments(itemId).then(
-      (res: { items: CommentDto[]; nextOffset: number | null; total: number }) => {
-        if (!cancelled) {
-          setFlat(res.items);
-          setNextOffset(res.nextOffset);
-          setTotal(res.total);
-          setLoaded(true);
-        }
-      },
-      () => {
-        if (!cancelled) setLoaded(true);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [api, itemId]);
-
-  const add = React.useCallback(
-    async (parentId: number | null, body: string) => {
-      if (!api) return;
-      const res = await api.postComment(itemId, { body, parentId });
-      setFlat((prev) => [...prev, res.comment]);
-      if (parentId === null) setTotal((t) => t + 1);
-    },
-    [api, itemId],
+  // Состояние и сеть — общий хук из @zal/shared/react: тот же код на мобиле.
+  // Автор нужен для оптимистичной публикации; add/edit/remove реджектятся,
+  // и BodyForm не очищает текст при сбое.
+  const { comments, total, nextOffset, loaded, add, edit, remove, loadMore } = useComments(
+    api,
+    itemId,
+    { author: user },
   );
 
-  const edit = React.useCallback(
-    async (id: number, body: string) => {
-      if (!api) return;
-      const res = await api.editComment(id, { body });
-      setFlat((prev) => prev.map((c) => (c.id === id ? res.comment : c)));
-    },
-    [api],
-  );
-
-  const remove = React.useCallback(
-    async (id: number) => {
-      if (!api) return;
-      await api.deleteComment(id);
-      // Узел остаётся в дереве с пометкой «удалён».
-      setFlat((prev) =>
-        prev.map((c) => (c.id === id ? { ...c, deleted: true, body: "" } : c)),
-      );
-    },
-    [api],
-  );
-
-  const loadMore = React.useCallback(async () => {
-    if (!api || nextOffset == null) return;
-    const res = await api.listComments(itemId, { offset: nextOffset });
-    // Страхуемся от дублей при гонках.
-    setFlat((prev) => {
-      const seen = new Set(prev.map((c) => c.id));
-      return [...prev, ...res.items.filter((c) => !seen.has(c.id))];
-    });
-    setNextOffset(res.nextOffset);
-  }, [api, itemId, nextOffset]);
-
-  const tree = buildCommentTree(flat);
+  const tree = buildCommentTree(comments);
 
   return (
     <section className="mt-12" data-testid="comments">

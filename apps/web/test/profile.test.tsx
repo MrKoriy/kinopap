@@ -1,5 +1,5 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
-import type { HistoryEntryDto, ProfileOverviewDto, User } from "@zal/api-client";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { FavoriteDto, HistoryEntryDto, ProfileOverviewDto, User } from "@zal/api-client";
 import type * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -173,5 +173,93 @@ describe("ProfilePage (авторизован)", () => {
     expect(screen.getByTestId("favorites-grid")).toBeDefined();
     expect(screen.getByTestId("list-row")).toBeDefined();
     expect(screen.getByText("На вечер")).toBeDefined();
+  });
+});
+
+// Мутации идут через общий хук useProfileActions из @zal/shared/react —
+// здесь проверяется проводка (клик → оптимистичное изменение → API →
+// откат при сбое), сама логика отката — в packages/shared/test/profile-actions.test.ts.
+describe("ProfilePage (оптимистичные мутации)", () => {
+  it("удаляет запись истории сразу, при сбое возвращает, при успехе — нет", async () => {
+    const api = {
+      getProfileOverview: vi.fn().mockResolvedValue({
+        profile: makeOverview({
+          history: [makeHistory({ mediaId: 500 }), makeHistory({ mediaId: 501 })],
+        }),
+      }),
+      deleteHistoryEntry: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("сеть"))
+        .mockResolvedValue({ ok: true }),
+    };
+    mocks.auth = { user, api };
+
+    render(<ProfilePage />);
+    await waitFor(() => expect(screen.getAllByTestId("history-row")).toHaveLength(2));
+
+    // Первый клик: строка уходит сразу, сбой возвращает её.
+    fireEvent.click(screen.getAllByTestId("history-delete")[0]!);
+    await waitFor(() => expect(screen.getAllByTestId("history-row")).toHaveLength(1));
+    expect(api.deleteHistoryEntry).toHaveBeenCalledWith(500);
+    await waitFor(() => expect(screen.getAllByTestId("history-row")).toHaveLength(2));
+
+    // Второй клик: успех — строка остаётся удалённой.
+    fireEvent.click(screen.getAllByTestId("history-delete")[0]!);
+    await waitFor(() => expect(screen.getAllByTestId("history-row")).toHaveLength(1));
+    await waitFor(() => expect(api.deleteHistoryEntry).toHaveBeenCalledTimes(2));
+    expect(screen.getAllByTestId("history-row")).toHaveLength(1);
+  });
+
+  it("снимает тайтл с сохранённого сразу и возвращает при сбое", async () => {
+    const favorite: FavoriteDto = {
+      itemId: 10,
+      createdAt: "2026-09-01T00:00:00.000Z",
+      item: { id: 10, type: "serial", title: "Тестовый сериал", year: 2024, posterMedium: null, rating: 8.4 },
+    };
+    const api = {
+      getProfileOverview: vi.fn().mockResolvedValue({
+        profile: makeOverview({ favorites: [favorite] }),
+      }),
+      removeFavorite: vi.fn().mockRejectedValue(new Error("сеть")),
+    };
+    mocks.auth = { user, api };
+
+    render(<ProfilePage />);
+    await waitFor(() => expect(screen.getByTestId("favorite-card")).toBeDefined());
+
+    fireEvent.click(screen.getByTestId("favorite-remove"));
+    await waitFor(() => expect(screen.queryByTestId("favorite-card")).toBeNull());
+    expect(api.removeFavorite).toHaveBeenCalledWith(10);
+    await waitFor(() => expect(screen.getByTestId("favorite-card")).toBeDefined());
+  });
+
+  it("удаляет подборку сразу и возвращает при сбое", async () => {
+    const api = {
+      getProfileOverview: vi.fn().mockResolvedValue({
+        profile: makeOverview({
+          lists: [
+            {
+              id: 1,
+              title: "На вечер",
+              description: null,
+              isPublic: false,
+              itemCount: 2,
+              createdAt: "2026-09-01T00:00:00.000Z",
+              updatedAt: "2026-09-02T00:00:00.000Z",
+            },
+          ],
+        }),
+      }),
+      deleteList: vi.fn().mockRejectedValue(new Error("сеть")),
+    };
+    mocks.auth = { user, api };
+
+    render(<ProfilePage />);
+    await waitFor(() => expect(screen.getByTestId("list-row")).toBeDefined());
+
+    fireEvent.click(screen.getByTestId("list-delete"));
+    await waitFor(() => expect(screen.queryByTestId("list-row")).toBeNull());
+    expect(api.deleteList).toHaveBeenCalledWith(1);
+    await waitFor(() => expect(screen.getByTestId("list-row")).toBeDefined());
   });
 });

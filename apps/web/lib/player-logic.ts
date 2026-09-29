@@ -144,6 +144,22 @@ export function bufferedSegments(
   return out;
 }
 
+/**
+ * Равны ли отрезки буфера по значениям, а не по ссылке.
+ *
+ * Снимок буфера собирается заново на каждый тик `useBufferedRanges`, так что
+ * ссылка всегда новая. Без сравнения по значениям новый массив попадал бы в
+ * состояние четыре раза в секунду даже при неизменной полосе — и React.memo
+ * контролов проваливался бы на пропе `buffered`.
+ */
+export function segmentsEqual(a: BufferedSegment[], b: BufferedSegment[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i].start !== b[i].start || a[i].end !== b[i].end) return false;
+  }
+  return true;
+}
+
 /* ---------- Перебор раздач ---------- */
 
 /**

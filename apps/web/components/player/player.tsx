@@ -1,7 +1,7 @@
 "use client";
 
 import type { AudioTrack, MediaLinks, SpriteMetaDto } from "@zal/api-client";
-import { pollMediaTracks } from "@zal/shared";
+import { PLAYBACK_SPEEDS, pollMediaTracks } from "@zal/shared";
 import type HlsJs from "hls.js";
 import { useRouter } from "next/navigation";
 /**
@@ -61,8 +61,6 @@ export interface PlayerProps {
   /** Первое реальное воспроизведение: watch-страница греет следующую серию. */
   onPlaybackStart?: () => void;
 }
-
-const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 export function Player({
   links,
@@ -295,6 +293,9 @@ export function Player({
   });
 
   /* ---------- События видео ---------- */
+  // Таймер ретрая video.load(): гасим при размонтировании, иначе колбэк
+  // выстрелит по уже отсоединённому <video>.
+  const loadRetryTimerRef = React.useRef<number | null>(null);
   React.useEffect(() => {
     const video = videoRef.current;
     if (!video) return;
@@ -331,7 +332,8 @@ export function Player({
       if (err.code === 2 && gstRetryRef.current < 1) {
         gstRetryRef.current += 1;
         setIsBuffering(true);
-        window.setTimeout(() => {
+        loadRetryTimerRef.current = window.setTimeout(() => {
+          loadRetryTimerRef.current = null;
           video.load();
           tryAutoplayRef.current();
         }, 1_500);
@@ -359,6 +361,10 @@ export function Player({
     video.addEventListener("error", onError);
     video.addEventListener("volumechange", onVolume);
     return () => {
+      if (loadRetryTimerRef.current !== null) {
+        window.clearTimeout(loadRetryTimerRef.current);
+        loadRetryTimerRef.current = null;
+      }
       video.removeEventListener("timeupdate", onTime);
       video.removeEventListener("loadedmetadata", onMeta);
       video.removeEventListener("play", onPlay);
@@ -693,7 +699,7 @@ export function Player({
             volume={volume}
             muted={muted}
             playbackRate={playbackRate}
-            speeds={SPEEDS}
+            speeds={PLAYBACK_SPEEDS}
             shiftMs={shiftMs}
             audioTracks={audioTrackOptions}
             activeAudio={activeAudio}
@@ -717,8 +723,8 @@ export function Player({
             onAudio={changeAudio}
             onSubtitle={changeSubtitle}
             onShift={shiftSubtitles}
-            onPip={() => void togglePip()}
-            onFullscreen={() => void toggleFullscreen()}
+            onPip={togglePip}
+            onFullscreen={toggleFullscreen}
           />
         </PlayerTimeContext.Provider>
       </div>

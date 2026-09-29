@@ -6,6 +6,7 @@ import {
   type BufferedSegment,
   bufferedSegments,
   parseVtt,
+  segmentsEqual,
   type SubtitleCue as VttCue,
 } from "@/lib/player-logic";
 
@@ -45,6 +46,9 @@ export function useBufferedRanges(
   resetKey: string,
 ): BufferedSegment[] {
   const [buffered, setBuffered] = React.useState<BufferedSegment[]>([]);
+  // Последний выставленный снимок: снимок в state — уже история (React может
+  // батчить), а ref даёт сравнивать с тем, что реально ушло в контролы.
+  const lastSnapshot = React.useRef<BufferedSegment[]>([]);
 
   React.useEffect(() => {
     const video = videoRef.current;
@@ -64,7 +68,12 @@ export function useBufferedRanges(
       for (let i = 0; i < video.buffered.length; i += 1) {
         ranges.push({ start: video.buffered.start(i), end: video.buffered.end(i) });
       }
-      setBuffered(bufferedSegments(ranges, video.duration || 0));
+      const next = bufferedSegments(ranges, video.duration || 0);
+      // Полоса почти всегда не меняется между тиками — setState с новым
+      // массивом рвал бы мемоизацию контролов четыре раза в секунду.
+      if (segmentsEqual(lastSnapshot.current, next)) return;
+      lastSnapshot.current = next;
+      setBuffered(next);
     };
 
     video.addEventListener("progress", snapshot);
@@ -84,6 +93,9 @@ export function useBufferedRanges(
     // считает зависимость лишней и предлагает её убрать — тогда эффект
     // перестал бы срабатывать вовсе.
     void resetKey;
+    // Иначе после смены источника первый снимок, равный старому по значениям,
+    // был бы отброшен сравнением — полоса осталась бы пустой.
+    lastSnapshot.current = [];
     setBuffered([]);
   }, [resetKey]);
 

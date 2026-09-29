@@ -7,6 +7,7 @@ import type {
   UserListDetailDto,
   UserListDto,
 } from "@zal/api-client";
+import { useProfileActions } from "@zal/shared/react";
 import Link from "next/link";
 /**
  * Личный кабинет: история просмотра, сохранённое и подборки. Всё персонально,
@@ -67,6 +68,16 @@ export default function ProfilePage() {
     };
   }, [api, user]);
 
+  // Общий цикл оптимистичных апдейтов (снимок → сеттеры → API → откат) —
+  // хук из @zal/shared/react; сюда приходят только входы: клиент, ячейки
+  // состояния и политика счётчиков. Веб при сбое счётчики возвращает.
+  const actions = useProfileActions({
+    api,
+    state: { stats, history, favorites, lists, openList },
+    setters: { setStats, setHistory, setFavorites, setLists, setOpenList },
+    revertStatsOnFailure: true,
+  });
+
   if (!user || !api) {
     return (
       <main className="mx-auto max-w-4xl px-4 py-16 text-center" data-testid="profile-page">
@@ -87,47 +98,6 @@ export default function ProfilePage() {
 
   /* ---------- Оптимистичные апдейты: UI меняется сразу, при сбое — откат ---------- */
 
-  const removeHistory = async (entry: HistoryEntryDto) => {
-    if (!api) return;
-    const prevHistory = history;
-    const prevStats = stats;
-    setHistory((cur) => cur.filter((h) => h.mediaId !== entry.mediaId));
-    setStats((s) => (s ? { ...s, history: Math.max(0, s.history - 1) } : s));
-    try {
-      await api.deleteHistoryEntry(entry.mediaId);
-    } catch {
-      setHistory(prevHistory);
-      setStats(prevStats);
-    }
-  };
-
-  const clearHistory = async () => {
-    if (!api) return;
-    const prevHistory = history;
-    const prevStats = stats;
-    setHistory([]);
-    setStats((s) => (s ? { ...s, history: 0 } : s));
-    try {
-      await api.clearHistory();
-    } catch {
-      setHistory(prevHistory);
-      setStats(prevStats);
-    }
-  };
-
-  const removeFavorite = async (itemId: number) => {
-    if (!api) return;
-    const prev = favorites;
-    setFavorites((cur) => cur.filter((f) => f.itemId !== itemId));
-    setStats((s) => (s ? { ...s, favorites: Math.max(0, s.favorites - 1) } : s));
-    try {
-      await api.removeFavorite(itemId);
-    } catch {
-      setFavorites(prev);
-      setStats((s) => (s ? { ...s, favorites: s.favorites + 1 } : s));
-    }
-  };
-
   const createList = async (input: {
     title: string;
     description: string | null;
@@ -141,20 +111,6 @@ export default function ProfilePage() {
       return true;
     } catch {
       return false;
-    }
-  };
-
-  const deleteList = async (listId: number) => {
-    if (!api) return;
-    const prev = lists;
-    setLists((cur) => cur.filter((l) => l.id !== listId));
-    setStats((s) => (s ? { ...s, lists: Math.max(0, s.lists - 1) } : s));
-    if (openList?.id === listId) setOpenList(null);
-    try {
-      await api.deleteList(listId);
-    } catch {
-      setLists(prev);
-      setStats((s) => (s ? { ...s, lists: s.lists + 1 } : s));
     }
   };
 
@@ -234,14 +190,14 @@ export default function ProfilePage() {
       <HistorySection
         history={history}
         loaded={loaded}
-        onRemoveEntry={(entry) => void removeHistory(entry)}
-        onClear={() => void clearHistory()}
+        onRemoveEntry={(entry) => void actions.removeHistoryEntry(entry.mediaId)}
+        onClear={() => void actions.clearHistory()}
       />
 
       <FavoritesSection
         favorites={favorites}
         loaded={loaded}
-        onRemove={(itemId) => void removeFavorite(itemId)}
+        onRemove={(itemId) => void actions.removeFavorite(itemId)}
       />
 
       <ListsSection
@@ -251,7 +207,7 @@ export default function ProfilePage() {
         onOpenList={(listId) => void openListDetail(listId)}
         onCloseList={() => setOpenList(null)}
         onCreate={createList}
-        onDelete={(listId) => void deleteList(listId)}
+        onDelete={(listId) => void actions.deleteList(listId)}
         onRemoveItem={(listId, itemId) => void removeFromList(listId, itemId)}
       />
     </main>
