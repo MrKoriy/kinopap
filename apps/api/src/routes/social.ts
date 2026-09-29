@@ -24,30 +24,21 @@ import {
   listCommentsPage,
   listNewEpisodes,
   listSubscriptions,
+  ParentCommentNotFoundError,
   removeVote,
   setVote,
   softDeleteComment,
   updateComment,
   upsertSubscription,
 } from "@zal/db";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { badRequest, forbidden, notFound, parseOrThrow } from "../lib/http";
-import type { AccessPayload } from "../plugins/auth";
+import { optionalUser, requireProfileId } from "../plugins/auth";
 
 const idParamsSchema = z.object({ id: z.coerce.number().int().positive() });
 const subParamsSchema = z.object({ itemId: z.coerce.number().int().positive() });
-
-/** Опциональная анонимка: невалидный токен — это просто гость, не 401. */
-async function optionalUser(request: FastifyRequest): Promise<AccessPayload | null> {
-  try {
-    await request.jwtVerify();
-    return request.user.typ === "access" ? request.user : null;
-  } catch {
-    return null;
-  }
-}
 
 export async function socialRoutes(
   app: FastifyInstance,
@@ -66,11 +57,16 @@ export async function socialRoutes(
   app.get("/items/:id/social", async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const user = await optionalUser(request);
-    const profile = user ? await getDefaultProfile(db, user.sub) : null;
+    // pid из токена; старый токен без pid — дорезолв из БД.
+    const profileId = user
+      ? (user.pid ?? (await getDefaultProfile(db, user.sub)).id)
+      : null;
 
-    const vote = await getVoteState(db, profile?.id ?? null, id);
+    const vote = await getVoteState(db, profileId, id);
     if (!vote) throw notFound(`Item ${id} not found`);
-    const subscription = profile ? await getSubscription(db, profile.id, id) : null;
+    const subscription = profileId != null
+      ? await getSubscription(db, profileId, id)
+      : null;
     const commentsCount = await countComments(db, id);
 
     return { social: { vote, subscription, commentsCount } };
@@ -91,17 +87,17 @@ export async function socialRoutes(
     const body = parseOrThrow(commentPostSchema, request.body);
     await assertItem(id);
 
-    const profile = await getDefaultProfile(db, request.user.sub);
+    const profileId = await requireProfileId(db, request);
     let comment: CommentDto;
     try {
       comment = await addComment(db, {
         itemId: id,
-        profileId: profile.id,
+        profileId: profileId,
         parentId: body.parentId ?? null,
         body: body.body,
       });
     } catch (err) {
-      if (err instanceof Error && err.message === "parent_not_found") {
+      if (err instanceof ParentCommentNotFoundError) {
         throw badRequest("parent_not_found", "Родительский комментарий не найден");
       }
       throw err;
@@ -147,8 +143,8 @@ export async function socialRoutes(
 
   app.get("/items/:id/vote", { preHandler: app.authenticate }, async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const vote = await getVoteState(db, profile.id, id);
+    const profileId = await requireProfileId(db, request);
+    const vote = await getVoteState(db, profileId, id);
     if (!vote) throw notFound(`Item ${id} not found`);
     return { vote };
   });
@@ -157,42 +153,42 @@ export async function socialRoutes(
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const body = parseOrThrow(votePutSchema, request.body);
     await assertItem(id);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return { vote: await setVote(db, profile.id, id, body.positive) };
+    const profileId = await requireProfileId(db, request);
+    return { vote: await setVote(db, profileId, id, body.positive) };
   });
 
   app.delete("/items/:id/vote", { preHandler: app.authenticate }, async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     await assertItem(id);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return { vote: await removeVote(db, profile.id, id) };
+    const profileId = await requireProfileId(db, request);
+    return { vote: await removeVote(db, profileId, id) };
   });
 
   /* ---------- Подписки ---------- */
 
   app.get("/subscriptions", { preHandler: app.authenticate }, async (request) => {
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return { items: await listSubscriptions(db, profile.id) };
+    const profileId = await requireProfileId(db, request);
+    return { items: await listSubscriptions(db, profileId) };
   });
 
   /** Лента «новое по подпискам»: серии и части, что ещё не досмотрены. */
   app.get("/subscriptions/new-episodes", { preHandler: app.authenticate }, async (request) => {
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return listNewEpisodes(db, profile.id);
+    const profileId = await requireProfileId(db, request);
+    return listNewEpisodes(db, profileId);
   });
 
   app.put("/subscriptions/:itemId", { preHandler: app.authenticate }, async (request) => {
     const { itemId } = parseOrThrow(subParamsSchema, request.params);
     const body = parseOrThrow(subscriptionPutSchema, request.body ?? {});
     await assertItem(itemId);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return { subscription: await upsertSubscription(db, profile.id, itemId, body.notify) };
+    const profileId = await requireProfileId(db, request);
+    return { subscription: await upsertSubscription(db, profileId, itemId, body.notify) };
   });
 
   app.delete("/subscriptions/:itemId", { preHandler: app.authenticate }, async (request) => {
     const { itemId } = parseOrThrow(subParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    await deleteSubscription(db, profile.id, itemId);
+    const profileId = await requireProfileId(db, request);
+    await deleteSubscription(db, profileId, itemId);
     return { subscription: null };
   });
 }

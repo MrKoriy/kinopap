@@ -35,6 +35,36 @@ async function registerUser(
 }
 
 describe("profile: сохранённое", () => {
+  it("токен без pid (выдан до pid в payload) дорезолвит профиль из БД", async () => {
+    const app = await createTestApp();
+    const ids = await makeFixtures(app.db);
+    // Живой токен с pid — работает.
+    const token = await registerUser(app, "pid-ok@zal.local");
+    const auth = { authorization: `Bearer ${token}` };
+    const added = await app.app.inject({
+      method: "PUT",
+      url: `/v1/favorites/${ids.movie}`,
+      headers: auth,
+    });
+    expect(added.statusCode).toBe(200);
+
+    // Ручная подпись без pid: старые токены не должны ломать роуты.
+    const [user] = await app.db.select().from(users).where(eq(users.email, "pid-ok@zal.local"));
+    const legacy = app.app.jwt.sign({
+      sub: user!.id,
+      role: "member",
+      typ: "access",
+    });
+    const res = await app.app.inject({
+      method: "GET",
+      url: "/v1/favorites",
+      headers: { authorization: `Bearer ${legacy}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const dto = favoriteListResponseSchema.parse(res.json());
+    expect(dto.items.length).toBe(1);
+  });
+
   it("добавляет, идемпотентно повторяет и убирает закладку", async () => {
     const app = await createTestApp();
     const ids = await makeFixtures(app.db);

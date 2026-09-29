@@ -27,6 +27,7 @@ import {
   itemProgressSchema,
   itemSocialResponseSchema,
   itemSummarySchema,
+  loginSchema,
   mediaLinksSchema,
   mediaTracksSchema,
   newEpisodeSchema,
@@ -37,6 +38,8 @@ import {
   progressPutSchema,
   progressSchema,
   refreshResponseSchema,
+  refreshSchema,
+  registerSchema,
   subscriptionListResponseSchema,
   subscriptionPutSchema,
   subscriptionResponseSchema,
@@ -53,6 +56,7 @@ import {
   voteStateSchema,
 } from "@zal/api-client";
 import { z } from "zod";
+import { discoverBodySchema } from "./routes/discovery";
 
 const errorResponse = {
   description: "Ошибка",
@@ -120,6 +124,40 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           summary: "Текущий пользователь",
           security: [{ bearerAuth: [] }],
           responses: { 200: jsonBody("MeResponse"), 401: errorResponse },
+        },
+      },
+      "/v1/invites": {
+        get: {
+          summary: "Список инвайтов (owner/admin)",
+          security: [{ bearerAuth: [] }],
+          responses: { 200: jsonBody("InvitesResponse"), 401: errorResponse, 403: errorResponse },
+        },
+        post: {
+          summary: "Создать инвайт (owner/admin)",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonBody("InviteCreateInput"),
+          responses: { 201: jsonBody("InviteResponse"), 400: errorResponse, 401: errorResponse, 403: errorResponse },
+        },
+      },
+      "/v1/discover": {
+        post: {
+          summary: "Наполнение каталога из TMDb/AniLibria (owner/admin)",
+          description:
+            "Со включённым Redis — постановка фоновой джобы (queued: true, jobId), " +
+            "без Redis — синхронный прогон с summary в ответе.",
+          security: [{ bearerAuth: [] }],
+          requestBody: jsonBody("DiscoverInput"),
+          responses: { 200: jsonBody("DiscoverResponse"), 400: errorResponse, 401: errorResponse, 403: errorResponse },
+        },
+      },
+      "/v1/discover/status": {
+        get: {
+          summary: "Прогресс фоновой заливки каталога (owner/admin)",
+          security: [{ bearerAuth: [] }],
+          parameters: [
+            { name: "job", in: "query", required: true, schema: { type: "string" } },
+          ],
+          responses: { 200: jsonBody("DiscoverStatusResponse"), 401: errorResponse, 403: errorResponse, 404: errorResponse },
         },
       },
       "/v1/types": {
@@ -516,28 +554,61 @@ export function buildOpenApiSpec(): Record<string, unknown> {
           type: "object",
           properties: { user: { $ref: "#/components/schemas/User" } },
         },
-        RegisterInput: {
+        RegisterInput: z.toJSONSchema(registerSchema),
+        LoginInput: z.toJSONSchema(loginSchema),
+        RefreshInput: z.toJSONSchema(refreshSchema),
+        InviteCreateInput: {
           type: "object",
-          required: ["invite", "email", "password", "name"],
           properties: {
-            invite: { type: "string" },
-            email: { type: "string", format: "email" },
-            password: { type: "string", minLength: 8 },
-            name: { type: "string" },
+            maxUses: { type: "integer", minimum: 1, maximum: 100, default: 1 },
+            expiresInDays: { type: "integer", minimum: 1, maximum: 365 },
           },
         },
-        LoginInput: {
+        Invite: {
           type: "object",
-          required: ["email", "password"],
+          required: ["code", "maxUses", "uses", "expiresAt"],
           properties: {
-            email: { type: "string", format: "email" },
-            password: { type: "string" },
+            code: { type: "string" },
+            maxUses: { type: "integer" },
+            uses: { type: "integer" },
+            expiresAt: { type: ["string", "null"], format: "date-time" },
+            createdAt: { type: "string", format: "date-time" },
           },
         },
-        RefreshInput: {
+        InviteResponse: {
           type: "object",
-          required: ["refreshToken"],
-          properties: { refreshToken: { type: "string" } },
+          properties: { invite: { $ref: "#/components/schemas/Invite" } },
+        },
+        InvitesResponse: {
+          type: "object",
+          properties: {
+            invites: { type: "array", items: { $ref: "#/components/schemas/Invite" } },
+          },
+        },
+        DiscoverInput: z.toJSONSchema(discoverBodySchema),
+        DiscoverResponse: {
+          type: "object",
+          description:
+            "queued=true — задача в фоне (jobId для /v1/discover/status); " +
+            "queued=false — синхронный прогон с итогом summary.",
+          properties: {
+            queued: { type: "boolean" },
+            jobId: { type: "string" },
+            summary: { type: "object", description: "FillSummary" },
+          },
+        },
+        DiscoverStatusResponse: {
+          type: "object",
+          properties: {
+            jobId: { type: "string" },
+            state: {
+              type: "string",
+              enum: ["queued", "active", "completed", "failed", "unknown"],
+            },
+            progress: { type: ["object", "null"], description: "FillProgress" },
+            result: { type: ["object", "null"], description: "FillSummary" },
+            error: { type: ["string", "null"] },
+          },
         },
         Health: { type: "object", properties: { ok: { type: "boolean" } } },
         ItemSummary: z.toJSONSchema(itemSummarySchema),

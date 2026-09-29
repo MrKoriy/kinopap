@@ -19,14 +19,14 @@ import {
   type FillSummary,
   fillCatalog,
 } from "@zal/ingest";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { type CatalogFillQueue, noopCatalogFillQueue } from "../ingest-queue";
 import { badRequest, forbidden, notFound, parseOrThrow } from "../lib/http";
-import type { AccessPayload } from "../plugins/auth";
+import { requireRole } from "../plugins/auth";
 
-const discoverBodySchema = z.object({
+export const discoverBodySchema = z.object({
   /** Старый режим: тренды + популярное (страницы 1..5). */
   pages: z.coerce.number().int().min(1).max(5).optional(),
   /** Имена коллекций TMDb: импортируются все части (до 150 имён за вызов). */
@@ -37,20 +37,22 @@ const discoverBodySchema = z.object({
   yearPages: z.coerce.number().int().min(1).max(10).optional(),
   /** Порог голосов TMDb: ниже — уже не « кино », а случайные строки. */
   minVotes: z.coerce.number().int().min(0).max(500).optional(),
-  /** Жанровая матрица (хвост) — включается по умолчанию вместе с годами. */
-  genreMatrix: z.coerce.boolean().optional(),
+  /** Жанровая матрица (хвост) — включается по умолчанию вместе с годами.
+   * z.boolean: тело — JSON, булевы приходят настоящими. coerce.boolean
+   * читал строку "false" как true. */
+  genreMatrix: z.boolean().optional(),
   genrePages: z.coerce.number().int().min(1).max(5).optional(),
   /** Discover по странам происхождения (KR/JP/IN/…). */
   countries: z.array(z.string().length(2)).max(30).optional(),
   countryPages: z.coerce.number().int().min(1).max(5).optional(),
   /** top_rated + trending + популярное. */
-  lists: z.coerce.boolean().optional(),
+  lists: z.boolean().optional(),
   /** Импорт каталога AniLibria (по умолчанию включён). */
-  anime: z.coerce.boolean().optional(),
+  anime: z.boolean().optional(),
   /** Сколько аниме-релизов импортировать за прогон. */
   animeLimit: z.coerce.number().int().min(1).max(5000).optional(),
   /** Склейка дублей после заливки (по умолчанию включена). */
-  dedupe: z.coerce.boolean().optional(),
+  dedupe: z.boolean().optional(),
 });
 
 type DiscoverBody = z.infer<typeof discoverBodySchema>;
@@ -101,15 +103,6 @@ export function buildFillSpec(body: DiscoverBody): FillSpec {
   return spec;
 }
 
-async function requireFillAccess(request: FastifyRequest): Promise<void> {
-  await request.jwtVerify();
-  const user = request.user as AccessPayload;
-  if (user.typ !== "access") throw forbidden("Access token required");
-  if (request.user.role !== "owner" && request.user.role !== "admin") {
-    throw forbidden("Discovery is available to owner/admin only");
-  }
-}
-
 export async function discoveryRoutes(
   app: FastifyInstance,
   deps: { db: Db; config: Config; catalogQueue?: CatalogFillQueue },
@@ -120,11 +113,12 @@ export async function discoveryRoutes(
   app.post(
     "/discover",
     {
-      preHandler: app.authenticate,
+      // Раньше роль проверяли в теле хендлера повторным jwtVerify —
+      // authenticate уже всё сделал, дублируем только allow-list.
+      preHandler: [app.authenticate, requireRole("owner", "admin")],
       config: { rateLimit: { max: 40, timeWindow: "10 minutes" } },
     },
     async (request) => {
-      await requireFillAccess(request);
       if (!config.tmdbApiKey) {
         throw forbidden("TMDB_API_KEY is not configured on the server");
       }
@@ -156,11 +150,10 @@ export async function discoveryRoutes(
   app.get(
     "/discover/status",
     {
-      preHandler: app.authenticate,
+      preHandler: [app.authenticate, requireRole("owner", "admin")],
       config: { rateLimit: { max: 120, timeWindow: "1 minute" } },
     },
     async (request) => {
-      await requireFillAccess(request);
       const q = parseOrThrow(
         z.object({ job: z.string().min(1).max(64) }),
         request.query ?? {},

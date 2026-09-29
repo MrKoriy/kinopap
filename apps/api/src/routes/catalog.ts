@@ -31,12 +31,12 @@ import {
 } from "@zal/db";
 import { StreamResolver } from "@zal/ingest";
 import { and, eq, sql } from "drizzle-orm";
-import type { FastifyInstance, FastifyRequest } from "fastify";
+import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
 import { hydrateSerialSeasons, tmdbLookup } from "../lib/tmdb";
-import type { AccessPayload } from "../plugins/auth";
+import { optionalUser } from "../plugins/auth";
 
 const idParamsSchema = z.object({ id: z.coerce.number().int().positive() });
 const mediaLinksQuerySchema = z.object({ mid: z.coerce.number().int().positive() });
@@ -46,6 +46,8 @@ const mediaLinksQuerySchema = z.object({ mid: z.coerce.number().int().positive()
 const RESOLVE_CACHE_TTL_MS = 30 * 60 * 1000;
 /** TTL кэша в БД: переживает рестарт API, но не копится бесконечно. */
 const RESOLVE_DB_TTL_MS = 6 * 60 * 60 * 1000;
+/** Бюджет ожидания ленивой гидрации сезонов в request path. */
+const HYDRATE_AWAIT_BUDGET_MS = 2_500;
 
 /** Одна запись кэша резолва (L1 — память процесса). */
 interface ResolveCacheEntry {
@@ -55,16 +57,6 @@ interface ResolveCacheEntry {
   intro: IntroMarker | null;
   /** Прогретый релиз; null — прогрев ещё едет или провалился. */
   warm: WarmRelease | null;
-}
-
-/** Опциональная авторизация: гость — это гость, а не 401. */
-async function optionalUser(request: FastifyRequest): Promise<AccessPayload | null> {
-  try {
-    await request.jwtVerify();
-    return request.user.typ === "access" ? request.user : null;
-  } catch {
-    return null;
-  }
 }
 
 
@@ -79,6 +71,33 @@ export async function catalogRoutes(
   const resolveCache = new Map<string, ResolveCacheEntry>();
   /** Одновременные пробы дорожек на одну пару не должны дублироваться. */
   const trackProbes = new Map<string, Promise<MediaTracks>>();
+  /** Параллельные холодные резолвы одной пары (item, media) — один прогон. */
+  const linkResolves = new Map<string, Promise<ResolveCacheEntry | null>>();
+  /** Потолок L1: без него долгоживущий процесс копит запись на каждую
+   * пару до рестарта (медленная утечка под PM2). Обрезка — протухшие +
+   * старейшие (Map хранит порядок вставки). */
+  const RESOLVE_CACHE_MAX = 500;
+
+  const makeEntry = (
+    files: MediaFile[],
+    audios: MediaTracks["audios"],
+    intro: IntroMarker | null,
+    warm: WarmRelease | null,
+  ): ResolveCacheEntry => ({ at: Date.now(), files, audios, intro, warm });
+
+  function cacheResolveEntry(key: string, entry: ResolveCacheEntry): void {
+    resolveCache.set(key, entry);
+    if (resolveCache.size <= RESOLVE_CACHE_MAX) return;
+    const now = Date.now();
+    for (const [k, v] of resolveCache) {
+      if (now - v.at >= RESOLVE_CACHE_TTL_MS) resolveCache.delete(k);
+    }
+    while (resolveCache.size > RESOLVE_CACHE_MAX) {
+      const oldest = resolveCache.keys().next().value;
+      if (oldest === undefined) break;
+      resolveCache.delete(oldest);
+    }
+  }
 
   /** Сезон и серия media — их ждёт резолвер (поиск «s01e05», эпизоды аниме). */
   async function episodeContext(
@@ -255,14 +274,32 @@ export async function catalogRoutes(
     if (!item) throw notFound(`Item ${id} not found`);
 
     // Сериал без эпизодов (заливка из TMDb) — дотягиваем сезоны лениво.
+    // Раньше ждали всю гидрацию в request path: длинный сериал (десятки
+    // сезонов, батчи по 4) держал первого зрителя десятки секунд. Теперь
+    // короткий бюджет: успела — ответ уже с сезонами; не успела — едет
+    // фоном (in-flight дедуп внутри), ISR-страница подхватит на
+    // revalidate. Сбой гидрации больше не роняет карточку — просто
+    // останется без списка серий.
     if (item.type === "serial" && item.seasons && item.seasons.length === 0) {
-      const hydrated = await hydrateSerialSeasons(
+      const hydrating = hydrateSerialSeasons(
         db,
         config,
         item.id,
         item.tmdb.id ?? 0,
-      );
-      if (hydrated) item = (await getItem(db, id)) ?? item;
+      ).catch(() => false);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let fast = false;
+      try {
+        fast = await Promise.race([
+          hydrating,
+          new Promise<false>((resolve) => {
+            timer = setTimeout(() => resolve(false), HYDRATE_AWAIT_BUDGET_MS);
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (fast) item = (await getItem(db, id)) ?? item;
     }
     return item;
   });
@@ -274,7 +311,10 @@ export async function catalogRoutes(
   });
 
   /** Ссылки на видео/аудио/субтитры для media (их /items/media-links). */
-  app.get("/items/:id/media-links", async (request) => {
+  app.get(
+    "/items/:id/media-links",
+    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const { mid } = parseOrThrow(mediaLinksQuerySchema, request.query ?? {});
     let links = await mediaLinks(db, id, mid, config.mediaBaseUrl);
@@ -316,86 +356,98 @@ export async function catalogRoutes(
       // кэш жил только в памяти, и каждый деплой обнулял прогретые торренты.
       const stored = await getSource(db, id, links.mediaId).catch(() => null);
       if (stored && isSourceFresh(stored, RESOLVE_DB_TTL_MS)) {
-        const entry: ResolveCacheEntry = {
-          at: Date.now(),
-          files: stored.files,
-          audios: stored.audios,
-          intro: stored.intro,
-          warm: stored.warm,
-        };
-        resolveCache.set(cacheKey, entry);
+        const entry = makeEntry(stored.files, stored.audios, stored.intro, stored.warm);
+        cacheResolveEntry(cacheKey, entry);
         applyCached(links, entry);
         return links;
       }
 
-      const item = await getItem(db, id);
-      if (item) {
-        // external id — точный матч релиза AniLibria для аниме-тайтлов.
-        const [ext] = await db
-          .select({ source: items.externalSource, id: items.externalId })
-          .from(items)
-          .where(eq(items.id, id))
-          .limit(1);
-        const { seasonNumber, episodeNumber } = await episodeContext(db, links.mediaId);
-        const startedAt = Date.now();
-        const resolved = await streamResolver.resolve({
-          itemId: id,
-          mediaId: links.mediaId,
-          title: item.title,
-          originalTitle: item.originalTitle,
-          year: item.year,
-          type: item.type,
-          seasonNumber: seasonNumber ?? undefined,
-          episodeNumber: episodeNumber ?? undefined,
-          externalSource: ext?.source ?? null,
-          externalId: ext?.id ?? null,
-          warm: stored?.warm ?? null,
-        });
-        if (resolved.files.length > 0) {
-          links.files = resolved.files;
-          if (resolved.audios.length > 0) {
-            links.audios = resolved.audios;
+      // In-flight дедуп: холодный резолв ходит в rutor/AniLibria/TorrServer
+      // секундами — N параллельных запросов на одну пару гоняли N полных
+      // резолвов (шторм по внешним сервисам, гонка за кэш).
+      let task = linkResolves.get(cacheKey);
+      if (!task) {
+        task = resolveZeroStorage(id, links.mediaId, stored?.warm ?? null);
+        linkResolves.set(cacheKey, task);
+      }
+      try {
+        const entry = await task;
+        if (entry) {
+          links.files = entry.files;
+          if (entry.audios.length > 0) {
+            links.audios = entry.audios;
           }
-          if (resolved.intro && !links.intro) {
-            links.intro = resolved.intro;
-          }
-          const entry: ResolveCacheEntry = {
-            at: Date.now(),
-            files: resolved.files,
-            audios: resolved.audios,
-            intro: resolved.intro,
-            warm: resolved.warm,
-          };
-          resolveCache.set(cacheKey, entry);
-          console.log(
-            `resolve: item=${id} media=${links.mediaId} in ${Date.now() - startedAt}ms ` +
-              `files=${resolved.files.length} warm=${resolved.warm ? "ready" : "pending"}`,
-          );
-          void saveSource(db, {
-            itemId: id,
-            mediaId: links.mediaId,
-            files: resolved.files,
-            audios: resolved.audios,
-            intro: resolved.intro,
-            warm: resolved.warm,
-          }).catch(() => {
-            // Кэш в БД опционален — падение записи не должно ломать просмотр.
-          });
-          // Прогрев не уложился в бюджет — допишем, когда доехает.
-          if (!resolved.warm) {
-            void streamResolver
-              .warmFor(id, links.mediaId)
-              .then((warm) =>
-                warm ? patchSource(db, id, links.mediaId, { warm }) : undefined,
-              )
-              .catch(() => {});
+          if (entry.intro && !links.intro) {
+            links.intro = entry.intro;
           }
         }
+      } finally {
+        linkResolves.delete(cacheKey);
       }
     }
 
     return links;
-  });
+    },
+  );
+
+  /** Один холодный резолв пары (item, media): внешний мир → entry кэша. */
+  async function resolveZeroStorage(
+    id: number,
+    mediaId: number,
+    warm: WarmRelease | null,
+  ): Promise<ResolveCacheEntry | null> {
+    const item = await getItem(db, id);
+    if (!item) return null;
+    // external id — точный матч релиза AniLibria для аниме-тайтлов.
+    const [ext] = await db
+      .select({ source: items.externalSource, id: items.externalId })
+      .from(items)
+      .where(eq(items.id, id))
+      .limit(1);
+    const { seasonNumber, episodeNumber } = await episodeContext(db, mediaId);
+    const startedAt = Date.now();
+    const resolved = await streamResolver.resolve({
+      itemId: id,
+      mediaId,
+      title: item.title,
+      originalTitle: item.originalTitle,
+      year: item.year,
+      type: item.type,
+      seasonNumber: seasonNumber ?? undefined,
+      episodeNumber: episodeNumber ?? undefined,
+      externalSource: ext?.source ?? null,
+      externalId: ext?.id ?? null,
+      warm,
+    });
+    if (resolved.files.length === 0) return null;
+
+    const entry = makeEntry(resolved.files, resolved.audios, resolved.intro, resolved.warm);
+    cacheResolveEntry(`${id}:${mediaId}`, entry);
+    console.log(
+      `resolve: item=${id} media=${mediaId} in ${Date.now() - startedAt}ms ` +
+        `files=${resolved.files.length} warm=${resolved.warm ? "ready" : "pending"}`,
+    );
+    void saveSource(db, {
+      itemId: id,
+      mediaId,
+      files: resolved.files,
+      audios: resolved.audios,
+      intro: resolved.intro,
+      warm: resolved.warm,
+    }).catch(() => {
+      // Кэш в БД опционален — падение записи не должно ломать просмотр.
+    });
+    // Прогрев не уложился в бюджет — допишем, когда доехает.
+    if (!resolved.warm) {
+      void streamResolver
+        .warmFor(id, mediaId)
+        .then((warm2) =>
+          warm2 ? patchSource(db, id, mediaId, { warm: warm2 }) : undefined,
+        )
+        .catch(() => {});
+    }
+    return entry;
+  }
 
   /**
    * Ленивые аудио-дорожки прогретого релиза (gst-проба). Плеер дёргает их
@@ -421,13 +473,7 @@ export async function catalogRoutes(
 
         const stored = await getSource(db, id, mid).catch(() => null);
         if (stored?.audios.length) {
-          resolveCache.set(cacheKey, {
-            at: Date.now(),
-            files: stored.files,
-            audios: stored.audios,
-            intro: stored.intro,
-            warm: stored.warm,
-          });
+          cacheResolveEntry(cacheKey, makeEntry(stored.files, stored.audios, stored.intro, stored.warm));
           return { ...empty, audios: stored.audios };
         }
 
@@ -441,13 +487,7 @@ export async function catalogRoutes(
         if (audios.length) {
           if (l1) l1.audios = audios;
           else {
-            resolveCache.set(cacheKey, {
-              at: Date.now(),
-              files: stored?.files ?? [],
-              audios,
-              intro: stored?.intro ?? null,
-              warm,
-            });
+            cacheResolveEntry(cacheKey, makeEntry(stored?.files ?? [], audios, stored?.intro ?? null, warm));
           }
           void patchSource(db, id, mid, { audios, warm }).catch(() => {});
         }

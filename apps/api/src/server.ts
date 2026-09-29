@@ -19,7 +19,9 @@ import {
   type IngestJobPayload,
   type IngestQueue,
   noopCatalogFillQueue,
+  noopIngestQueue,
 } from "./ingest-queue";
+import { HttpError } from "./lib/http";
 
 const config = loadConfig();
 
@@ -51,12 +53,15 @@ const db = createDb(pool);
   }
 }
 
-// Очередь ingest: BullMQ поверх Redis (если Redis доступен).
-let ingestQueue: IngestQueue = {
-  async enqueueIngest(payload: IngestJobPayload) {
-    console.log("Ingest queued (memory):", payload);
-  },
-};
+// Очередь ingest: BullMQ поверх Redis. Без Redis — честный 503 из
+// noop-очереди: старый memory-fallback молча логировал и возвращал 202,
+// задача висела в pending вечно.
+let ingestQueue: IngestQueue = noopIngestQueue;
+
+// Ресурсы для graceful shutdown: без явного закрытия держат event loop
+// до force-exit.
+const redisClients: Redis[] = [];
+const bullQueues: Queue[] = [];
 
 if (process.env.REDIS_URL) {
   try {
@@ -66,16 +71,41 @@ if (process.env.REDIS_URL) {
     });
     await redis.connect();
     const queue = new Queue("transcode", { connection: redis });
+    redisClients.push(redis);
+    bullQueues.push(queue);
     ingestQueue = {
       async enqueueIngest(payload: IngestJobPayload) {
-        await queue.add("ingest", payload, {
-          removeOnComplete: 100,
-          // Ретраи: транзиентные сбои (сеть, падение ffmpeg) получают второй
-          // шанс; failed-джобы не копятся в Redis бесконечно.
-          attempts: 3,
-          backoff: { type: "exponential", delay: 30_000 },
-          removeOnFail: 500,
-        });
+        // maxRetriesPerRequest: null + умерший Redis = queue.add висит
+        // вечно. Режем по таймауту и честно отвечаем 503.
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            queue.add("ingest", payload, {
+              removeOnComplete: 100,
+              // Ретраи: транзиентные сбои (сеть, падение ffmpeg) получают второй
+              // шанс; failed-джобы не копятся в Redis бесконечно.
+              attempts: 3,
+              backoff: { type: "exponential", delay: 30_000 },
+              removeOnFail: 500,
+            }),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(
+                () => reject(new Error("enqueue timeout")),
+                5_000,
+              );
+            }),
+          ]);
+        } catch (err) {
+          // Причину — в лог: «почему Redis не ответил» важнее самого 503.
+          console.warn("redis: enqueue ingest failed:", String(err).slice(0, 300));
+          throw new HttpError(
+            503,
+            "queue_unavailable",
+            "Ingest queue is not responding",
+          );
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
       },
     };
     console.log("redis: connected, queue ready");
@@ -95,6 +125,8 @@ if (process.env.REDIS_URL) {
     });
     await redis.connect();
     const fillQueue = new Queue("catalog", { connection: redis });
+    redisClients.push(redis);
+    bullQueues.push(fillQueue);
     catalogQueue = {
       async enqueue(payload) {
         const job = await fillQueue.add("fill", payload, {
@@ -157,9 +189,14 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       exitTimer.unref();
       try {
         await app.close();
+        // BullMQ-очереди и Redis-коннекты раньше не закрывались вовсе:
+        // event loop держался до force-exit, коннекты обрывались грязно.
+        await Promise.allSettled(bullQueues.map((q) => q.close()));
+        await Promise.allSettled(redisClients.map((c) => c.quit()));
         await pool.end();
-      } catch {
-        // Уже закрыто — выходим без шума.
+      } catch (err) {
+        // Уже закрыто — выходим без шума, но причину оставляем в логе.
+        console.warn("api: shutdown cleanup failed:", String(err).slice(0, 200));
       }
       process.exit(0);
     })();

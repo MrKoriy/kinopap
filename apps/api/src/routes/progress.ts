@@ -6,7 +6,6 @@
 import { type ProgressDto, progressPutSchema } from "@zal/api-client";
 import {
   type Db,
-  getDefaultProfile,
   getProgress,
   listProgress,
   media,
@@ -18,6 +17,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
+import { requireProfileId } from "../plugins/auth";
 
 const idParamsSchema = z.object({ mediaId: z.coerce.number().int().positive() });
 
@@ -40,16 +40,16 @@ export async function progressRoutes(
 
   /** Лента «продолжить просмотр». */
   app.get("/progress", { preHandler: app.authenticate }, async (request) => {
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const rows = await listProgress(db, profile.id);
+    const profileId = await requireProfileId(db, request);
+    const rows = await listProgress(db, profileId);
     return { items: rows.map(toProgressDto) };
   });
 
   /** Прогресс по media (для резюме при открытии плеера). */
   app.get("/progress/:mediaId", { preHandler: app.authenticate }, async (request) => {
     const { mediaId } = parseOrThrow(idParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const row = await getProgress(db, profile.id, mediaId);
+    const profileId = await requireProfileId(db, request);
+    const row = await getProgress(db, profileId, mediaId);
     return { progress: row ? toProgressDto(row) : null };
   });
 
@@ -61,9 +61,9 @@ export async function progressRoutes(
     const mediaRows = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
     if (!mediaRows[0]) throw notFound(`Media ${mediaId} not found`);
 
-    const profile = await getDefaultProfile(db, request.user.sub);
+    const profileId = await requireProfileId(db, request);
     const row = await upsertProgress(db, {
-      profileId: profile.id,
+      profileId: profileId,
       itemId: mediaRows[0].itemId,
       mediaId,
       positionSeconds: body.positionSeconds,

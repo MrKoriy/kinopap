@@ -34,7 +34,14 @@ export interface BuildAppOptions {
  * Сборка Fastify-приложения без listen — удобно для тестов (app.inject).
  */
 export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? false });
+  const app = Fastify({
+    logger: opts.logger ?? false,
+    // Прод за nginx: без этого request.ip — всегда IP прокси, и rate limit
+    // (логин, глобальный) режет всех клиентов как одного пользователя.
+    // Управляется конфигом: при прямом доступе к порту TRUST_PROXY=0,
+    // иначе подделка X-Forwarded-For обходит per-IP лимиты.
+    trustProxy: opts.config.trustProxy,
+  });
 
   await registerAuth(app, opts.config);
 
@@ -78,6 +85,17 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     }
   });
 
+  app.addHook("onSend", async (_request, reply) => {
+    // Базовые security-заголовки: API отдаёт JSON, но docs-роут рисует
+    // HTML — nosniff и frameguard нужны и там.
+    reply.header("x-content-type-options", "nosniff");
+    reply.header("x-frame-options", "DENY");
+    // HSTS осмыслен только за TLS: включаем вместе с secure-cookie.
+    if (opts.config.cookieSecure) {
+      reply.header("strict-transport-security", "max-age=31536000");
+    }
+  });
+
   app.setErrorHandler((error, request, reply) => {
     if (error instanceof HttpError) {
       reply.code(error.status).send({
@@ -85,10 +103,35 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       });
       return;
     }
+    // Ошибки фреймворка несут свой статус: битый JSON-тело (400),
+    // неподдерживаемый content-type (415), ошибки схемы маршрута. Раньше
+    // всё это сворачивалось в 500 и ложило шум в лог.
+    const fwStatus = (error as { statusCode?: unknown }).statusCode;
+    const status = typeof fwStatus === "number" ? fwStatus : 500;
+    if (status >= 400 && status < 500) {
+      request.log.warn(error);
+      reply.code(status).send({
+        error: {
+          code: "bad_request",
+          message: status === 415 ? "Unsupported media type" : "Malformed request",
+        },
+      });
+      return;
+    }
     request.log.error(error);
     reply
       .code(500)
       .send({ error: { code: "internal", message: "Internal server error" } });
+  });
+
+  // 404 тоже в едином формате ошибок, а не fastify-дефолт с message наверху.
+  app.setNotFoundHandler((request, reply) => {
+    reply.code(404).send({
+      error: {
+        code: "not_found",
+        message: `Route ${request.method} ${request.url} not found`,
+      },
+    });
   });
 
   // healthz поллится балансировщиками/PM2 — вне rate limit.

@@ -140,6 +140,11 @@ const HYDRATE_RETRY_MS = 10 * 60 * 1000;
 const hydrateMissedAt = new Map<number, number>();
 const hydratePending = new Map<string, Promise<boolean>>();
 
+/** Потолок негативного кэша: без него карта растёт вечно на каталоге
+ * из тысяч «немых» тайтлов. Переполнение — просто сброс: записи
+ * однородные по времени, потеря части не страшна. */
+const HYDRATE_MISSED_MAX = 2000;
+
 interface TmdbEpisode {
   number: number;
   title: string | null;
@@ -218,10 +223,15 @@ export async function hydrateSerialSeasons(
   const pending = hydratePending.get(key);
   if (pending) return pending;
 
+  const markMiss = (tmdbId: number) => {
+    if (hydrateMissedAt.size > HYDRATE_MISSED_MAX) hydrateMissedAt.clear();
+    hydrateMissedAt.set(tmdbId, Date.now());
+  };
+
   const run = (async () => {
     const seasonList = await tmdbShowSeasons(config, tmdbId);
     if (seasonList.length === 0) {
-      hydrateMissedAt.set(tmdbId, Date.now());
+      markMiss(tmdbId);
       return false;
     }
     let inserted = false;
@@ -293,7 +303,7 @@ export async function hydrateSerialSeasons(
         }).catch(() => undefined);
       }
     } else {
-      hydrateMissedAt.set(tmdbId, Date.now());
+      markMiss(tmdbId);
     }
     return inserted;
   })();

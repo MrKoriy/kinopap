@@ -6,32 +6,31 @@ import {
 } from "@zal/api-client";
 import type { Db } from "@zal/db";
 import {
-  consumeInvite,
   createInvite,
-  createProfile,
   createRefreshToken,
-  createUser,
-  deleteUser,
   findRefreshToken,
   findUserByEmail,
   findUserById,
+  getDefaultProfile,
   hashPassword,
   listInvites,
+  registerUserWithInvite,
   revokeAllUserTokens,
   revokeRefreshToken,
   type UserRow,
   verifyPassword,
 } from "@zal/db";
-import type { FastifyInstance, FastifyReply } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
-import { badRequest, conflict, forbidden, parseOrThrow, unauthorized } from "../lib/http";
+import { badRequest, conflict, parseOrThrow, unauthorized } from "../lib/http";
 import {
   ACCESS_TOKEN_TTL_SECONDS,
   generateRefreshToken,
   hashToken,
   REFRESH_TOKEN_TTL_SECONDS,
 } from "../lib/tokens";
+import { requireRole } from "../plugins/auth";
 
 export function toUserDto(row: UserRow): User {
   return {
@@ -61,15 +60,29 @@ function clearRefreshCookie(reply: FastifyReply): void {
   reply.clearCookie(REFRESH_COOKIE, { path: "/v1/auth" });
 }
 
+/** Токен ротации: httpOnly-cookie (веб) или тело (мобила, Keychain).
+ * Раньше refresh/logout парсили тело raw-`.parse` — мусорное тело
+ * поднимало ZodError до 500 вместо 400. */
+function extractRefreshToken(request: FastifyRequest): string | undefined {
+  const cookie = request.cookies[REFRESH_COOKIE];
+  if (cookie) return cookie;
+  if (request.body == null) return undefined;
+  return parseOrThrow(refreshSchema, request.body).refreshToken;
+}
+
 async function issueTokens(
   app: FastifyInstance,
   db: Db,
   user: UserRow,
   reply?: FastifyReply,
   config?: Config,
+  /** Метаданные сессии: видны при аудите/детекции кражи токена. */
+  meta?: { userAgent?: string | null; ip?: string | null },
 ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
+  // pid в payload: authed-роуты берут profileId из токена, а не из БД.
+  const profile = await getDefaultProfile(db, user.id);
   const accessToken = app.jwt.sign(
-    { sub: user.id, role: user.role, typ: "access" },
+    { sub: user.id, role: user.role, pid: profile.id, typ: "access" },
     { expiresIn: ACCESS_TOKEN_TTL_SECONDS },
   );
   const refresh = generateRefreshToken();
@@ -77,6 +90,8 @@ async function issueTokens(
     userId: user.id,
     tokenHash: refresh.hash,
     expiresAt: refresh.expiresAt,
+    userAgent: meta?.userAgent ?? null,
+    ip: meta?.ip ?? null,
   });
   if (reply && config) setRefreshCookie(reply, config, refresh.raw);
   return {
@@ -98,27 +113,29 @@ export async function authRoutes(
     { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
     async (request, reply) => {
     const body = parseOrThrow(registerSchema, request.body);
+    const meta = {
+      userAgent: request.headers["user-agent"] ?? null,
+      ip: request.ip,
+    };
 
-    const existing = await findUserByEmail(db, body.email);
-    if (existing) throw conflict("email_taken", "Email already registered");
-
-    const user = await createUser(db, {
+    // Пользователь + списание инвайта + профиль — одной транзакцией:
+    // без отката на «полпути» и без 500 на гонку одинаковых email.
+    const reg = await registerUserWithInvite(db, {
       email: body.email,
       passwordHash: await hashPassword(body.password),
       name: body.name,
+      inviteCode: body.invite,
     });
-
-    // Инвайт списываем атомарно; если не вышло — откатываем пользователя.
-    const consumed = await consumeInvite(db, body.invite, user.id);
-    if (!consumed) {
-      await deleteUser(db, user.id);
+    if (!reg.ok) {
+      if (reg.reason === "email_taken") {
+        throw conflict("email_taken", "Email already registered");
+      }
       throw badRequest("invalid_invite", "Invite code is invalid or exhausted");
     }
 
-    await createProfile(db, { userId: user.id, name: body.name });
-    const tokens = await issueTokens(app, db, user, reply, deps.config);
+    const tokens = await issueTokens(app, db, reg.user, reply, deps.config, meta);
     reply.code(201);
-    return { user: toUserDto(user), tokens };
+    return { user: toUserDto(reg.user), tokens };
     },
   );
 
@@ -132,7 +149,10 @@ export async function authRoutes(
     if (!user?.isActive || !(await verifyPassword(body.password, user.passwordHash))) {
       throw unauthorized("Invalid email or password");
     }
-    const tokens = await issueTokens(app, db, user, reply, deps.config);
+    const tokens = await issueTokens(app, db, user, reply, deps.config, {
+      userAgent: request.headers["user-agent"] ?? null,
+      ip: request.ip,
+    });
     return { user: toUserDto(user), tokens };
   });
 
@@ -142,9 +162,7 @@ export async function authRoutes(
     "/auth/refresh",
     { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
     async (request, reply) => {
-    const raw =
-      request.cookies[REFRESH_COOKIE] ??
-      (request.body ? refreshSchema.parse(request.body).refreshToken : undefined);
+    const raw = extractRefreshToken(request);
     if (!raw) throw unauthorized("No refresh token");
     const row = await findRefreshToken(db, hashToken(raw));
     if (!row) {
@@ -174,15 +192,16 @@ export async function authRoutes(
       await revokeAllUserTokens(db, row.userId);
       throw unauthorized("Refresh token reuse detected");
     }
-    const tokens = await issueTokens(app, db, user, reply, deps.config);
+    const tokens = await issueTokens(app, db, user, reply, deps.config, {
+      userAgent: request.headers["user-agent"] ?? null,
+      ip: request.ip,
+    });
     return { tokens };
     },
   );
 
   app.post("/auth/logout", async (request, reply) => {
-    const raw =
-      request.cookies[REFRESH_COOKIE] ??
-      (request.body ? refreshSchema.parse(request.body).refreshToken : undefined);
+    const raw = extractRefreshToken(request);
     clearRefreshCookie(reply);
     if (raw) {
       const row = await findRefreshToken(db, hashToken(raw));
@@ -205,13 +224,10 @@ export async function authRoutes(
   app.post(
     "/invites",
     {
-      preHandler: app.authenticate,
+      preHandler: [app.authenticate, requireRole("owner", "admin")],
       config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
     },
     async (request, reply) => {
-      if (request.user.role !== "owner" && request.user.role !== "admin") {
-        throw forbidden("Invites are available to owner/admin only");
-      }
       const body = parseOrThrow(
         z.object({
           maxUses: z.coerce.number().int().min(1).max(100).default(1),
@@ -238,10 +254,10 @@ export async function authRoutes(
     },
   );
 
-  app.get("/invites", { preHandler: app.authenticate }, async (request) => {
-    if (request.user.role !== "owner" && request.user.role !== "admin") {
-      throw forbidden("Invites are available to owner/admin only");
-    }
+  app.get(
+    "/invites",
+    { preHandler: [app.authenticate, requireRole("owner", "admin")] },
+    async () => {
     const rows = await listInvites(db);
     return {
       invites: rows.map((i) => ({

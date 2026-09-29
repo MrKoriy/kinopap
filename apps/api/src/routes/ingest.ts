@@ -12,7 +12,8 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import type { IngestQueue } from "../ingest-queue";
-import { forbidden, notFound, parseOrThrow } from "../lib/http";
+import { notFound, parseOrThrow } from "../lib/http";
+import { requireRole } from "../plugins/auth";
 
 const idParamsSchema = z.object({ id: z.coerce.number().int().positive() });
 
@@ -39,11 +40,13 @@ export async function ingestRoutes(
   /**
    * Запуск ingest: создаём задачу и отправляем в очередь транскода.
    * Только owner/admin — ingest это административное действие.
+   * Раньше запрещали только member: будущая роль получала бы права
+   * молча. Теперь allow-list, как у инвайтов и discovery.
    */
-  app.post("/ingest", { preHandler: app.authenticate }, async (request, reply) => {
-    if (request.user.role === "member") {
-      throw forbidden("Ingest is available for owners and admins");
-    }
+  app.post(
+    "/ingest",
+    { preHandler: [app.authenticate, requireRole("owner", "admin")] },
+    async (request, reply) => {
     const body = parseOrThrow(ingestRequestSchema, request.body);
     const row = await createIngestJob(db, {
       sourceType: body.source.type,

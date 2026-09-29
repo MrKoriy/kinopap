@@ -17,7 +17,6 @@ import {
   deleteHistoryEntry,
   deleteUserList,
   findUserById,
-  getDefaultProfile,
   getFavorite,
   getUserList,
   listFavorites,
@@ -33,6 +32,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
+import { requireProfileId } from "../plugins/auth";
 import { toUserDto } from "./auth";
 
 const itemParamsSchema = z.object({ itemId: z.coerce.number().int().positive() });
@@ -56,13 +56,13 @@ export async function profileRoutes(
 
   /** Всё для страницы кабинета одним запросом: счётчики + три списка. */
   app.get("/profile/overview", { preHandler: app.authenticate }, async (request) => {
-    const profile = await getDefaultProfile(db, request.user.sub);
+    const profileId = await requireProfileId(db, request);
     const [user, stats, history, favorites, lists] = await Promise.all([
       findUserById(db, request.user.sub),
-      profileStats(db, profile.id),
-      listHistory(db, profile.id, { limit: 20 }),
-      listFavorites(db, profile.id, 20),
-      listUserLists(db, profile.id),
+      profileStats(db, profileId),
+      listHistory(db, profileId, { limit: 20 }),
+      listFavorites(db, profileId, 20),
+      listUserLists(db, profileId),
     ]);
     if (!user) throw notFound("User not found");
 
@@ -80,50 +80,50 @@ export async function profileRoutes(
   /* ---------- Сохранённое ---------- */
 
   app.get("/favorites", { preHandler: app.authenticate }, async (request) => {
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return { items: await listFavorites(db, profile.id) };
+    const profileId = await requireProfileId(db, request);
+    return { items: await listFavorites(db, profileId) };
   });
 
   app.get("/favorites/:itemId", { preHandler: app.authenticate }, async (request) => {
     const { itemId } = parseOrThrow(itemParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return { favorite: await getFavorite(db, profile.id, itemId) };
+    const profileId = await requireProfileId(db, request);
+    return { favorite: await getFavorite(db, profileId, itemId) };
   });
 
   app.put("/favorites/:itemId", { preHandler: app.authenticate }, async (request) => {
     const { itemId } = parseOrThrow(itemParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const favorite = await addFavorite(db, profile.id, itemId);
+    const profileId = await requireProfileId(db, request);
+    const favorite = await addFavorite(db, profileId, itemId);
     if (!favorite) throw notFound(`Item ${itemId} not found`);
     return { favorite };
   });
 
   app.delete("/favorites/:itemId", { preHandler: app.authenticate }, async (request) => {
     const { itemId } = parseOrThrow(itemParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    await removeFavorite(db, profile.id, itemId);
+    const profileId = await requireProfileId(db, request);
+    await removeFavorite(db, profileId, itemId);
     return { favorite: null };
   });
 
   /* ---------- Подборки ---------- */
 
   app.get("/lists", { preHandler: app.authenticate }, async (request) => {
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return { items: await listUserLists(db, profile.id) };
+    const profileId = await requireProfileId(db, request);
+    return { items: await listUserLists(db, profileId) };
   });
 
   app.post("/lists", { preHandler: app.authenticate }, async (request, reply) => {
     const body = parseOrThrow(userListCreateSchema, request.body ?? {});
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const list = await createUserList(db, profile.id, body);
+    const profileId = await requireProfileId(db, request);
+    const list = await createUserList(db, profileId, body);
     reply.code(201);
     return { list };
   });
 
   app.get("/lists/:listId", { preHandler: app.authenticate }, async (request) => {
     const { listId } = parseOrThrow(listParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const list = await getUserList(db, profile.id, listId);
+    const profileId = await requireProfileId(db, request);
+    const list = await getUserList(db, profileId, listId);
     if (!list) throw notFound(`List ${listId} not found`);
     return { list };
   });
@@ -131,16 +131,16 @@ export async function profileRoutes(
   app.patch("/lists/:listId", { preHandler: app.authenticate }, async (request) => {
     const { listId } = parseOrThrow(listParamsSchema, request.params);
     const patch = parseOrThrow(userListUpdateSchema, request.body ?? {});
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const list = await updateUserList(db, profile.id, listId, patch);
+    const profileId = await requireProfileId(db, request);
+    const list = await updateUserList(db, profileId, listId, patch);
     if (!list) throw notFound(`List ${listId} not found`);
     return { list };
   });
 
   app.delete("/lists/:listId", { preHandler: app.authenticate }, async (request) => {
     const { listId } = parseOrThrow(listParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const removed = await deleteUserList(db, profile.id, listId);
+    const profileId = await requireProfileId(db, request);
+    const removed = await deleteUserList(db, profileId, listId);
     if (!removed) throw notFound(`List ${listId} not found`);
     return { ok: true };
   });
@@ -150,10 +150,10 @@ export async function profileRoutes(
     { preHandler: app.authenticate },
     async (request) => {
       const { listId, itemId } = parseOrThrow(listItemParamsSchema, request.params);
-      const profile = await getDefaultProfile(db, request.user.sub);
-      const ok = await addItemToList(db, profile.id, listId, itemId);
+      const profileId = await requireProfileId(db, request);
+      const ok = await addItemToList(db, profileId, listId, itemId);
       if (!ok) throw notFound(`List ${listId} not found`);
-      const list = await getUserList(db, profile.id, listId);
+      const list = await getUserList(db, profileId, listId);
       return { list };
     },
   );
@@ -163,9 +163,9 @@ export async function profileRoutes(
     { preHandler: app.authenticate },
     async (request) => {
       const { listId, itemId } = parseOrThrow(listItemParamsSchema, request.params);
-      const profile = await getDefaultProfile(db, request.user.sub);
-      await removeItemFromList(db, profile.id, listId, itemId);
-      const list = await getUserList(db, profile.id, listId);
+      const profileId = await requireProfileId(db, request);
+      await removeItemFromList(db, profileId, listId, itemId);
+      const list = await getUserList(db, profileId, listId);
       if (!list) throw notFound(`List ${listId} not found`);
       return { list };
     },
@@ -175,20 +175,20 @@ export async function profileRoutes(
 
   app.get("/history", { preHandler: app.authenticate }, async (request) => {
     const q = parseOrThrow(historyQuerySchema, request.query ?? {});
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return listHistory(db, profile.id, q);
+    const profileId = await requireProfileId(db, request);
+    return listHistory(db, profileId, q);
   });
 
   app.delete("/history", { preHandler: app.authenticate }, async (request) => {
-    const profile = await getDefaultProfile(db, request.user.sub);
-    const removed = await clearHistory(db, profile.id);
+    const profileId = await requireProfileId(db, request);
+    const removed = await clearHistory(db, profileId);
     return { ok: true, removed };
   });
 
   app.delete("/history/:mediaId", { preHandler: app.authenticate }, async (request) => {
     const { mediaId } = parseOrThrow(mediaParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    await deleteHistoryEntry(db, profile.id, mediaId);
+    const profileId = await requireProfileId(db, request);
+    await deleteHistoryEntry(db, profileId, mediaId);
     return { ok: true };
   });
 
@@ -201,7 +201,7 @@ export async function profileRoutes(
    */
   app.get("/items/:id/progress", { preHandler: app.authenticate }, async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
-    const profile = await getDefaultProfile(db, request.user.sub);
-    return { progress: await listItemProgress(db, profile.id, id) };
+    const profileId = await requireProfileId(db, request);
+    return { progress: await listItemProgress(db, profileId, id) };
   });
 }

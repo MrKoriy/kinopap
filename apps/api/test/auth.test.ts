@@ -154,6 +154,22 @@ describe("auth", () => {
     expect(afterReuse.statusCode).toBe(401);
   });
 
+  it("мусорное тело refresh/logout — 400, а не 500", async () => {
+    const { app } = await createTestApp();
+
+    // Раньше refresh/logout парсили тело raw-`.parse`: ZodError из хендлера
+    // падала в unified error handler как 500 internal.
+    for (const url of ["/v1/auth/refresh", "/v1/auth/logout"]) {
+      const res = await app.inject({
+        method: "POST",
+        url,
+        payload: { refreshToken: 123 },
+      });
+      expect(res.statusCode).toBe(400);
+      expect(res.json().error.code).toBe("validation_error");
+    }
+  });
+
   it("logout revokes the refresh token", async () => {
     const { app, db } = await createTestApp();
     const { invite } = await makeOwnerWithInvite(db);

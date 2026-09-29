@@ -19,8 +19,12 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().default(3001),
   /** Разрешённые CORS-источники, через запятую; "*" — публичный (без кредов). */
   CORS_ORIGIN: z.string().default("*"),
-  /** Secure-флаг cookie: включать только за TLS-прокси (COOKIE_SECURE=1). */
-  COOKIE_SECURE: z.coerce.boolean().default(false),
+  /** Secure-флаг cookie: включать только за TLS-прокси (COOKIE_SECURE=1).
+   * stringbool: coerce.boolean читал "false"/"0" как true. */
+  COOKIE_SECURE: z.stringbool().default(false),
+  /** Доверять X-Forwarded-For (прод за nginx). Прямой доступ к порту —
+   * TRUST_PROXY=0, иначе подделка заголовка обходит per-IP rate limit. */
+  TRUST_PROXY: z.stringbool().default(true),
 });
 
 export interface Config {
@@ -34,6 +38,7 @@ export interface Config {
   port: number;
   corsOrigin: string;
   cookieSecure: boolean;
+  trustProxy: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -49,5 +54,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: e.PORT,
     corsOrigin: e.CORS_ORIGIN,
     cookieSecure: e.COOKIE_SECURE,
+    trustProxy: e.TRUST_PROXY,
   };
 }
