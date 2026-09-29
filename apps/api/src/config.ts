@@ -1,11 +1,16 @@
 import { z } from "zod";
 
 const envSchema = z.object({
-  DATABASE_URL: z.string().default("postgres://zal:zal@localhost:5432/zal"),
+  // Дефолт — только для локальной разработки, и пароль в нём намеренно НЕ тот,
+  // что в проде: раньше здесь стоял боевой `zal:zal`, то есть пароль рабочей
+  // базы лежал в публичном репозитории. Прод всегда задаёт DATABASE_URL явно.
+  DATABASE_URL: z.string().default("postgres://zal:dev@localhost:5432/zal"),
   // Без дефолта: забыли env в проде — процесс откажется стартовать, а не
   // подпишет все токены публично известной строкой.
   JWT_SECRET: z.string().min(32),
-  MEDIA_BASE_URL: z.string().default("http://localhost:9000/zal-media"),
+  // Раньше здесь был адрес MinIO (`localhost:9000/zal-media`), которым никто не
+  // пользуется: медиа отдаёт nginx из MEDIA_ROOT по относительному пути.
+  MEDIA_BASE_URL: z.string().default("/media"),
   TORRSERVER_URL: z.string().default("http://localhost:8090"),
   TORRSERVER_PUBLIC_URL: z.string().optional(),
   TMDB_API_KEY: z.string().optional(),

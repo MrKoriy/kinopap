@@ -5,6 +5,7 @@ export default defineConfig({
   schema: "./src/schema/index.ts",
   out: "./drizzle",
   dbCredentials: {
-    url: process.env.DATABASE_URL ?? "postgres://zal:zal@localhost:5432/zal",
+    // Дефолт только для локальной разработки; пароль намеренно не боевой.
+    url: process.env.DATABASE_URL ?? "postgres://zal:dev@localhost:5432/zal",
   },
 });

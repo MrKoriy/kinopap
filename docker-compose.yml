@@ -1,59 +1,71 @@
-# Порты публикуются ТОЛЬКО на loopback: Docker пишет свои правила в nat
-# PREROUTING и filter DOCKER, поэтому опубликованный на 0.0.0.0 порт обходит
-# ufw целиком (цепочка INPUT не участвует). Снаружи Postgres с паролем
-# zal:zal пускал кого угодно — проверено 29.09.2026.
-# Хост-клиенты (API, db:setup, deploy.sh) ходят через localhost и не ломаются.
+# Контейнеры «Зала». Файл описывает то, что реально крутится на сервере, —
+# не пожелание, а факт. Всё, что здесь есть, поднимается деплоем; всё, чего нет,
+# на сервере не запущено.
+#
+# Порт 5433, а не 5432: на том же сервере живёт чужой shift_plus_db и уже занял
+# 5432. Порт задаётся переменной, чтобы dev и прод отличались только `.env`.
+#
+# Пароль берётся из `.env` и в репозиторий не попадает: репозиторий публичный,
+# а база была открыта в интернет именно из-за пароля, лежавшего в git рядом с
+# адресом сервера.
+#
+# ВАЖНО: `name` зафиксировано, и том назван явно. Деплой живёт в
+# `/opt/kinopap/releases/<ts>` за симлинком `current`, поэтому имя проекта,
+# выведенное из каталога, менялось бы от релиза к релизу — а с ним и имя тома.
+# Новое имя тома = пустая база. Ошибка была бы тихой и разрушительной.
+name: kinopap
+
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: kinopap-postgres
+    # unless-stopped, а не always: переживает перезагрузку, но уважает
+    # осознанную остановку. Раньше политики не было вовсе — контейнер подняли
+    # руками через docker run, и в репозитории об этом не было ничего.
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: zal
-      POSTGRES_PASSWORD: zal
-      POSTGRES_DB: zal
+      POSTGRES_USER: ${POSTGRES_USER:-zal}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD обязателен — положите его в .env}
+      POSTGRES_DB: ${POSTGRES_DB:-zal}
     ports:
-      - "127.0.0.1:5432:5432"
+      # Только loopback: Docker пишет правила в nat PREROUTING и filter DOCKER,
+      # поэтому опубликованный на 0.0.0.0 порт обходит ufw целиком — цепочка
+      # INPUT не участвует. Снаружи база пускала кого угодно (29.09.2026).
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U zal -d zal"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-zal} -d ${POSTGRES_DB:-zal}"]
       interval: 5s
       timeout: 3s
       retries: 10
 
+  # Redis нужен только для локальной разработки. В проде это системный
+  # redis-server на 127.0.0.1:6379: он уже поднят, включён в автозапуск, и
+  # других проектов на этом сервере он не обслуживает — в нём лежат ровно
+  # очереди BullMQ Зала. Здесь порт 6380, чтобы контейнер не спорил с ним за
+  # 6379 при `--profile dev`.
+  #
+  # Оговорка: у системного redis `appendonly no`, то есть очередь не переживает
+  # его перезапуск. Для очереди наполнения каталога это приемлемо — задача
+  # повторяемая, — но помнить об этом стоит.
   redis:
+    profiles: ["dev"]
     image: redis:7-alpine
+    container_name: kinopap-redis
+    restart: unless-stopped
     ports:
-      - "127.0.0.1:6379:6379"
+      - "127.0.0.1:${REDIS_PORT:-6380}:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 3s
       retries: 10
 
-  minio:
-    image: minio/minio:latest
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: zal
-      MINIO_ROOT_PASSWORD: zalzalzal
-    ports:
-      - "127.0.0.1:9000:9000"
-      - "127.0.0.1:9001:9001"
-    volumes:
-      - miniodata:/data
-
-  createbuckets:
-    image: minio/mc:latest
-    depends_on:
-      - minio
-    entrypoint: >
-      /bin/sh -c "
-      sleep 3;
-      mc alias set local http://minio:9000 zal zalzalzal;
-      mc mb --ignore-existing local/zal-media;
-      exit 0;
-      "
-
 volumes:
   pgdata:
-  miniodata:
+    # Явное имя: том создан до того, как compose начал им управлять, и в нём
+    # лежит рабочая база. Если положиться на имя по умолчанию, смена имени
+    # проекта (см. `name` выше) создаст пустой том, а база «исчезнет».
+    name: kinopap_pgdata
+    external: true

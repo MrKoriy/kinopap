@@ -1,6 +1,19 @@
 // Прод-конфиг PM2. Секреты НЕ хранятся здесь: pm2 стартует с env, в котором
 // должен быть JWT_SECRET (например `env $(cat /opt/kinopap/.env) pm2 start`).
 // Публичные адреса при желании тоже перекрываются env'ом.
+//
+// DATABASE_URL обязателен и без значения по умолчанию: раньше здесь лежал
+// `postgres://zal:zal@localhost:5433/zal`, то есть пароль базы в публичном
+// репозитории. Запасное значение к тому же маскировало бы отсутствие env —
+// API поднялся бы и молча ходил не туда.
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error(
+    "DATABASE_URL не задан. pm2 должен стартовать с env из /opt/kinopap/.env " +
+      "(deploy.sh делает это сам).",
+  );
+}
+
 module.exports = {
   apps: [
     {
@@ -20,11 +33,11 @@ module.exports = {
       env: {
         NODE_ENV: "production",
         PORT: process.env.PORT ?? "7001",
-        DATABASE_URL:
-          process.env.DATABASE_URL ?? "postgres://zal:zal@localhost:5433/zal",
+        DATABASE_URL,
         // Без REDIS_URL API стартует без очереди fill — /v1/discover
         // выполняется синхронно и nginx рвёт его по таймауту (504).
-        REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:6379",
+        // Адрес — системный redis на хосте, см. docker-compose.yml.
+        REDIS_URL: process.env.REDIS_URL ?? "redis://127.0.0.1:6379",
         TORRSERVER_URL: process.env.TORRSERVER_URL ?? "http://127.0.0.1:7002",
         TORRSERVER_PUBLIC_URL: process.env.TORRSERVER_PUBLIC_URL,
         JWT_SECRET: process.env.JWT_SECRET,
@@ -44,9 +57,8 @@ module.exports = {
       max_restarts: 10,
       env: {
         NODE_ENV: "production",
-        DATABASE_URL:
-          process.env.DATABASE_URL ?? "postgres://zal:zal@localhost:5433/zal",
-        REDIS_URL: process.env.REDIS_URL ?? "redis://localhost:6379",
+        DATABASE_URL,
+        REDIS_URL: process.env.REDIS_URL ?? "redis://127.0.0.1:6379",
         MEDIA_ROOT: process.env.MEDIA_ROOT,
         MEDIA_BASE_URL: process.env.MEDIA_BASE_URL,
         LOCAL_SOURCE_ROOT: process.env.LOCAL_SOURCE_ROOT,

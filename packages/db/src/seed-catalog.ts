@@ -616,7 +616,8 @@ const TOP_TITLES: MovieSeed[] = [
 ];
 
 export async function seedCatalog() {
-  const databaseUrl = process.env.DATABASE_URL ?? "postgres://zal:zal@localhost:5432/zal";
+  // Дефолт только для локальной разработки; пароль намеренно не боевой.
+  const databaseUrl = process.env.DATABASE_URL ?? "postgres://zal:dev@localhost:5432/zal";
   const pool = createPool(databaseUrl);
   const customDb = createDb(pool);
   console.log("Seeding extensive catalog into", databaseUrl);

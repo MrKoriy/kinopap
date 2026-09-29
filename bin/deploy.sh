@@ -14,6 +14,12 @@ HTTPS_URL="https://zal.94-103-1-126.sslip.io"
 API_INTERNAL="http://127.0.0.1:7001"
 TMDB_KEY="${TMDB_API_KEY:?export TMDB_API_KEY=... перед запуском}"
 
+# Проверка идёт до rsync, а не после: она про то, что уедет на сервер. Отдельным
+# шагом её держать нельзя — про неё забывают, а цена забывчивости уже известна
+# дважды (см. bin/audit-heredoc.sh). Скрипт сам решает, есть ли находки.
+echo "==> 0/6: тело heredoc — локальные подстановки экранированы"
+"$(dirname "$0")/audit-heredoc.sh"
+
 echo "==> 1/6: код на сервер (rsync, без node_modules/.next/.env/data/bin)"
 # media/ исключён намеренно: это MEDIA_ROOT, рабочий каталог сервера. Локально
 # его нет, и без --exclude rsync --delete вычистил бы оттуда всё залитое.
@@ -64,7 +70,23 @@ add_env NEXT_PUBLIC_API_URL ""
 # поэтому /gst/... и /stream?... обязаны быть относительными.
 add_env TORRSERVER_PUBLIC_URL ""
 add_env PORT "7001"
-add_env DATABASE_URL "postgres://zal:zal@localhost:5433/zal"
+add_env POSTGRES_PORT "5433"
+# Пароль базы живёт в .env и только там. В репозитории он лежал открытым текстом
+# рядом с адресом сервера — репозиторий публичный, и база была доступна снаружи
+# (29.09.2026). Не выдумываем значение: если его нет, лучше остановиться, чем
+# записать в .env неверный пароль и уронить API с мигающим «password
+# authentication failed».
+# «|| true» обязателен: на сервере set -e и pipefail, а grep без совпадений
+# возвращает 1 — без этого присваивание упало бы и скрипт вышел раньше
+# сообщения об ошибке, оставив непонятный тишиной отказ.
+PG_PW=\$(grep -m1 '^POSTGRES_PASSWORD=' .env 2>/dev/null | cut -d= -f2- || true)
+if [ -z "\$PG_PW" ]; then
+  echo "ОШИБКА: POSTGRES_PASSWORD нет в $APP_DIR/.env." >&2
+  echo "  Добавьте строку POSTGRES_PASSWORD=<текущий пароль базы> и повторите." >&2
+  echo "  Текущий пароль: docker inspect kinopap-postgres --format '{{range .Config.Env}}{{println .}}{{end}}' | grep POSTGRES_PASSWORD" >&2
+  exit 1
+fi
+add_env DATABASE_URL "postgres://zal:\${PG_PW}@localhost:5433/zal"
 # JWT_SECRET обязателен (>= 32 символов) — API не стартует без него.
 if ! grep -q "^JWT_SECRET=.\{32,\}" .env; then
   echo "ОШИБКА: JWT_SECRET в .env отсутствует или короче 32 символов" >&2
@@ -75,11 +97,50 @@ fi
 set -a; . ./.env; set +a
 
 # --- Redis для BullMQ (воркер) ---
-if ! command -v redis-server >/dev/null 2>&1; then
-  apt-get install -y -qq redis-server >/dev/null
+# В проде redis системный, а не контейнерный: он уже поднят, включён в автозапуск
+# и обслуживает только очереди Зала. В docker-compose.yml сервис redis спрятан за
+# профилем dev и слушает 6380 — иначе он спорил бы с системным за 6379.
+if ! systemctl is-active --quiet redis-server; then
+  if ! command -v redis-server >/dev/null 2>&1; then
+    apt-get install -y -qq redis-server >/dev/null
+  fi
   systemctl enable --now redis-server
-  echo "  + redis установлен"
+  echo "  + redis запущен"
 fi
+# Проверяем не службу, а то, что на порту из REDIS_URL действительно отвечает
+# redis: служба может быть active, а порт — занят чужим процессом.
+# Разбор строки — параметрами оболочки, а не sed. В неквотированном heredoc
+# регулярка, оканчивающаяся на «доллар», уезжает на сервер испорченной:
+# локальная оболочка раскрывает доллар-решётку как число позиционных
+# аргументов. Так и вышло — шаблон превратился в «s#/.*0#», и sed упал.
+REDIS_HOSTPORT="\${REDIS_URL#redis://}"
+REDIS_PORT="\${REDIS_HOSTPORT##*:}"
+REDIS_PORT="\${REDIS_PORT%%/*}"
+REDIS_HOST="\${REDIS_HOSTPORT%%:*}"
+if ! redis-cli -h "\$REDIS_HOST" -p "\$REDIS_PORT" ping >/dev/null 2>&1; then
+  echo "ОШИБКА: redis по адресу \$REDIS_URL не отвечает (служба: \$(systemctl is-active redis-server))" >&2
+  exit 1
+fi
+echo "  redis: \$REDIS_HOST:\$REDIS_PORT отвечает"
+
+# --- контейнеры: compose — единственный источник правды ---
+# База когда-то была поднята руками через docker run. Такой контейнер compose
+# не признаёт своим и падает на конфликте имён, поэтому пересоздаём его: данные
+# лежат в томе kinopap_pgdata, объявленном external, и пересоздание их не трогает.
+COMPOSE_PROJECT=\$(docker inspect kinopap-postgres --format \
+  '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true)
+if [ "\$COMPOSE_PROJECT" != "kinopap" ]; then
+  echo "  контейнер kinopap-postgres не под управлением compose (метка: '\${COMPOSE_PROJECT:-нет}') — пересоздаю"
+  docker rm -f kinopap-postgres >/dev/null
+fi
+docker compose up -d postgres
+# Ждём healthy: миграции ниже упадут, если база ещё поднимается.
+for i in \$(seq 1 30); do
+  if docker exec kinopap-postgres pg_isready -U zal -d zal >/dev/null 2>&1; then break; fi
+  if [ "\$i" = "30" ]; then echo "ОШИБКА: postgres не поднялся" >&2; docker logs --tail 30 kinopap-postgres >&2; exit 1; fi
+  sleep 2
+done
+echo "  postgres: \$(docker inspect kinopap-postgres --format '{{.State.Health.Status}}')"
 
 # --- nginx: /media отдаётся статикой прямо с диска (Range из коробки) ---
 # -R, а не -r: в sites-enabled лежат симлинки, и «grep -r» по ним не идёт —

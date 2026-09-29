@@ -58,11 +58,16 @@ pnpm --filter @zal/worker exec tsx src/backfill-trailers.ts --limit=500 --dry
 
 ```bash
 pnpm install
-docker compose up -d          # postgres 16, redis, minio (для dev)
 cp .env.example .env          # JWT_SECRET обязателен (от 32 символов)
+docker compose --profile dev up -d   # postgres 16 + redis (порт 6380)
 pnpm db:setup                 # миграции + seed (owner, инвайты, жанры, страны)
 pnpm dev                      # web :3000, api :3001, worker
 ```
+
+Профиль `dev` нужен потому, что `docker compose up -d` в проде поднимает **только
+postgres**: redis там системный (`systemd`, 127.0.0.1:6379), а контейнерный слушал
+бы тот же порт. MinIO из проекта убран — им никто не пользовался, медиа отдаёт
+nginx из `MEDIA_ROOT`.
 
 Тесты не требуют Docker: поднимают Postgres-совместимую БД в памяти (PGlite).
 
