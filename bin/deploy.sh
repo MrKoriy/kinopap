@@ -48,7 +48,7 @@ touch .env
 add_env TMDB_API_KEY "$TMDB_KEY"
 add_env CORS_ORIGIN "$PUBLIC_URL,$HTTPS_URL"
 # Сайт отдаётся по HTTPS, а порт 80 теперь только редиректит на него (vhost
-# `default`). Значит refresh-cookie обязан идти с флагом Secure: по plain HTTP
+# «default»). Значит refresh-cookie обязан идти с флагом Secure: по plain HTTP
 # браузер такую cookie не отправит, и попасть туда можно лишь через редирект.
 add_env COOKIE_SECURE "1"
 add_env MEDIA_ROOT "$APP_DIR/media"
@@ -82,7 +82,7 @@ if ! command -v redis-server >/dev/null 2>&1; then
 fi
 
 # --- nginx: /media отдаётся статикой прямо с диска (Range из коробки) ---
-# -R, а не -r: в sites-enabled лежат симлинки, и `grep -r` по ним не идёт —
+# -R, а не -r: в sites-enabled лежат симлинки, и «grep -r» по ним не идёт —
 # с -r список всегда пуст, поэтому весь блок ниже молча пропускался, и nginx на
 # деплое не проверялся и не перезагружался. С -R находится ровно vhost сайта.
 NGINX_SITE=\$(grep -Rl "7001" /etc/nginx/sites-enabled/ 2>/dev/null | head -1 || true)
@@ -146,14 +146,22 @@ pnpm db:setup 2>&1 | tail -2
 # блокирует, и фильм не играет, хотя конфиг уже правильный. Сейчас ссылки
 # относительные, поэтому строка с «http://» в кэше — по определению протухшая.
 # Чистим до перезапуска API: иначе L1 в памяти подхватит старые строки обратно.
-STALE=$(docker exec kinopap-postgres psql -U zal -d zal -tAc \
+# ВАЖНО: подстановки здесь обязаны быть экранированы обратным слешем. Heredoc
+# неквотированный, поэтому неэкранированная подстановка выполнится локальной
+# оболочкой, и на сервер уедет пустая строка — проверка будет вечно «зелёной»,
+# ничего не проверив. Так уже было со STALE: docker искался на маке, ветка всегда
+# давала «чисто», а кэш не чистился.
+STALE=\$(docker exec kinopap-postgres psql -U zal -d zal -tAc \
   "select count(*) from media_sources where files::text like '%http://%';" | tr -d '[:space:]')
+TOTAL=\$(docker exec kinopap-postgres psql -U zal -d zal -tAc \
+  "select count(*) from media_sources;" | tr -d '[:space:]')
 if [ "\${STALE:-0}" != "0" ]; then
   docker exec kinopap-postgres psql -U zal -d zal -q -c \
     "delete from media_sources where files::text like '%http://%';" >/dev/null
-  echo "  кэш ссылок: вычищено протухших записей — \$STALE"
+  echo "  кэш ссылок: вычищено протухших записей — \$STALE (всего было \$TOTAL)"
 else
-  echo "  кэш ссылок: чисто"
+  # Счётчик печатаем всегда: без него «чисто» неотличимо от «запрос не выполнился».
+  echo "  кэш ссылок: протухших нет (в таблице \$TOTAL)"
 fi
 
 # --- веб-сборка: NEXT_PUBLIC_API_URL инлайнится в бандл при билде ---
