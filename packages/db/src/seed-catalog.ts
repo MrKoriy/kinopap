@@ -1,5 +1,5 @@
 import { eq } from "drizzle-orm";
-import { createDb, createPool } from "./db";
+import { createDb, createPool, type Db } from "./db";
 import { genres, itemGenres, items, media } from "./schema/index";
 
 interface MovieSeed {
@@ -16,6 +16,10 @@ interface MovieSeed {
 
 /** Живые метаданные из TMDb: постеры не гниют, описания и рейтинги точные. */
 interface TmdbMeta {
+  /** id хита: по нему дедупится fill и гидрируются сезоны сериалов. */
+  tmdbId: number | null;
+  /** Жанры хита в id TMDb; пустой, если ответ их не принёс. */
+  genreIds: number[];
   title: string;
   originalTitle: string | null;
   year: number | null;
@@ -27,14 +31,18 @@ interface TmdbMeta {
   posterBig: string | null;
 }
 
-const TMDB_KEY = process.env.TMDB_API_KEY ?? null;
+const TMDB_BASE = "https://api.themoviedb.org/3";
 
-async function tmdbMeta(seed: MovieSeed): Promise<TmdbMeta | null> {
-  if (!TMDB_KEY) return null;
+async function tmdbMeta(
+  seed: MovieSeed,
+  key: string | null,
+  fetchFn: typeof fetch,
+): Promise<TmdbMeta | null> {
+  if (!key) return null;
   const url = new URL(
-    `https://api.themoviedb.org/3/search/${seed.type === "serial" ? "tv" : "movie"}`,
+    `${TMDB_BASE}/search/${seed.type === "serial" ? "tv" : "movie"}`,
   );
-  url.searchParams.set("api_key", TMDB_KEY);
+  url.searchParams.set("api_key", key);
   url.searchParams.set("language", "ru-RU");
   // Оригинальное название ищется точнее локализованного.
   url.searchParams.set("query", seed.originalTitle || seed.title);
@@ -42,7 +50,7 @@ async function tmdbMeta(seed: MovieSeed): Promise<TmdbMeta | null> {
     url.searchParams.set("year", String(seed.year));
   }
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+    const res = await fetchFn(url, { signal: AbortSignal.timeout(8000) });
     if (!res.ok) return null;
     const data = (await res.json()) as { results?: Array<Record<string, unknown>> };
     const results = data.results ?? [];
@@ -67,6 +75,10 @@ async function tmdbMeta(seed: MovieSeed): Promise<TmdbMeta | null> {
     const posterPath = hit.poster_path ? String(hit.poster_path) : null;
 
     return {
+      tmdbId: typeof hit.id === "number" ? hit.id : null,
+      genreIds: Array.isArray(hit.genre_ids)
+        ? hit.genre_ids.filter((g): g is number => typeof g === "number")
+        : [],
       title: seed.title,
       originalTitle: hit.original_title ?? hit.original_name
         ? String(hit.original_title ?? hit.original_name)
@@ -86,6 +98,94 @@ async function tmdbMeta(seed: MovieSeed): Promise<TmdbMeta | null> {
   } catch {
     return null;
   }
+}
+
+/**
+ * Названия жанров TMDb (ru) → локальные названия. Копия GENRE_ALIASES из
+ * packages/ingest/src/catalog-fill.ts: @zal/db не может импортировать
+ * @zal/ingest (ingest сам зависит от db), а рассинхрон этих таблиц ломает
+ * маппинг жанров у сида. Меняются — синхронизируются здесь.
+ */
+const GENRE_ALIASES: Record<string, string> = {
+  Боевик: "Боевик",
+  Приключения: "Приключения",
+  Анимация: "Мультфильм",
+  Комедия: "Комедия",
+  Преступление: "Криминал",
+  Документальный: "Документальный",
+  Драма: "Драма",
+  Семья: "Семейный",
+  Фэнтези: "Фэнтези",
+  История: "Исторический",
+  Ужасы: "Ужасы",
+  Музыка: "Мюзикл",
+  Детектив: "Детектив",
+  Романтика: "Мелодрама",
+  Фантастика: "Фантастика",
+  Триллер: "Триллер",
+  Война: "Военный",
+  Вестерн: "Вестерн",
+  Аниме: "Аниме",
+  Телешоу: "ТВ-шоу",
+  "Научная фантастика": "Фантастика",
+};
+
+/**
+ * Карта TMDb genre id → локальный id: /genre/{movie,tv}/list отдают названия
+ * (ru), те прогоняются через GENRE_ALIASES против локальных жанров — тот же
+ * механизм, что в fillCatalog (packages/ingest/src/catalog-fill.ts). Строится
+ * один раз на прогон; пустая карта (нет ключа, сбой сети) → хардкод-жанр сида.
+ */
+async function tmdbGenreMap(
+  localByTitle: Map<string, number>,
+  key: string | null,
+  fetchFn: typeof fetch,
+): Promise<Map<number, number>> {
+  const map = new Map<number, number>();
+  if (!key) return map;
+  for (const kind of ["movie", "tv"] as const) {
+    const url = new URL(`${TMDB_BASE}/genre/${kind}/list`);
+    url.searchParams.set("api_key", key);
+    url.searchParams.set("language", "ru-RU");
+    try {
+      const res = await fetchFn(url, { signal: AbortSignal.timeout(8000) });
+      if (!res.ok) continue;
+      const data = (await res.json()) as { genres?: Array<{ id?: unknown; name?: unknown }> };
+      for (const g of data.genres ?? []) {
+        if (typeof g.id !== "number" || typeof g.name !== "string") continue;
+        const local =
+          localByTitle.get(GENRE_ALIASES[g.name] ?? g.name) ?? localByTitle.get(g.name);
+        if (local != null) map.set(g.id, local);
+      }
+    } catch {
+      // Нет карты жанров — у тайтлов останется хардкод-жанр сида.
+    }
+  }
+  return map;
+}
+
+/**
+ * Локальные жанры тайтла: TMDb genre_ids → локальные id (все найденные),
+ * хардкод-жанр — фолбэк, если TMDb жанров не дал или они не смапились.
+ */
+function resolveGenres(
+  seed: MovieSeed,
+  meta: TmdbMeta | null,
+  localByTitle: Map<string, number>,
+  tmdbToLocal: Map<number, number>,
+): number[] {
+  const ids: number[] = [];
+  if (meta) {
+    for (const gid of meta.genreIds) {
+      const local = tmdbToLocal.get(gid);
+      if (local != null && !ids.includes(local)) ids.push(local);
+    }
+  }
+  if (ids.length === 0) {
+    const fallback = localByTitle.get(seed.genre);
+    if (fallback != null) ids.push(fallback);
+  }
+  return ids;
 }
 
 const TOP_TITLES: MovieSeed[] = [
@@ -623,25 +723,45 @@ export function redactPassword(url: string): string {
   return url.replace(/\/\/[^:@/]*:[^@/]*@/, "//***:***@");
 }
 
-export async function seedCatalog() {
-  // Дефолт только для локальной разработки; пароль намеренно не боевой.
-  const databaseUrl = process.env.DATABASE_URL ?? "postgres://zal:dev@localhost:5432/zal";
-  const pool = createPool(databaseUrl);
-  const customDb = createDb(pool);
-  // Пароль из строки не печатаем: этот вывод уходит в лог деплоя, а лог читают
-  // и люди, и агенты. Раньше в него попадал DATABASE_URL целиком.
-  console.log("Seeding extensive catalog into", redactPassword(databaseUrl));
-  if (!TMDB_KEY) {
+export interface SeedCatalogOptions {
+  /** Готовое соединение (тесты на PGlite); без него — свой пул из DATABASE_URL. */
+  db?: Db;
+  /** Транспорт к TMDb (тесты подменяют); по умолчанию глобальный fetch. */
+  fetch?: typeof fetch;
+  /** Ключ TMDb; по умолчанию TMDB_API_KEY из окружения, null — обогащение выключено. */
+  tmdbKey?: string | null;
+}
+
+export async function seedCatalog(opts: SeedCatalogOptions = {}) {
+  const tmdbKey = opts.tmdbKey === undefined ? (process.env.TMDB_API_KEY ?? null) : opts.tmdbKey;
+  const fetchFn = opts.fetch ?? fetch;
+
+  let pool: ReturnType<typeof createPool> | null = null;
+  let customDb: Db;
+  if (opts.db) {
+    customDb = opts.db;
+  } else {
+    // Дефолт только для локальной разработки; пароль намеренно не боевой.
+    const databaseUrl = process.env.DATABASE_URL ?? "postgres://zal:dev@localhost:5432/zal";
+    pool = createPool(databaseUrl);
+    customDb = createDb(pool);
+    // Пароль из строки не печатаем: этот вывод уходит в лог деплоя, а лог читают
+    // и люди, и агенты. Раньше в него попадал DATABASE_URL целиком.
+    console.log("Seeding extensive catalog into", redactPassword(databaseUrl));
+  }
+  if (!tmdbKey) {
     console.warn("TMDB_API_KEY не задан: постеры/описания берутся из сид-констант");
   }
 
   // Ensure genres exist
   const genreList = await customDb.select().from(genres);
   const genreMap = new Map(genreList.map((g) => [g.title, g.id]));
+  // Карта TMDb genre id → локальный id: один запрос на прогон, не на тайтл.
+  const tmdbToLocal = await tmdbGenreMap(genreMap, tmdbKey, fetchFn);
 
   let enriched = 0;
   for (const item of TOP_TITLES) {
-    const meta = await tmdbMeta(item);
+    const meta = await tmdbMeta(item, tmdbKey, fetchFn);
     if (meta) enriched++;
 
     const title = item.title;
@@ -677,12 +797,27 @@ export async function seedCatalog() {
           posterBig,
           runtimeAvg: runtime,
           updatedAt: new Date(),
+          // tmdbId дописываем, только когда мета нашлась: сбой TMDb не должен
+          // затирать уже записанный id нуллом.
+          ...(meta?.tmdbId != null ? { tmdbId: meta.tmdbId } : {}),
         })
         .where(eq(items.id, itemId));
       await customDb
         .update(media)
         .set({ runtime })
         .where(eq(media.itemId, itemId));
+      // Жанры существующим тоже дописываем: у сид-тайтлов был один
+      // хардкод-жанр, TMDb даёт полный набор. onConflictDoNothing держит
+      // идемпотентность повторных прогонов.
+      if (meta) {
+        const gids = resolveGenres(item, meta, genreMap, tmdbToLocal);
+        if (gids.length > 0) {
+          await customDb
+            .insert(itemGenres)
+            .values(gids.map((gid) => ({ itemId, genreId: gid })))
+            .onConflictDoNothing();
+        }
+      }
       continue;
     }
 
@@ -701,16 +836,20 @@ export async function seedCatalog() {
         posterBig,
         quality: 2160,
         runtimeAvg: runtime,
+        // Связь с TMDb: по ней дедупится fill и работает on-demand гидрация
+        // сезонов (apps/api/src/lib/tmdb.ts) — без id сериал остаётся без
+        // эпизодов.
+        tmdbId: meta?.tmdbId ?? null,
       })
       .returning({ id: items.id });
     itemId = inserted.id;
 
-    // Link genre
-    const gid = genreMap.get(item.genre);
-    if (gid) {
+    // Link genres: все найденные в TMDb, хардкод — фолбэк.
+    const gids = resolveGenres(item, meta, genreMap, tmdbToLocal);
+    if (gids.length > 0) {
       await customDb
         .insert(itemGenres)
-        .values({ itemId, genreId: gid })
+        .values(gids.map((gid) => ({ itemId, genreId: gid })))
         .onConflictDoNothing();
     }
 
@@ -727,7 +866,7 @@ export async function seedCatalog() {
   console.log(
     `Extensive catalog seeded successfully. TMDb enrichment: ${enriched}/${TOP_TITLES.length}.`,
   );
-  await pool.end();
+  if (pool) await pool.end();
 }
 
 // Allow direct CLI execution
