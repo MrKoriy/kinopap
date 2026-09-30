@@ -235,17 +235,17 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
       {/* Шапка — карточка с постером слева, инфо справа. Никакого full-bleed,
           чтобы не выглядело как трейлер на всю карточку. */}
       <div className="mb-8 flex flex-col gap-6 rounded-[var(--radius-card)] border border-border bg-surface-2 p-6 sm:flex-row sm:items-start">
-        <div className="mx-auto w-[200px] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-background sm:mx-0 sm:w-[220px]">
+        <div className="relative mx-auto aspect-[2/3] w-[200px] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-background sm:mx-0 sm:w-[220px]">
           {poster ? (
             <PosterImage
               src={poster}
               alt={item.title}
-              className="aspect-[2/3] w-full object-cover"
+              className="object-cover"
               sizes="220px"
               priority
             />
           ) : (
-            <div className="flex aspect-[2/3] w-full items-center justify-center bg-surface-2 text-muted">
+            <div className="flex h-full w-full items-center justify-center bg-surface-2 text-muted">
               <Film className="h-10 w-10 opacity-30" />
             </div>
           )}
