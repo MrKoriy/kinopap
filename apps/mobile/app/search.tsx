@@ -35,27 +35,32 @@ export default function SearchScreen() {
   const [busy, setBusy] = React.useState(false);
   const focusSubmit = useTvFocus();
 
+  const genRef = React.useRef(0);
+  const [error, setError] = React.useState<string | null>(null);
   const runSearch = React.useCallback(async () => {
     const q = query.trim();
     if (!q) return;
+    const gen = ++genRef.current;
     setBusy(true);
+    setError(null);
     try {
-      const page = await api.searchItems({
-        q,
-        field: field || undefined,
-        limit: 30,
-      });
+      const page = await api.searchItems({ q, field: field || undefined, limit: 30 });
+      if (gen !== genRef.current) return;
       setResults(page.items);
       setSearched(true);
+    } catch {
+      if (gen !== genRef.current) return;
+      setError("Поиск недоступен — попробуйте позже");
     } finally {
-      setBusy(false);
+      if (gen === genRef.current) setBusy(false);
     }
   }, [api, query, field]);
 
   return (
     <View testID="search-screen" style={styles.container}>
       <View style={styles.searchRow}>
-        <TextInput
+        {error ? <Text style={{ color: tokens.color.danger, marginBottom: 8 }}>{error}</Text> : null}
+      <TextInput
           testID="search-input"
           style={styles.input}
           placeholder="Название, режиссёр, актёр…"

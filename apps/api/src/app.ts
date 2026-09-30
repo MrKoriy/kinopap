@@ -155,6 +155,18 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
 
   // healthz поллится балансировщиками/PM2 — вне rate limit.
   app.get("/healthz", { config: { rateLimit: false } }, async () => ({ ok: true }));
+  // readiness: проверяет БД (и Redis если есть), чтобы оркестратор не лил трафик на неготовый инстанс.
+  app.get("/readyz", { config: { rateLimit: false } }, async (_req, reply) => {
+    try {
+      await (opts.db as unknown as { execute: (q: unknown) => Promise<unknown> }).execute(
+        (await import("drizzle-orm")).sql`select 1`,
+      );
+      return { ok: true };
+    } catch {
+      reply.code(503);
+      return { ok: false };
+    }
+  });
 
   await app.register(
     async (scope) => {

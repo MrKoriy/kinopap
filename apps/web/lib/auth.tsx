@@ -109,8 +109,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         applyAuth(await api.register(input));
       },
       logout: async () => {
-        // Куку чистит API; тело не нужно.
-        await api.logout().catch(() => {});
+        try {
+          await api.logout();
+        } catch (e) {
+          // Сервер не отозвал куку — показываем ошибку, но локально всё равно выходим.
+          console.warn("logout failed:", e);
+        }
         api.setToken(null);
         setUser(null);
       },

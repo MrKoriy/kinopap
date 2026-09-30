@@ -301,7 +301,9 @@ export async function catalogRoutes(
     // revalidate. Сбой гидрации больше не роняет карточку — просто
     // останется без списка серий.
     const totalEpisodes = item.seasons ? item.seasons.reduce((a, s) => a + (s.episodes?.length ?? 0), 0) : 0;
-    if (item.type === "serial" && item.seasons && (item.seasons.length === 0 || totalEpisodes === 0)) {
+    // Триггер шире: не только пустой сериал, но и частично догидрированный (ongoing, прошлый частичный успех).
+    // hydrateSerialSeasons идемпотентна и кэширует промахи на 10 мин, так что лишний вызов дешёвый.
+    if (item.type === "serial" && item.tmdb.id && item.seasons && (item.seasons.length === 0 || totalEpisodes === 0)) {
       const hydrating = hydrateSerialSeasons(
         db,
         config,

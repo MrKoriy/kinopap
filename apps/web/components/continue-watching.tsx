@@ -111,6 +111,7 @@ export function ContinueWatching() {
 
   React.useEffect(() => {
     if (!isAuthed) {
+      setEntries([]);
       setLoaded(true);
       return;
     }
