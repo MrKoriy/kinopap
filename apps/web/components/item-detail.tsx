@@ -56,12 +56,9 @@ function EpisodeRow({
       <div className="flex items-center gap-4 px-4 py-3 opacity-50" aria-disabled="true">
         <span className="w-8 shrink-0 text-center text-sm">{episode.number}</span>
         {episode.thumbnailUrl ? (
-          <PosterImage
-            src={episode.thumbnailUrl}
-            alt=""
-            className="h-12 w-20 shrink-0 rounded object-cover"
-            sizes="80px"
-          />
+          <span className="relative h-12 w-20 shrink-0 overflow-hidden rounded">
+            <PosterImage src={episode.thumbnailUrl} alt="" className="object-cover" sizes="80px" />
+          </span>
         ) : (
           <span className="h-12 w-20 shrink-0 rounded bg-surface-2" />
         )}
@@ -84,12 +81,9 @@ function EpisodeRow({
         {episode.number}
       </span>
       {episode.thumbnailUrl ? (
-        <PosterImage
-          src={episode.thumbnailUrl}
-          alt=""
-          className="h-12 w-20 shrink-0 rounded object-cover"
-          sizes="80px"
-        />
+        <span className="relative h-12 w-20 shrink-0 overflow-hidden rounded">
+          <PosterImage src={episode.thumbnailUrl} alt="" className="object-cover" sizes="80px" />
+        </span>
       ) : (
         <span className="h-12 w-20 shrink-0 rounded bg-surface-2" />
       )}
