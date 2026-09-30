@@ -245,8 +245,8 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
   return (
     <div>
       {/* Шапка */}
-      <div className="relative mb-8 min-h-[380px] overflow-hidden rounded-[var(--radius-card)] bg-surface-2">
-        <div className="relative h-[380px] w-full">
+      <div className="relative mb-8 min-h-[280px] overflow-hidden rounded-[var(--radius-card)] bg-surface-2 sm:min-h-[380px]">
+        <div className="relative h-[280px] w-full sm:h-[380px]">
           <PosterImage
             src={poster}
             alt={item.title}
@@ -255,7 +255,7 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
             priority
           />
         </div>
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/60 to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/70 to-background/10" />
         <div className="absolute bottom-6 left-6 right-6">
           <h1 className="text-3xl font-bold text-white sm:text-4xl" data-testid="item-title">
             {item.title}
@@ -407,7 +407,8 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
       )}
 
       {/* Сезоны и эпизоды */}
-      {item.seasons && item.seasons.length > 0 && (
+      {item.seasons ? (
+        item.seasons.length > 0 ? (
         <div data-testid="seasons">
           <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
             {item.seasons.map((s, i) => (
@@ -444,7 +445,12 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
             ))}
           </ul>
         </div>
-      )}
+        ) : (
+          <div className="mb-8 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted">
+            Сезоны загружаются… Обновите страницу через несколько секунд.
+          </div>
+        )
+      ) : null}
 
       {/* Фильм из нескольких частей (аниме без сезонов — тоже) */}
       {item.media && item.media.length > 1 && (
