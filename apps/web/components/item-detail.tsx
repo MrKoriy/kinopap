@@ -1,8 +1,8 @@
 "use client";
 
 import type { Episode, ItemDetail, ItemProgressDto, ItemProgressEntry } from "@zal/api-client";
-import { pickDefaultSeason, pluralRu, primaryPlayLabel, progressByMedia, resolveTrailer } from "@zal/shared";
-import { Check, Film, Play, RotateCcw, X } from "lucide-react";
+import { pickDefaultSeason, pluralRu, primaryPlayLabel, progressByMedia } from "@zal/shared";
+import { Check, Film, Play, RotateCcw } from "lucide-react";
 import Link from "next/link";
 /**
  * Страница тайтла: инфо, рейтинги, кнопка «Смотреть», сезоны и эпизоды.
@@ -136,7 +136,6 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
   const isAuthed = auth?.isAuthed ?? false;
 
   const [activeSeason, setActiveSeason] = React.useState(0);
-  const [showTrailer, setShowTrailer] = React.useState(false);
   const [progress, setProgress] = React.useState<ItemProgressDto | null>(null);
   // Ручной выбор сезона отключает авто-выбор по прогрессу — иначе поздний
   // ответ API перепрыгнул бы туда, куда пользователь только что переключился.
@@ -185,17 +184,6 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
 
   const poster = item.posters.big ?? item.posters.medium;
   const rating = item.rating > 0 ? item.rating : item.imdb.rating;
-
-  // Единая точка правды про трейлеры: реальный ролик TMDb, иначе честный
-  // поиск по названию — UI не выдаёт одно за другое.
-  const trailer = React.useMemo(
-    () =>
-      resolveTrailer(
-        { title: item.title, year: item.year, trailer: item.trailer },
-        { allowSearchFallback: true },
-      ),
-    [item.title, item.year, item.trailer],
-  );
 
   const meta = React.useMemo(() => {
     const rows: { label: string; value: string }[] = [];
@@ -298,18 +286,6 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
               </Link>
             )}
 
-            {trailer && (
-              <button
-                type="button"
-                onClick={() => setShowTrailer(true)}
-                className="inline-flex items-center rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-white transition hover:bg-surface-2"
-                data-testid="trailer-button"
-              >
-                <Film className="mr-2 h-4 w-4" />
-                {trailer.source === "search" ? "Найти трейлер" : "Трейлер"}
-              </button>
-            )}
-
             <FavoriteButton itemId={item.id} />
 
             <CollectionMenu itemId={item.id} />
@@ -320,50 +296,6 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
           </div>
         </div>
       </div>
-
-      {/* Модальное окно предпросмотра трейлера */}
-      {showTrailer && trailer && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
-        >
-          <div className="relative w-full max-w-4xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl">
-            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
-              <div className="flex items-center gap-2 text-sm font-medium text-white">
-                <Film className="h-4 w-4 text-accent" />
-                <span>
-                  {trailer.source === "search"
-                    ? `Поиск трейлера: ${item.title}`
-                    : `Трейлер: ${item.title}`}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowTrailer(false)}
-                className="rounded-lg p-1 text-white/70 hover:bg-white/10 hover:text-white"
-                aria-label="Закрыть трейлер"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            {trailer.source === "search" && (
-              <p className="border-b border-white/10 px-4 py-2 text-xs text-muted">
-                Это поиск на YouTube, а не подтверждённый трейлер тайтла.
-              </p>
-            )}
-            <div className="aspect-video w-full bg-black">
-              <iframe
-                src={trailer.embedUrl}
-                title={`Трейлер ${item.title}`}
-                className="h-full w-full border-0"
-                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                allowFullScreen
-              />
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Мета-сетка: тип-зависимые детали — сезоны, качество, озвучка, рейтинги */}
       {meta.length > 0 && (
