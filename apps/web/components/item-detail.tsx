@@ -244,38 +244,40 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
 
   return (
     <div>
-      {/* Шапка */}
-      <div className="relative mb-8 min-h-[280px] overflow-hidden rounded-[var(--radius-card)] bg-surface-2 sm:min-h-[380px]">
-        <div className="relative h-[280px] w-full sm:h-[380px]">
-          <PosterImage
-            src={poster}
-            alt={item.title}
-            className="h-full w-full object-cover object-top"
-            sizes="100vw"
-            priority
-          />
+      {/* Шапка — карточка с постером слева, инфо справа. Никакого full-bleed,
+          чтобы не выглядело как трейлер на всю карточку. */}
+      <div className="mb-8 flex flex-col gap-6 rounded-[var(--radius-card)] border border-border bg-surface-2 p-6 sm:flex-row sm:items-start">
+        <div className="mx-auto w-[200px] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-background sm:mx-0 sm:w-[220px]">
+          {poster ? (
+            <PosterImage
+              src={poster}
+              alt={item.title}
+              className="aspect-[2/3] w-full object-cover"
+              sizes="220px"
+              priority
+            />
+          ) : (
+            <div className="flex aspect-[2/3] w-full items-center justify-center bg-surface-2 text-muted">
+              <Film className="h-10 w-10 opacity-30" />
+            </div>
+          )}
         </div>
-        <div className="absolute inset-0 bg-gradient-to-t from-background via-background/70 to-background/10" />
-        <div className="absolute bottom-6 left-6 right-6">
+        <div className="min-w-0 flex-1">
           <h1 className="text-3xl font-bold text-white sm:text-4xl" data-testid="item-title">
             {item.title}
           </h1>
-          {item.originalTitle && <p className="mt-1 text-sm text-white/60">{item.originalTitle}</p>}
+          {item.originalTitle && <p className="mt-1 text-sm text-muted">{item.originalTitle}</p>}
           <div className="mt-3 flex flex-wrap items-center gap-2">
             {rating !== null && rating > 0 && (
               <Badge className="bg-accent text-white">★ {rating.toFixed(1)}</Badge>
             )}
-            {item.year && <Badge className="bg-white/10 text-white">{item.year}</Badge>}
+            {item.year && <Badge>{item.year}</Badge>}
             {item.genres.map((g) => (
-              <Badge key={g.id} className="bg-white/10 text-white">
-                {g.title}
-              </Badge>
+              <Badge key={g.id}>{g.title}</Badge>
             ))}
-            {item.duration.average ? (
-              <Badge className="bg-white/10 text-white">{formatDuration(item.duration.average)}</Badge>
-            ) : null}
+            {item.duration.average ? <Badge>{formatDuration(item.duration.average)}</Badge> : null}
           </div>
-          <div className="mt-4 flex flex-wrap items-center gap-3">
+          <div className="mt-5 flex flex-wrap items-center gap-3">
             <Link
               href={`/watch/${item.id}/${ctaMediaId}`}
               className={buttonVariants()}
@@ -288,10 +290,7 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
             {showStartOver && (
               <Link
                 href={`/watch/${item.id}/${playMediaId}`}
-                className={buttonVariants({
-                  variant: "secondary",
-                  className: "border-white/20 bg-white/10 text-white hover:bg-white/20",
-                })}
+                className={buttonVariants({ variant: "secondary" })}
                 data-testid="watch-from-start"
               >
                 <RotateCcw className="mr-2 h-4 w-4" />
@@ -303,7 +302,7 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
               <button
                 type="button"
                 onClick={() => setShowTrailer(true)}
-                className="inline-flex items-center rounded-lg border border-white/20 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
+                className="inline-flex items-center rounded-lg border border-border bg-surface px-4 py-2 text-sm font-medium text-white transition hover:bg-surface-2"
                 data-testid="trailer-button"
               >
                 <Film className="mr-2 h-4 w-4" />
