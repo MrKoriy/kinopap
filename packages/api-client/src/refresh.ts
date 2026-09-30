@@ -70,10 +70,13 @@ export function createTokenRefresher(
           await opts.saveTokens?.(res.tokens);
           client.setToken(res.tokens.accessToken);
           return true;
-        } catch {
-          // Сеть и 401 здесь неразличимы, и это осознанно: повторный refresh
-          // безопасен, а различить их вызывающему всё равно нечем — для UI оба
-          // случая выглядят одинаково, «сессии нет».
+        } catch (err) {
+          const status = (err as { status?: number })?.status;
+          const code = (err as { body?: { error?: { code?: string } } })?.body?.error?.code;
+          // Сеть/таймаут (status 0/"timeout") и 5xx — сессия не мертва, просто недоступна.
+          const isTransient =
+            status == null || status === 0 || status >= 500 || code === "timeout";
+          if (isTransient) return false;
           await opts.onSessionLost?.();
           return false;
         } finally {

@@ -91,6 +91,12 @@ async function materialize(db: Db, release: AnilibriaRelease): Promise<number> {
   return created;
 }
 
+async function materializeIncremental(db: Db, release: AnilibriaRelease): Promise<void> {
+  // Догоняем новые серии ongoing-релиза: materialize уже идемпотентен через sourceKey,
+  // поэтому просто прогоняем его — новые ordinal создадут новые media/episode, старые — no-op.
+  await materialize(db, release);
+}
+
 export async function importAnilibriaCatalog(
   opts: AnimeImportOptions,
 ): Promise<AnimeImportSummary> {
@@ -115,9 +121,12 @@ export async function importAnilibriaCatalog(
       if (out.listed >= maxReleases) break;
       out.listed += 1;
 
-      // Уже в каталоге — не пересобираем эпизоды: повторный fill не должен
-      // тратить десятки минут на идемпотентные upsert'ы.
+      // Уже в каталоге — проверяем, не появились ли новые серии.
       if (known.has(String(listed.id))) {
+        try {
+          const fullKnown = await connector.getRelease(listed.id);
+          if (fullKnown) await materializeIncremental(opts.db, fullKnown);
+        } catch {}
         report();
         continue;
       }

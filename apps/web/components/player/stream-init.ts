@@ -170,6 +170,13 @@ export function useStreamSetup(params: StreamSetupParams): void {
               abandonRef.current();
               return;
             }
+            // Общий лимит ретраев вне манифеста — чтобы не крутить бесконечно на мёртвой сети.
+            if ((abandonRef as unknown as { retries?: number }).retries == null) (abandonRef as unknown as { retries: number }).retries = 0;
+            if ((abandonRef as unknown as { retries: number }).retries >= 3) {
+              setError("Сеть недоступна — попробуйте позже");
+              return;
+            }
+            (abandonRef as unknown as { retries: number }).retries += 1;
             hls.startLoad();
             return;
           }

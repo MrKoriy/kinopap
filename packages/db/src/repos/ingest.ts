@@ -130,6 +130,3 @@ export async function reconcileStaleIngestJobs(
   return updated.length + queued.length;
 }
 
-export async function reconcileQueuedOrphans(db: Db, staleMinutes = 60): Promise<number> {
-  return reconcileStaleIngestJobs(db, staleMinutes);
-}

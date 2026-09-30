@@ -22,7 +22,8 @@ export const LADDER: Rung[] = [
 
 /**
  * Выбор рунгов: запрошенные (или все) с высотой не выше исходника.
- * Если не влезает ни один — берём первый запрошенный форсированно.
+ * Апскейла нет: если не влезает ни один — берём ближайший снизу, а не
+ * первый запрошенный (который может быть 1080p над 480p исходником).
  */
 export function selectLadder(
   sourceHeight: number,
@@ -32,5 +33,8 @@ export function selectLadder(
     ? LADDER.filter((r) => requested.includes(r.name))
     : LADDER;
   const fits = wanted.filter((r) => r.height <= sourceHeight);
-  return fits.length ? fits : wanted.slice(0, 1);
+  if (fits.length) return fits;
+  // Ничего не влезло — берём минимальный рунг из LADDER, но не выше исходника.
+  const fallback = LADDER.filter((r) => r.height <= sourceHeight);
+  return fallback.length ? [fallback[0]!] : [LADDER[0]!];
 }

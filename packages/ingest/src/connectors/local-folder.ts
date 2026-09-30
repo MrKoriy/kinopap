@@ -2,7 +2,7 @@
  * LocalFolder: папка с твоими файлами. Ищет видеофайлы, подхватывает
  * субтитры-призраки рядом (та же база имени), тянет без копирования.
  */
-import { readdir, stat } from "node:fs/promises";
+import { readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { type FfmpegConfig, probeMedia } from "../media/probe";
 import type {
@@ -25,7 +25,21 @@ export class LocalFolderConnector implements SourceConnector {
     private readonly cfg: FfmpegConfig = {},
   ) {}
 
-  /** ref обязан лежать внутри root — защита от path traversal. */
+  /** ref обязан лежать внутри root — защита от path traversal и symlink-escape. */
+  private async resolveReal(ref: string): Promise<string> {
+    const abs = path.resolve(this.root, ref);
+    const rootAbs = path.resolve(this.root);
+    if (abs !== rootAbs && !abs.startsWith(rootAbs + path.sep)) {
+      throw new Error(`local source: ref escapes root: ${ref}`);
+    }
+    // realpath разворачивает симлинки внутри root, указывающие наружу.
+    const real = await realpath(abs).catch(() => abs);
+    const realRoot = await realpath(rootAbs).catch(() => rootAbs);
+    if (real !== realRoot && !real.startsWith(realRoot + path.sep)) {
+      throw new Error(`local source: symlink escapes root: ${ref} -> ${real}`);
+    }
+    return real;
+  }
   private resolve(ref: string): string {
     const abs = path.resolve(this.root, ref);
     const rootAbs = path.resolve(this.root);
@@ -65,11 +79,16 @@ export class LocalFolderConnector implements SourceConnector {
   }
 
   async pull(ref: string, opts: PullOptions): Promise<PulledSource> {
-    const abs = this.resolve(ref);
-    await stat(abs); // убедились, что файл есть
+    const abs = await this.resolveReal(ref);
+    // Таймаут на stat: зависшая сетевая точка монтирования не должна вешать джобу навечно.
+    const timeoutMs = 15_000;
+    await Promise.race([
+      stat(abs),
+      new Promise<never>((_, rej) => setTimeout(() => rej(new Error("local source: stat timeout")), timeoutMs)),
+    ]);
     const sidecars = await this.sidecars(abs);
     const refs = opts.subtitleRefs?.length
-      ? opts.subtitleRefs.map((r) => this.resolve(r))
+      ? await Promise.all(opts.subtitleRefs.map((r) => this.resolveReal(r)))
       : sidecars;
     return {
       filePath: abs,

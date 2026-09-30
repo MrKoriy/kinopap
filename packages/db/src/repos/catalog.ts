@@ -274,9 +274,11 @@ function cursorCond(cursor: CursorPayload): SQL {
     (cursor.s === "created" || cursor.s === "updated") && typeof cursor.v === "string"
       ? new Date(cursor.v)
       : cursor.v;
-  // NULLS LAST: кортеж (NULL, id) не сравнивается корректно — ветвим.
+  // NULLS LAST: кортеж (NULL, id) не сравнивается корректно — ветвим по направлению.
   if (value == null) {
-    return sql`${col} is null and ${items.id} < ${cursor.id}`;
+    return cursor.d === "desc"
+      ? sql`${col} is null and ${items.id} < ${cursor.id}`
+      : sql`${col} is null and ${items.id} > ${cursor.id}`;
   }
   if (cursor.d === "desc") {
     // desc nulls last: после не-null идут меньшие значения, затем NULL-блок.

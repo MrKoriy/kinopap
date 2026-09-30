@@ -224,9 +224,29 @@ export default function WatchScreen() {
   const [audioChoice, setAudioChoice] = React.useState<number | null>(null);
 
   const sourceUri = React.useMemo(() => {
+    const toAbsolute = (u: string | null): string | null => {
+      if (!u) return null;
+      if (/^https?:\/\//.test(u)) return u;
+      const base = process.env.EXPO_PUBLIC_API_URL ?? "";
+      return base ? base.replace(/\/$/, "") + u : u;
+    };
     if (!links) return null;
     const chosen = audioChoice == null ? null : links.audios[audioChoice];
-    return chosen?.masterUrl ?? links.files.find((f) => f.urls.hls)?.urls.hls ?? null;
+    const candidates: Array<string | null> = [
+      chosen?.masterUrl,
+      links.files.find((f) => f.urls.hls)?.urls.hls ?? null,
+      links.files.find((f) => f.urls.http)?.urls.http ?? null,
+    ];
+    for (const c of candidates) {
+      const abs = toAbsolute(c);
+      if (abs) return abs;
+    }
+    // Fallback: перебираем все hls/http по очереди
+    for (const f of links.files) {
+      const abs = toAbsolute(f.urls.hls) ?? toAbsolute(f.urls.http);
+      if (abs) return abs;
+    }
+    return null;
   }, [links, audioChoice]);
 
   const loadSource = React.useCallback(

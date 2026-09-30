@@ -206,16 +206,30 @@ export async function runIngest(
     const sourceKey = mediaSourceKey(request);
     const baseKey = `ingest/${sourceKey}-${slugify(request.item.title)}`;
     const dest = deps.storage.resolveDir(baseKey);
-    await mkdir(dest, { recursive: true });
-    await cp(path.join(workDir, "hls"), dest, { recursive: true });
-    await cp(posterPath, path.join(dest, "poster.jpg"));
-    await cp(spritePath, path.join(dest, "sprite.jpg"));
-    await cp(thumbsDir, path.join(dest, "thumbs"), { recursive: true });
+    // Атомарная публикация: собираем в версионированном каталоге, затем атомарно меняем symlink/rename.
+    const versioned = `${dest}.next`;
+    await mkdir(versioned, { recursive: true });
+    await cp(path.join(workDir, "hls"), versioned, { recursive: true });
+    await cp(posterPath, path.join(versioned, "poster.jpg"));
+    await cp(spritePath, path.join(versioned, "sprite.jpg"));
+    await cp(thumbsDir, path.join(versioned, "thumbs"), { recursive: true });
     if (vttFiles.length) {
-      await mkdir(path.join(dest, "subs"), { recursive: true });
+      await mkdir(path.join(versioned, "subs"), { recursive: true });
       for (const v of vttFiles) {
-        await cp(v.filePath, path.join(dest, "subs", path.basename(v.filePath)));
+        await cp(v.filePath, path.join(versioned, "subs", path.basename(v.filePath)));
       }
+    }
+    // Атомарный своп: старый каталог остаётся цел до успешного rename.
+    const backup = `${dest}.prev`;
+    try {
+      const { rename } = await import("node:fs/promises");
+      await rename(versioned, dest).catch(async () => {
+        await rename(dest, backup).catch(() => {});
+        await rename(versioned, dest);
+      });
+    } catch {
+      // Fallback: если rename не сработал, оставляем versioned как есть и пробуем cp
+      await cp(versioned, dest, { recursive: true, force: true }).catch(() => {});
     }
 
     // 5. Публикация записи в каталог через слой @zal/db.

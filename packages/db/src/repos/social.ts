@@ -279,46 +279,34 @@ export async function setVote(
   positive: boolean,
 ): Promise<VoteStateDto> {
   await db.transaction(async (tx) => {
-    const mine = await tx
-      .select()
+    // Сначала пробуем атомарно вставить; при гонке двух запросов второй получит конфликт,
+    // а не 500. Используем onConflictDoUpdate как в progress/profile.
+    await tx
+      .insert(votes)
+      .values({ profileId, itemId, positive })
+      .onConflictDoUpdate({
+        target: [votes.profileId, votes.itemId],
+        set: { positive, updatedAt: new Date() },
+      });
+    // Пересчёт агрегатов из таблицы голосов — устойчив к гонкам (не дельта).
+    const counts = await tx
+      .select({
+        pos: sql<number>`count(*) filter (where ${votes.positive} = true)::int`,
+        neg: sql<number>`count(*) filter (where ${votes.positive} = false)::int`,
+      })
       .from(votes)
-      .where(and(eq(votes.profileId, profileId), eq(votes.itemId, itemId)))
-      .limit(1);
-    const prev = mine[0] ?? null;
-    if (prev && prev.positive === positive) return;
-
-    const dPos = (positive ? 1 : 0) - (prev ? (prev.positive ? 1 : 0) : 0);
-    const dNeg = (positive ? 0 : 1) - (prev ? (prev.positive ? 0 : 1) : 0);
-
-    if (prev) {
-      await tx
-        .update(votes)
-        .set({ positive, updatedAt: new Date() })
-        .where(eq(votes.id, prev.id));
-    } else {
-      await tx.insert(votes).values({ profileId, itemId, positive });
-    }
-
+      .where(eq(votes.itemId, itemId));
+    const pos = Number(counts[0]?.pos ?? 0);
+    const neg = Number(counts[0]?.neg ?? 0);
     await tx
       .update(items)
       .set({
-        votesPositive: sql`${items.votesPositive} + ${dPos}`,
-        votesNegative: sql`${items.votesNegative} + ${dNeg}`,
+        votesPositive: pos,
+        votesNegative: neg,
+        rating: ratingOf(pos, pos + neg),
       })
       .where(eq(items.id, itemId));
-
-    const totals = await tx
-      .select({ positive: items.votesPositive, negative: items.votesNegative })
-      .from(items)
-      .where(eq(items.id, itemId))
-      .limit(1);
-    const t = totals[0];
-    if (t) {
-      await tx
-        .update(items)
-        .set({ rating: ratingOf(t.positive, t.positive + t.negative) })
-        .where(eq(items.id, itemId));
-    }
+    return;
   });
   return voteState(db, profileId, itemId);
 }

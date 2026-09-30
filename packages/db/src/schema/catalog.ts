@@ -93,6 +93,7 @@ export const items = pgTable(
     // Дедуп discovery-импорта: tmdbId + (title, year) — по 15к+ поисков за fill.
     index("items_tmdb_id_idx").on(t.tmdbId),
     index("items_tmdb_type_idx").on(t.tmdbType),
+    uniqueIndex("items_tmdb_type_id_uq").on(t.tmdbType, t.tmdbId),
     // Дедуп и резолв по внешнему источнику (anilibria и дальше).
     uniqueIndex("items_external_uq").on(t.externalSource, t.externalId),
     index("items_title_year_idx").on(t.title, t.year),

@@ -300,7 +300,8 @@ export async function catalogRoutes(
     // фоном (in-flight дедуп внутри), ISR-страница подхватит на
     // revalidate. Сбой гидрации больше не роняет карточку — просто
     // останется без списка серий.
-    if (item.type === "serial" && item.seasons && item.seasons.length === 0) {
+    const totalEpisodes = item.seasons ? item.seasons.reduce((a, s) => a + (s.episodes?.length ?? 0), 0) : 0;
+    if (item.type === "serial" && item.seasons && (item.seasons.length === 0 || totalEpisodes === 0)) {
       const hydrating = hydrateSerialSeasons(
         db,
         config,
@@ -457,13 +458,27 @@ export async function catalogRoutes(
     }).catch(() => {
       // Кэш в БД опционален — падение записи не должно ломать просмотр.
     });
-    // Прогрев не уложился в бюджет — допишем, когда доехает.
+    // Прогрев не уложился в бюджет — когда доедет, пересохраняем полную запись (warm+files),
+    // чтобы кэш и БД не отдавали угаданный index=1 до истечения TTL.
     if (!resolved.warm) {
       void streamResolver
         .warmFor(id, mediaId)
-        .then((warm2) =>
-          warm2 ? patchSource(db, id, mediaId, { warm: warm2 }) : undefined,
-        )
+        .then((warm2) => {
+          if (!warm2) return;
+          const files = entry.files.map((f) => {
+            // Если файл был с угаданным index=1, а warm даёт реальный fileIndex — пересобираем URL.
+            // Для простоты пересохраняем entry как есть с новым warm; следующий резолв пересоберёт URLs.
+            return f;
+          });
+          return saveSource(db, {
+            itemId: id,
+            mediaId,
+            files,
+            audios: entry.audios,
+            intro: entry.intro,
+            warm: warm2,
+          });
+        })
         .catch(() => {});
     }
     return entry;

@@ -387,10 +387,12 @@ export function Player({
     const video = videoRef.current;
     // Per-media: при клиентской навигации на следующую серию плеер может
     // пережить смену источника и обязан заново применить резюме.
-    if (!video || !isAuthed || resumeDone.current === links.mediaId) return;
+    if (!video || resumeDone.current === links.mediaId) return;
     resumeDone.current = links.mediaId;
-    // Гость резюме не ждёт — снимаем «стоп» с автоплея сразу.
-    resumeSettled.current = links.mediaId;
+    if (!isAuthed) {
+      resumeSettled.current = links.mediaId;
+      return;
+    }
     void api
       .getProgress(links.mediaId)
       .then(({ progress }) => {
