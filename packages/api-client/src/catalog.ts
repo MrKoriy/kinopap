@@ -47,11 +47,16 @@ export function parseYearRange(
   raw: string | undefined,
 ): { yearFrom?: number; yearTo?: number } {
   if (!raw) return {};
-  const m = raw.match(/^(\d{4})(?:-(\d{4})?)?$/);
-  if (!m) return {};
-  const yearFrom = Number(m[1]);
-  const yearTo = m[2] ? Number(m[2]) : yearFrom;
-  return { yearFrom, yearTo };
+  let m = raw.match(/^(\d{4})(?:-(\d{4})?)?$/);
+  if (m) {
+    const yearFrom = Number(m[1]);
+    const yearTo = m[2] ? Number(m[2]) : yearFrom;
+    return { yearFrom, yearTo };
+  }
+  // yearTo-only: "-2020"
+  m = raw.match(/^-\s*(\d{4})$/);
+  if (m) return { yearTo: Number(m[1]) };
+  return {};
 }
 
 /** CSV из id: "1,2,3" → [1,2,3]; мусор отбрасывается. */

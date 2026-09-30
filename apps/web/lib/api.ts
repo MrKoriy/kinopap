@@ -53,14 +53,26 @@ async function getJson(
   revalidate = 30,
   timeoutMs = 15_000,
 ): Promise<unknown> {
+  return getJsonWithInit(path, revalidate, timeoutMs);
+}
+
+async function getJsonWithInit(
+  path: string,
+  revalidate = 30,
+  timeoutMs = 15_000,
+  init?: RequestInit,
+): Promise<unknown> {
   const signal = AbortSignal.timeout(timeoutMs);
   let res: Response;
   try {
     res = await fetch(
       `${API_BASE}${path}`,
-      revalidate > 0
-        ? { next: { revalidate }, signal }
-        : { cache: "no-store", signal },
+      {
+        ...(revalidate > 0 ? { next: { revalidate } } : { cache: "no-store" as const }),
+        signal,
+        ...init,
+        headers: { ...(init?.headers as Record<string,string> | undefined) },
+      },
     );
   } catch {
     throw new ApiUnavailableError(0, path);
@@ -142,12 +154,13 @@ export async function fetchSearch(
   q: string,
   field?: "title" | "director" | "cast",
   limit = 24,
+  init?: RequestInit,
 ): Promise<ItemPage> {
   if (!q.trim()) return EMPTY_PAGE;
   return softOnBuildPhase(
     async () =>
       itemPageSchema.parse(
-        await getJson(`/v1/items/search${qs({ q: q.trim(), field, limit })}`, 0),
+        await getJsonWithInit(`/v1/items/search${qs({ q: q.trim(), field, limit })}`, 0, 15_000, init),
       ),
     EMPTY_PAGE,
   );

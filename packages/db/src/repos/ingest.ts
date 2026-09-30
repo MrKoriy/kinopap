@@ -93,7 +93,9 @@ export async function updateIngestJob(
  * потерянный BullMQ-джоб), переводятся в failed. Ждущие (queued) не
  * трогаем: при concurrency:1 очередь может копиться дольше staleMinutes,
  * и рестарт не должен помечать живые ждущие задачи failed. Возвращает
- * число погашенных задач.
+ * число погашенных задач. queued-сироты теперь тоже лечатся: роут
+ * POST /ingest откатывает queued без очереди в failed сразу; здесь
+ * подстраховка — queued старше 2*stale, без проверки очереди, в failed.
  */
 export async function reconcileStaleIngestJobs(
   db: Db,
@@ -114,5 +116,20 @@ export async function reconcileStaleIngestJobs(
       ),
     )
     .returning({ id: ingestJobs.id });
-  return updated.length;
+  // queued-сироты: без очереди старше 2*stale — считаем потерянными.
+  const queuedCutoff = new Date(Date.now() - 2 * staleMinutes * 60 * 1000);
+  const queued = await db
+    .update(ingestJobs)
+    .set({
+      status: "failed",
+      error: sql`coalesce(${ingestJobs.error}, '') || 'reconciled: queued without queue'`,
+      updatedAt: new Date(),
+    })
+    .where(and(eq(ingestJobs.status, "queued"), lt(ingestJobs.updatedAt, queuedCutoff)))
+    .returning({ id: ingestJobs.id });
+  return updated.length + queued.length;
+}
+
+export async function reconcileQueuedOrphans(db: Db, staleMinutes = 60): Promise<number> {
+  return reconcileStaleIngestJobs(db, staleMinutes);
 }

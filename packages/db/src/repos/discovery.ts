@@ -11,9 +11,10 @@ import { eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { genres, itemGenres, items, media } from "../schema/index";
 
-/** Черновик тайтла из TMDb (жанры — id TMDb, маппинг наружу). */
+/** Черновик тайтла из TMDb (жанры — id TMDb, маппинг наружу). tmdbType разделяет пространства movie/tv. */
 export interface CatalogDraft {
   tmdbId: number;
+  tmdbType: "movie" | "tv";
   type: "movie" | "serial";
   title: string;
   originalTitle: string | null;
@@ -67,21 +68,27 @@ export async function insertCatalogBatch(
 
   return db.transaction(async (tx) => {
     const unique = new Map<string, CatalogDraft>();
-    for (const d of drafts) unique.set(`${d.type}:${d.tmdbId}`, d);
+    for (const d of drafts) unique.set(`${d.tmdbType}:${d.tmdbId}`, d);
     const batch = [...unique.values()];
 
-    // 1. Уже есть по tmdbId.
+    // 1. Уже есть по tmdbId — раздельно по tmdbType (movie/tv разные пространства).
     const existingByTmdb = await tx
       .select({
         id: items.id,
         tmdbId: items.tmdbId,
+        tmdbType: items.tmdbType,
         posterMedium: items.posterMedium,
       })
       .from(items)
-      .where(inArray(items.tmdbId, batch.map((d) => d.tmdbId)));
-    const known = new Map(existingByTmdb.map((r) => [r.tmdbId as number, r]));
+      .where(
+        sql`(${items.tmdbType}, ${items.tmdbId}) in (${sql.join(
+          batch.map((d) => sql`(${d.tmdbType}::text, ${d.tmdbId}::int)`),
+          sql`, `,
+        )})`,
+      );
+    const known = new Map(existingByTmdb.map((r) => [`${r.tmdbType}:${r.tmdbId as number}`, r]));
 
-    const rest = batch.filter((d) => !known.has(d.tmdbId));
+    const rest = batch.filter((d) => !known.has(`${d.tmdbType}:${d.tmdbId}`));
 
     // 2. Дедуп по (lower(title), year): тайтл мог прийти из другого источника
     //    (сида, прошлого fill) с тем же названием, но другим tmdbId.
@@ -113,7 +120,7 @@ export async function insertCatalogBatch(
     //    один UPDATE на всю пачку, не по запросу на тайтл.
     const repair: Array<{ id: number; d: CatalogDraft }> = [];
     for (const d of batch) {
-      const row = known.get(d.tmdbId);
+      const row = known.get(`${d.tmdbType}:${d.tmdbId}`);
       if (!row) continue;
       result.skipped++;
       if (!row.posterMedium && d.posterMedium) repair.push({ id: row.id, d });
@@ -160,19 +167,20 @@ export async function insertCatalogBatch(
             posterMedium: d.posterMedium,
             posterBig: d.posterBig,
             tmdbId: d.tmdbId,
+            tmdbType: d.tmdbType,
           })),
         )
-        .returning({ id: items.id, tmdbId: items.tmdbId });
+        .returning({ id: items.id, tmdbId: items.tmdbId, tmdbType: items.tmdbType });
 
-      const byTmdb = new Map(chunk.map((d, idx) => [d.tmdbId, chunk[idx]!]));
-      const idByTmdb = new Map(inserted.map((r) => [r.tmdbId as number, r.id]));
+      const byTmdb = new Map(chunk.map((d) => [`${d.tmdbType}:${d.tmdbId}`, d]));
+      const idByTmdb = new Map(inserted.map((r) => [`${(r as unknown as { tmdbType: string }).tmdbType}:${r.tmdbId as number}`, r.id]));
 
       const genreRows: Array<{ itemId: number; genreId: number }> = [];
       const mediaRows: Array<{ itemId: number; title: string; runtime: number }> = [];
       for (const d of chunk) {
-        const itemId = idByTmdb.get(d.tmdbId);
+        const itemId = idByTmdb.get(`${d.tmdbType}:${d.tmdbId}`);
         if (itemId == null) continue;
-        const draft = byTmdb.get(d.tmdbId);
+        const draft = byTmdb.get(`${d.tmdbType}:${d.tmdbId}`);
         const seen = new Set<number>();
         for (const gid of draft?.genreIds ?? []) {
           const local = tmdbToLocalGenre.get(gid);
@@ -196,16 +204,26 @@ export async function insertCatalogBatch(
   });
 }
 
-/** Какие из tmdbId уже есть в каталоге — чтобы не тянуть детали чужих. */
+/** Какие из (tmdbType, tmdbId) уже есть в каталоге — чтобы не тянуть детали чужих. */
 export async function filterExistingTmdbIds(
   db: Db,
-  ids: number[],
+  ids: Array<{ tmdbType: string; tmdbId: number }> | number[],
 ): Promise<Set<number>> {
   if (ids.length === 0) return new Set();
+  if (ids.length > 0 && typeof (ids[0] as unknown as { tmdbId?: unknown })?.tmdbId === "number") {
+    const typed = ids as Array<{ tmdbType: string; tmdbId: number }>;
+    const rows = await db
+      .select({ tmdbId: items.tmdbId })
+      .from(items)
+      .where(
+        sql`(${items.tmdbType}, ${items.tmdbId}) in (${sql.join(typed.map((x) => sql`(${x.tmdbType}::text, ${x.tmdbId}::int)`), sql`, `)})`,
+      );
+    return new Set(rows.map((r) => r.tmdbId).filter((id): id is number => id != null));
+  }
   const rows = await db
     .select({ tmdbId: items.tmdbId })
     .from(items)
-    .where(inArray(items.tmdbId, ids));
+    .where(inArray(items.tmdbId, ids as number[]));
   return new Set(rows.map((r) => r.tmdbId).filter((id): id is number => id != null));
 }
 

@@ -146,7 +146,17 @@ export async function catalogRoutes(
 
   /** Список с фильтрами и cursor-пагинацией (формат фильтров как в API 1.3). */
   app.get("/items", async (request) => {
-    const filters = parseCatalogQuery(request.query ?? {});
+    let filters: ReturnType<typeof parseCatalogQuery>;
+    try {
+      filters = parseCatalogQuery(request.query ?? {});
+    } catch (err) {
+      const zod = await import("zod");
+      if (err instanceof zod.ZodError) {
+        const { badRequest } = await import("../lib/http");
+        throw badRequest("validation_error", "Invalid request", (err as InstanceType<typeof zod.ZodError>).issues);
+      }
+      throw err;
+    }
     return listItems(db, filters);
   });
 

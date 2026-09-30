@@ -1,6 +1,7 @@
 import jwt from "@fastify/jwt";
 import type { UserRole } from "@zal/api-client";
-import { type Db, getDefaultProfile } from "@zal/db";
+import { type Db, getDefaultProfile, users } from "@zal/db";
+import { eq } from "drizzle-orm";
 import type { FastifyInstance, FastifyReply, FastifyRequest, preHandlerHookHandler } from "fastify";
 import type { Config } from "../config";
 import { forbidden, unauthorized } from "../lib/http";
@@ -65,8 +66,15 @@ export async function requireProfileId(
 export async function registerAuth(
   app: FastifyInstance,
   config: Config,
+  db?: Db,
 ): Promise<void> {
   await app.register(jwt, { secret: config.jwtSecret });
+
+  // Лёгкий TTL-кэш проверки isActive/role: без него каждый запрос лупит в БД.
+  const cache = new Map<number, { at: number; active: boolean; role: UserRole }>();
+  const TTL_MS = 30_000;
+  const resolveDb = (): Db | undefined =>
+    db ?? (app as unknown as { db?: Db }).db ?? (config as unknown as { db?: Db }).db;
 
   app.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
     try {
@@ -74,8 +82,35 @@ export async function registerAuth(
       if (request.user.typ !== "access") {
         throw unauthorized("Unexpected token type");
       }
-    } catch {
-      // Не раскрываем причину — просто 401.
+      // Живая проверка: заблокированный пользователь не проходит даже со свежим JWT.
+      const sub = request.user.sub;
+      const now = Date.now();
+      let entry = cache.get(sub);
+      if (!entry || now - entry.at > TTL_MS) {
+        const liveDb = resolveDb();
+        if (liveDb) {
+          const rows = await liveDb.select({ isActive: users.isActive, role: users.role }).from(users).where(eq(users.id, sub)).limit(1);
+          const row = rows[0] as { isActive: boolean; role: UserRole } | undefined;
+          if (row) {
+            entry = { at: now, active: row.isActive, role: row.role as UserRole };
+            cache.set(sub, entry);
+          } else {
+            // Пользователь удалён — токен недействителен.
+            throw unauthorized();
+          }
+        } else if (!entry) {
+          // БД недоступна и кэша нет — пускаем по JWT (совместимость тестов без БД).
+          entry = { at: now, active: true, role: request.user.role };
+        }
+      }
+      if (!entry!.active) throw unauthorized();
+      if (entry!.role !== request.user.role) {
+        (request.user as { role: UserRole }).role = entry!.role;
+      }
+    } catch (err) {
+      const maybeStatus = (err as { status?: number })?.status;
+      if (maybeStatus === 401 || maybeStatus === 403) throw err;
+      if (err instanceof Error && err.message === "Unauthorized") throw err;
       throw unauthorized();
     }
     void reply;

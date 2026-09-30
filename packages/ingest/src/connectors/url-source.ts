@@ -80,15 +80,72 @@ const PRIVATE_V4 = [
   /^0\./,
 ];
 
+function decodeIpv4Octet(raw: string): number | null {
+  const s = raw.trim().toLowerCase();
+  if (s.startsWith("0x")) {
+    const n = Number.parseInt(s, 16);
+    return Number.isFinite(n) && n >= 0 && n <= 255 ? n : null;
+  }
+  if (/^0[0-7]+$/.test(s) && s !== "0") {
+    const n = Number.parseInt(s, 8);
+    return Number.isFinite(n) && n >= 0 && n <= 255 ? n : null;
+  }
+  if (!/^\d+$/.test(s)) return null;
+  const n = Number(s);
+  return Number.isFinite(n) && n >= 0 && n <= 255 ? n : null;
+}
+
+function normalizeIpv4(input: string): string | null {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+  // Single decimal (e.g. 2130706433) -> 4 octets.
+  if (/^\d+$/.test(trimmed)) {
+    const n = Number(trimmed);
+    if (!Number.isFinite(n) || n < 0 || n > 0xffffffff) return null;
+    return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join(".");
+  }
+  if (trimmed.toLowerCase().startsWith("0x")) {
+    const n = Number.parseInt(trimmed, 16);
+    if (!Number.isFinite(n) || n < 0 || n > 0xffffffff) return null;
+    return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join(".");
+  }
+  const parts = trimmed.split(".");
+  if (parts.length !== 4) return null;
+  const octets: number[] = [];
+  for (const part of parts) {
+    const v = decodeIpv4Octet(part);
+    if (v == null) return null;
+    octets.push(v);
+  }
+  return octets.join(".");
+}
+
+function normalizeIp(raw: string): string {
+  const s = raw.trim().replace(/^\[|\]$/g, "").toLowerCase();
+  // IPv4-mapped IPv6 normalization: extract trailing v4 first.
+  const mapped = s.match(/^::ffff:(.+)$/);
+  if (mapped) {
+    const v4 = normalizeIpv4(mapped[1]!);
+    if (v4) return `::ffff:${v4}`;
+    return s;
+  }
+  // Bare v4 forms (0x/decimal/octal) -> canonical dotted decimal.
+  const v4 = normalizeIpv4(s);
+  if (v4) return v4;
+  // Leave IPv6 as-is (lowercased) for prefix checks; :: expansion is handled in isPrivateIp.
+  return s;
+}
+
 function isPrivateIp(ip: string): boolean {
-  if (PRIVATE_V4.some((re) => re.test(ip))) return true;
-  if (ip === "::1" || ip === "::") return true;
-  const lower = ip.toLowerCase();
+  const normalized = normalizeIp(ip);
+  if (PRIVATE_V4.some((re) => re.test(normalized))) return true;
+  if (normalized === "::1" || normalized === "::") return true;
+  const lower = normalized.toLowerCase();
   // fc00::/7 (ULA) и fe80::/10 (link-local).
   if (lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb")) {
     return true;
   }
-  // IPv4-mapped IPv6 (::ffff:10.0.0.1).
+  // IPv4-mapped IPv6 (::ffff:10.0.0.1) — уже нормализован выше.
   const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
   if (mapped) return PRIVATE_V4.some((re) => re.test(mapped[1]!));
   return false;
@@ -96,9 +153,10 @@ function isPrivateIp(ip: string): boolean {
 
 /**
  * Схема обязана быть http/https, хост не резолвится в приватный адрес,
- * порт не попадает на внутренние сервисы. DNS-ребиндинг остаётся
- * теоретическим окном (проверка до запроса, не во время) — для этого
- * этапа достаточно.
+ * порт не попадает на внутренние сервисы. DNS-ребиндинг остаётся теоретическим окном: проверка до запроса
+ * не фиксирует IP на соединении. Полная защита — пиновать resolved IP
+ * на fetch (lookup → fetch к IP с Host-заголовком); для текущего этапа
+ * достаточно блокировки приватных адресов до и после DNS.
  */
 export async function assertSafeUrl(raw: string, cfg: UrlSourceOptions): Promise<URL> {
   let url: URL;
@@ -118,10 +176,19 @@ export async function assertSafeUrl(raw: string, cfg: UrlSourceOptions): Promise
   }
 
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
+  // Literal IP in URL (including 0x/decimal forms) — block without DNS.
+  const literal = normalizeIp(hostname);
+  if (literal !== hostname.toLowerCase() || /^\d+\.\d+\.\d+\.\d+$/.test(literal) || literal.includes(":")) {
+    if (isPrivateIp(literal)) {
+      throw new Error(`url source: private address ${literal} is blocked (set allowPrivateHosts for LAN sources)`);
+    }
+  } else if (isPrivateIp(hostname)) {
+    throw new Error(`url source: private address ${hostname} is blocked (set allowPrivateHosts for LAN sources)`);
+  }
   try {
     const records = await lookup(hostname, { all: true });
     for (const r of records) {
-      if (isPrivateIp(r.address)) {
+      if (isPrivateIp(normalizeIp(r.address))) {
         throw new Error(
           `url source: private address ${r.address} is blocked (set allowPrivateHosts for LAN sources)`,
         );

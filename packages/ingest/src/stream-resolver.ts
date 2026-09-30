@@ -270,11 +270,14 @@ export class StreamResolver {
           }
         }
         if (full && full.episodes.length > 0) {
-          const targetEp =
-            query.episodeNumber != null
-              ? full.episodes.find((e) => e.ordinal === query.episodeNumber) ??
-                full.episodes[0]
-              : full.episodes[0];
+          let targetEp: (typeof full.episodes)[number] | undefined;
+          if (query.episodeNumber != null) {
+            targetEp = full.episodes.find((e) => e.ordinal === query.episodeNumber);
+            if (!targetEp) return { files, audios, intro };
+          } else {
+            targetEp = full.episodes[0];
+          }
+          if (!targetEp) return { files, audios, intro };
 
           if (targetEp.introStart && targetEp.introStop) {
             intro = {
@@ -465,7 +468,7 @@ export class StreamResolver {
       return { ...known, url: this.torrServer.getStreamUrl(known.hash, known.fileIndex) };
     }
     if (best) {
-      const pending = this.startWarm(`${query.itemId}:${query.mediaId}`, best);
+      const pending = this.startWarm(`${query.itemId}:${query.mediaId}`, best, query);
       return (await budget(pending, WARM_BUDGET_MS)) ?? null;
     }
     return null;
@@ -522,13 +525,13 @@ export class StreamResolver {
   }
 
   /** Запускает прогрев релиза под пару (item, media) с дедупликацией. */
-  private startWarm(key: string, rel: RutorRelease | null): Promise<WarmedRelease | null> {
+  private startWarm(key: string, rel: RutorRelease | null, queryForWarm?: ResolveQuery | null): Promise<WarmedRelease | null> {
     if (!rel) return Promise.resolve(null);
     const existing = this.warms.get(key);
     if (existing && Date.now() - existing.at <= WARM_TTL_MS) return existing.promise;
 
     // Ошибки глотаем: прогрев опционален, резолв и без него отдаёт файлы.
-    const promise = this.warmBestRelease(rel).catch(() => null);
+    const promise = this.warmBestRelease(rel, queryForWarm).catch(() => null);
     this.warms.set(key, { at: Date.now(), promise });
     if (this.warms.size > 500) {
       const cutoff = Date.now() - WARM_TTL_MS;
@@ -602,7 +605,7 @@ export class StreamResolver {
    * на крупнейший видеофайл торрента. null — TorrServer недоступен или
    * метаданные не подтянулись: вызывающий код откатывается на magnet-URL.
    */
-  private async warmBestRelease(rel: RutorRelease | null): Promise<WarmedRelease | null> {
+  private async warmBestRelease(rel: RutorRelease | null, queryForWarm?: ResolveQuery | null): Promise<WarmedRelease | null> {
     if (!rel) return null;
     try {
       const added = await this.torrServer.addTorrent(rel.magnet, rel.title);
@@ -616,9 +619,27 @@ export class StreamResolver {
         await new Promise((r) => setTimeout(r, 1500));
         torrent = await this.torrServer.getTorrent(hash);
       }
-      const best = torrent ? this.torrServer.findBestVideoFile(torrent.file_stats) : null;
+      // Эпизод запрошен — ищем файл по S/E в имени, не крупнейший.
+      let best: { id: number; path: string } | null = null;
+      if (queryForWarm?.seasonNumber != null && queryForWarm?.episodeNumber != null) {
+        const wantedS = queryForWarm.seasonNumber;
+        const wantedE = queryForWarm.episodeNumber;
+        const candidates = (torrent?.file_stats ?? []).filter((f) => {
+          const m = f.path.match(/s0*(\d+)e0*(\d+)/i);
+          if (!m) return false;
+          return Number(m[1]) === wantedS && Number(m[2]) === wantedE;
+        });
+        if (candidates.length) {
+          best = candidates.reduce((a, b) => (b.length > a.length ? b : a));
+        } else {
+          // Нет файла с нужной серией — не подменяем чужой.
+          return null;
+        }
+      } else {
+        best = torrent ? this.torrServer.findBestVideoFile(torrent.file_stats) : null;
+      }
       const index = best ? best.id : 1;
-      const filename = best?.path.split(/[\\/]/).pop();
+      const filename = (best as { path: string } | null)?.path.split(/[\\/]/).pop();
 
       // Предоткрытие: тянем 2МБ головы файла — TorrServer подключает пиров
       // и закачивает первые куски в кэш. Транскодеру потом не ждать DHT:

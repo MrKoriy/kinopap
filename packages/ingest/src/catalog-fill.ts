@@ -168,6 +168,7 @@ function mapEntry(raw: Record<string, unknown>, type: "movie" | "serial", minVot
 
   return {
     tmdbId,
+    tmdbType: (type === "movie" ? "movie" : "tv") as "movie" | "tv",
     type,
     title,
     originalTitle: raw.original_title ?? raw.original_name
@@ -211,6 +212,7 @@ function mapCollectionPart(raw: Record<string, unknown>): TmdbEntry | null {
   const voteAvg = typeof raw.vote_average === "number" ? raw.vote_average : 0;
   return {
     tmdbId,
+    tmdbType: "movie" as const,
     type: "movie",
     title,
     originalTitle: raw.original_title ? String(raw.original_title) : null,
@@ -241,7 +243,7 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
   const byKey = new Map<string, TmdbEntry>();
   const sources: string[] = [];
   const push = (e: TmdbEntry | null) => {
-    if (e) byKey.set(`${e.type}:${e.tmdbId}`, e);
+    if (e) byKey.set(`${e.tmdbType}:${e.tmdbId}`, e);
   };
   const report = (phase: FillProgress["phase"], processed = 0, added = 0, skipped = 0) => {
     opts.onProgress?.({
@@ -371,7 +373,7 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
     }
 
     // Детали (жанры, runtime) — только для тех, кого ещё нет в каталоге.
-    const existing = await filterExistingTmdbIds(opts.db, [...parts.keys()]);
+    const existing = await filterExistingTmdbIds(opts.db, [...parts.values()].map((e) => ({ tmdbType: e.tmdbType, tmdbId: e.tmdbId })));
     for (const part of parts.values()) {
       if (existing.has(part.tmdbId)) continue;
       const full = await tmdb.get<Record<string, unknown>>(`/movie/${part.tmdbId}`);

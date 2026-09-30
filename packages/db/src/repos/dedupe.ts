@@ -159,7 +159,8 @@ async function pickVictim(db: Db, aId: number, bId: number): Promise<number> {
 /**
  * Склеивает одну пару внутри транзакции: связи жертвы переезжают к выжившему
  * (без дублей по уникальным ключам), затем жертва удаляется — каскад добивает
- * то, что переехать не должно.
+ * то, что переехать не должно. Потерянные ранее: favorites, пересчёт голосов,
+ * media.episodeId (матч по season.number+episode.number).
  */
 async function mergePair(db: Db, victimId: number, targetId: number): Promise<void> {
   await db.transaction(async (tx) => {
@@ -177,31 +178,62 @@ async function mergePair(db: Db, victimId: number, targetId: number): Promise<vo
       select ${targetId}, person_id, role from item_people where item_id = ${victimId}
       on conflict do nothing`);
 
+    // favorites — раньше терялись полностью.
+    await tx.execute(sql`
+      insert into favorites (profile_id, item_id)
+      select profile_id, ${targetId} from favorites where item_id = ${victimId}
+      on conflict do nothing`);
+
     // Сезоны: свободные номера переезжают целиком.
     await tx.execute(sql`
       update seasons set item_id = ${targetId}
       where item_id = ${victimId}
         and number not in (select number from seasons where item_id = ${targetId})`);
 
-    // «Слились» сезоны с одинаковым номером — эпизоды уходят в сезон выжившего,
-    // эпизоды-дубли (тот же номер) отбрасываются.
+    // Недостающие сезоны жертвы — создаём у выжившего, чтобы media нашёл куда маппиться.
     await tx.execute(sql`
-      update episodes e set season_id = ts.id
-      from seasons vs, seasons ts
-      where vs.item_id = ${victimId}
-        and ts.item_id = ${targetId}
-        and vs.number = ts.number
-        and e.season_id = vs.id
-        and not exists (
-          select 1 from episodes te where te.season_id = ts.id and te.number = e.number)`);
+      insert into seasons (item_id, number, title)
+      select ${targetId}, number, title from seasons where item_id = ${victimId}
+        and number not in (select number from seasons where item_id = ${targetId})
+      on conflict do nothing`);
+    // Недостающие эпизоды в уже слитых сезонах — тоже создаём.
+    await tx.execute(sql`
+      insert into episodes (season_id, number, title)
+      select ts.id, e.number, e.title
+      from episodes e
+      join seasons vs on vs.id = e.season_id and vs.item_id = ${victimId}
+      join seasons ts on ts.item_id = ${targetId} and ts.number = vs.number
+      where not exists (select 1 from episodes te where te.season_id = ts.id and te.number = e.number)
+      on conflict do nothing`);
 
-    // media: не переносим те, чей source_key уже есть у выжившего (это дубли).
+    // media: переносим с ремапом episodeId по (season.number, episode.number),
+    // иначе episodeId остаётся на удаляемый эпизод и каскад сносит media.
+    // Сборка map в SQL: для каждой media жертвы находим target episode по номерам.
     await tx.execute(sql`
-      update media m set item_id = ${targetId}
+      update media m set
+        item_id = ${targetId},
+        episode_id = coalesce(
+          (select te.id from episodes ve
+           join seasons vs on vs.id = ve.season_id
+           join seasons ts on ts.item_id = ${targetId} and ts.number = vs.number
+           join episodes te on te.season_id = ts.id and te.number = ve.number
+           where ve.id = m.episode_id limit 1),
+          m.episode_id
+        )
       where m.item_id = ${victimId}
         and (m.source_key is null or not exists (
           select 1 from media tm
           where tm.item_id = ${targetId} and tm.source_key = m.source_key))`);
+    // Если после ремапа episode_id указывает на эпизод жертвы (нет аналога) — обнуляем,
+    // чтобы каскад удаления эпизода не снёс media.
+    await tx.execute(sql`
+      update media m set episode_id = null
+      where m.item_id = ${targetId}
+        and m.episode_id is not null
+        and not exists (
+          select 1 from episodes e join seasons s on s.id = e.season_id
+          where e.id = m.episode_id and s.item_id = ${targetId}
+        )`);
 
     // Социальные связи: без уникальных коллизий — просто переносим.
     await tx.execute(sql`
@@ -216,6 +248,7 @@ async function mergePair(db: Db, victimId: number, targetId: number): Promise<vo
         and not exists (
           select 1 from subscriptions x
           where x.profile_id = s.profile_id and x.item_id = ${targetId})`);
+    // votes — переносим только недубли, затем пересчитываем агрегаты, не переносим дельты.
     await tx.execute(sql`
       update votes v set item_id = ${targetId}
       where v.item_id = ${victimId}
@@ -237,10 +270,20 @@ async function mergePair(db: Db, victimId: number, targetId: number): Promise<vo
           select 1 from media_sources x
           where x.item_id = ${targetId} and x.media_id = ms.media_id)`);
 
-    // Метрики выжившего обогащаются, затем жертва удаляется (каскад чистит хвост).
+    // Метрики: views суммируем, голоса/рейтинг пересчитываем из votes.
     await tx.execute(sql`
       update items set views = views + (
         select coalesce(sum(views), 0) from items where id = ${victimId})
+      where id = ${targetId}`);
+    await tx.execute(sql`
+      update items set
+        votes_positive = (select count(*)::int from votes where item_id = ${targetId} and positive = true),
+        votes_negative = (select count(*)::int from votes where item_id = ${targetId} and positive = false)
+      where id = ${targetId}`);
+    await tx.execute(sql`
+      update items set rating = case when votes_positive + votes_negative > 0
+        then round(10.0 * votes_positive / (votes_positive + votes_negative)::float * 10) / 10
+        else 0 end
       where id = ${targetId}`);
     await tx.execute(sql`delete from items where id = ${victimId}`);
   });

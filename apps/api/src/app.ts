@@ -43,7 +43,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     trustProxy: opts.config.trustProxy,
   });
 
-  await registerAuth(app, opts.config);
+  await registerAuth(app, opts.config, opts.db);
+  (app as unknown as { db: Db }).db = opts.db;
 
   // Rate limit: точечные лимиты — на роутах (auth-брутфорс, поиск с
   // внешними запросами, discovery). Глобальный потолок защитный, не душащий:

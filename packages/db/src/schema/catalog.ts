@@ -58,6 +58,7 @@ export const items = pgTable(
     externalSource: varchar("external_source", { length: 32 }),
     externalId: varchar("external_id", { length: 64 }),
     tmdbId: integer("tmdb_id"),
+    tmdbType: varchar("tmdb_type", { length: 8 }),
     tmdbRating: doublePrecision("tmdb_rating"),
     tmdbVotes: integer("tmdb_votes"),
     rating: doublePrecision("rating").notNull().default(0),
@@ -91,6 +92,7 @@ export const items = pgTable(
     index("items_title_idx").on(t.title),
     // Дедуп discovery-импорта: tmdbId + (title, year) — по 15к+ поисков за fill.
     index("items_tmdb_id_idx").on(t.tmdbId),
+    index("items_tmdb_type_idx").on(t.tmdbType),
     // Дедуп и резолв по внешнему источнику (anilibria и дальше).
     uniqueIndex("items_external_uq").on(t.externalSource, t.externalId),
     index("items_title_year_idx").on(t.title, t.year),

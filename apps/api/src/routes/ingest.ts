@@ -9,6 +9,7 @@ import {
   getIngestJob,
   type IngestJobRow,
   isUniqueViolationError,
+  updateIngestJob,
 } from "@zal/db";
 import type { FastifyInstance } from "fastify";
 import type { Config } from "../config";
@@ -73,14 +74,19 @@ export async function ingestRoutes(
         active ? { job: toIngestJobDto(active) } : undefined,
       );
     }
-    await queue.enqueueIngest({
-      kind: "ingest",
-      jobId: row.id,
-      source: body.source,
-      item: body.item,
-      ladders: body.ladders,
-      episode: body.episode,
-    });
+    try {
+      await queue.enqueueIngest({
+        kind: "ingest",
+        jobId: row.id,
+        source: body.source,
+        item: body.item,
+        ladders: body.ladders,
+        episode: body.episode,
+      });
+    } catch (err) {
+      await updateIngestJob(db, row.id, { status: "failed", error: `queue_unavailable: ${String((err as Error).message ?? err).slice(0, 500)}` }).catch(() => {});
+      throw err;
+    }
     reply.code(202);
     return { job: toIngestJobDto(row) };
   });

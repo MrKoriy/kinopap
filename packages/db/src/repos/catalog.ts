@@ -70,6 +70,7 @@ const itemColumns = {
   kinopoiskRating: items.kinopoiskRating,
   kinopoiskVotes: items.kinopoiskVotes,
   tmdbId: items.tmdbId,
+  tmdbType: items.tmdbType,
   tmdbRating: items.tmdbRating,
   tmdbVotes: items.tmdbVotes,
   externalSource: items.externalSource,
@@ -273,9 +274,16 @@ function cursorCond(cursor: CursorPayload): SQL {
     (cursor.s === "created" || cursor.s === "updated") && typeof cursor.v === "string"
       ? new Date(cursor.v)
       : cursor.v;
-  const op = cursor.d === "desc" ? sql`<` : sql`>`;
-  // Пара (значение, id) — стабильная пагинация при равных значениях сортировки.
-  return sql`(${col}, ${items.id}) ${op} (${value}, ${cursor.id})`;
+  // NULLS LAST: кортеж (NULL, id) не сравнивается корректно — ветвим.
+  if (value == null) {
+    return sql`${col} is null and ${items.id} < ${cursor.id}`;
+  }
+  if (cursor.d === "desc") {
+    // desc nulls last: после не-null идут меньшие значения, затем NULL-блок.
+    return sql`(${col} < ${value} or ${col} is null or (${col} = ${value} and ${items.id} < ${cursor.id}))`;
+  }
+  // asc nulls last: после не-null — большие значения, затем NULL-блок.
+  return sql`(${col} > ${value} or ${col} is null or (${col} = ${value} and ${items.id} > ${cursor.id}))`;
 }
 
 function orderBy(sort: SortSpec) {

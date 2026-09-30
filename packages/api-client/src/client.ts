@@ -138,6 +138,8 @@ export function filtersToQuery(f: CatalogFilters): Record<string, string> {
       f.yearTo != null && f.yearTo !== f.yearFrom
         ? `${f.yearFrom}-${f.yearTo}`
         : String(f.yearFrom);
+  } else if (f.yearTo != null) {
+    q.year = `-${f.yearTo}`;
   }
   if (f.letter) q.letter = f.letter;
   if (f.actor) q.actor = f.actor;
@@ -178,10 +180,22 @@ function requestSignal(
   external: AbortSignal | undefined,
   timeoutMs: number,
 ): AbortSignal | undefined {
-  const deadline =
-    timeoutMs > 0 && typeof signalStatics.timeout === "function"
-      ? signalStatics.timeout(timeoutMs)
-      : undefined;
+  let deadline: AbortSignal | undefined;
+  if (timeoutMs > 0) {
+    if (typeof signalStatics.timeout === "function") {
+      deadline = signalStatics.timeout(timeoutMs);
+    } else {
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => {
+        try { ctrl.abort(new DOMException("TimeoutError", "TimeoutError")); } catch { ctrl.abort(); }
+      }, timeoutMs);
+      // Node: let timer not keep process alive
+      if (typeof (timer as unknown as { unref?: () => void }).unref === "function") {
+        (timer as unknown as { unref: () => void }).unref!();
+      }
+      deadline = ctrl.signal;
+    }
+  }
   if (external == null) return deadline;
   if (deadline == null) return external;
   if (typeof signalStatics.any === "function") return signalStatics.any([external, deadline]);
@@ -189,16 +203,18 @@ function requestSignal(
   const controller = new AbortController();
   for (const s of [external, deadline]) {
     if (s.aborted) {
-      controller.abort();
+      controller.abort((s as unknown as { reason?: unknown }).reason);
       return controller.signal;
     }
-    s.addEventListener("abort", () => controller.abort(), { once: true });
+    s.addEventListener("abort", () => controller.abort((s as unknown as { reason?: unknown }).reason), { once: true });
   }
   return controller.signal;
 }
 
 function isAbortError(err: unknown): boolean {
-  return typeof err === "object" && err !== null && (err as { name?: unknown }).name === "AbortError";
+  if (typeof err !== "object" || err === null) return false;
+  const name = (err as { name?: unknown }).name;
+  return name === "AbortError" || name === "TimeoutError";
 }
 
 /**
@@ -342,12 +358,14 @@ export function createApiClient(opts: ApiClientOptions) {
       request("/v1/items", itemPageSchema, {
         query: filtersToQuery(filters) as Record<string, unknown>,
       }),
-    searchItems: (q: {
-      q: string;
-      type?: ItemType;
-      field?: "title" | "director" | "cast";
-      limit?: number;
-    }) => request("/v1/items/search", itemPageSchema, { query: q }),
+    searchItems: (
+      q: { q: string; type?: ItemType; field?: "title" | "director" | "cast"; limit?: number },
+      opts?: { auth?: boolean },
+    ) =>
+      request("/v1/items/search", itemPageSchema, {
+        query: q,
+        auth: opts?.auth ?? !!accessToken,
+      }),
     getItem: (id: number) => request(`/v1/items/${id}`, itemDetailSchema),
     /** Батч карточек по id: ленты «продолжить смотреть» берут всё одним
      * запросом вместо getItem на каждую запись прогресса. */

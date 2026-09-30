@@ -166,6 +166,10 @@ add_env INTERNAL_API_URL "$API_INTERNAL"
 # Пусто = относительные URL API (lib/api.ts, lib/auth.tsx берут origin окна).
 # Один билд обслуживает оба адреса; абсолютный http:// дал бы mixed content.
 add_env NEXT_PUBLIC_API_URL ""
+# Абсолютный базовый адрес сайта (sitemap/OG-мета читают его в рантайме,
+# серверная сторона — инлайн в бандл не важен). Без него site.ts уходит
+# в localhost:3000, и карта сайта отдаёт ссылки никуда.
+add_env NEXT_PUBLIC_SITE_URL "$HTTPS_URL"
 # То же для ссылок на потоки: TorrServer проксируется nginx на том же хосте,
 # поэтому /gst/... и /stream?... обязаны быть относительными.
 add_env TORRSERVER_PUBLIC_URL ""
