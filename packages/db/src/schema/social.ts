@@ -42,6 +42,8 @@ export const watchProgress = pgTable(
     uniqueIndex("watch_progress_profile_media_uq").on(t.profileId, t.mediaId),
     index("watch_progress_profile_updated_idx").on(t.profileId, t.updatedAt),
     index("watch_progress_item_idx").on(t.itemId),
+    // Подписки + прогресс: badge + лента «новые серии» фильтруют по профилю+статусу.
+    index("watch_progress_profile_status_idx").on(t.profileId, t.status),
   ],
 );
 

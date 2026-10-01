@@ -35,10 +35,10 @@ export async function generateMetadata({
   const item = await fetchItem(Number(id));
   if (!item) return {};
 
-  const title = `${item.title}${item.year ? ` (${item.year})` : ""} — Зал`;
+  const title = `${item.title}${item.year ? ` (${item.year})` : ""} — kino.pap`;
   const description = item.plot
     ? truncatePlot(item.plot)
-    : "Страница тайтла в закрытом стриминг-клубе «Зал».";
+    : "Страница тайтла в kino.pap.";
   const poster = item.posters.big ?? item.posters.medium;
 
   return {

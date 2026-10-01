@@ -160,6 +160,10 @@ export async function insertCatalogBatch(
             year: d.year,
             plot: d.plot,
             rating: d.rating,
+            // Длительность карточки: у фильмов — runtime из деталей, у сериалов
+            // — средняя серия. Раньше не записывалась вовсе, и карточки из
+            // discovery оставались без длительности, пока их не трогал бэкфилл.
+            runtimeAvg: d.runtime,
             // Качество файла неизвестно, пока ingest не залил media: колонка
             // и DTO nullable, веб рисует бейдж только при наличии.
             quality: null,

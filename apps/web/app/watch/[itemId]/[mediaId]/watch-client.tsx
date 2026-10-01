@@ -48,45 +48,54 @@ export function WatchClient({
     return () => window.clearInterval(timer);
   }, [failed, links]);
 
-  const stage =
-    elapsed >= 7
+  const timedOut = elapsed >= 45;
+  const stage = timedOut
+    ? "Поиск затянулся — торренты не отвечают"
+    : elapsed >= 7
       ? "Прогреваем торрент и собираем манифест…"
       : elapsed >= 3
         ? "Оцениваем релизы и размечаем источники…"
         : "Ищем источники трансляции…";
 
+  const abortRef = React.useRef<AbortController | null>(null);
   const load = React.useCallback(() => {
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
     setFailed(false);
     api
       .getMediaLinks(item.id, mediaId)
-      .then((res) => setLinks(res))
-      .catch(() => setFailed(true));
+      .then((res) => {
+        if (ac.signal.aborted) return;
+        setLinks(res);
+      })
+      .catch(() => {
+        if (ac.signal.aborted) return;
+        setFailed(true);
+      });
   }, [api, item.id, mediaId]);
 
   React.useEffect(() => {
     setLinks(null);
     load();
+    return () => abortRef.current?.abort();
   }, [load]);
 
-  // Предподключение к origin медиа: TCP/TLS-хендшейк стартует, пока React
-  // ещё монтирует плеер, — первый сегмент идёт без задержки на соединение.
+  // Предподключение к origin медиа — удаляем при размонтаже, чтобы
+  // не копить мусор в <head> при навигации watch→item→watch.
   React.useEffect(() => {
     if (!links) return;
     const raw = links.files[0]?.urls.hls ?? links.files[0]?.urls.http;
     if (!raw) return;
     let origin: string;
     try {
-      // Ссылки на потоки относительные (/gst/...): без базы `new URL` бросит,
-      // и предподключение молча отключилось бы.
       origin = new URL(raw, window.location.origin).origin;
     } catch {
       return;
     }
-    // Свой origin уже подключён самой страницей — предподключать нечего.
     if (origin === window.location.origin) return;
+    const created: HTMLLinkElement[] = [];
     const add = (rel: string, crossOrigin: boolean) => {
-      // Дедуп: компонент монтируется заново при клиентской навигации, а
-      // <link> живёт в <head> до перезагрузки — второй раз не добавляем.
       if (document.head.querySelector(`link[data-zal-preconnect="${origin}"][rel="${rel}"]`)) {
         return;
       }
@@ -96,9 +105,13 @@ export function WatchClient({
       link.dataset.zalPreconnect = origin;
       if (crossOrigin) link.crossOrigin = "anonymous";
       document.head.appendChild(link);
+      created.push(link);
     };
     add("preconnect", true);
     add("dns-prefetch", false);
+    return () => {
+      for (const el of created) el.remove();
+    };
   }, [links]);
 
   // Следующая серия — из того же списка, что уходит в меню плеера.
@@ -140,11 +153,31 @@ export function WatchClient({
       <div
         className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] bg-black text-white"
         data-testid="watch-links-loading"
-      >          <div className="h-9 w-9 animate-spin rounded-full border-2 border-white/20 border-t-white" />
-          <p className="text-sm font-medium text-white/90">{stage}</p>
-          <p className="text-xs text-white/50">
-            Rutor + TorrServer + TMDb: {elapsed > 0 ? `${elapsed}с` : "до 10 секунд на первый запрос"}
-          </p>
+      >
+        <div className="h-9 w-9 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+        <p className="text-sm font-medium text-white/90">{stage}</p>
+        <p className="text-xs text-white/50">
+          {timedOut
+            ? "Попробуйте другой релиз или обновите страницу"
+            : `Rutor + TorrServer + TMDb: ${elapsed > 0 ? `${elapsed}с` : "до 10 секунд на первый запрос"}`}
+        </p>
+        <div className="h-1 w-48 overflow-hidden rounded-full bg-white/10">
+          <div
+            className="h-full bg-accent transition-all duration-500"
+            style={{ width: `${Math.min(100, (elapsed / 45) * 100)}%` }}
+            data-testid="watch-progress"
+          />
+        </div>
+        {timedOut && (
+          <button
+            type="button"
+            className="mt-1 rounded-full bg-accent px-4 py-1.5 text-xs font-semibold text-white"
+            onClick={load}
+            data-testid="watch-retry"
+          >
+            Повторить
+          </button>
+        )}
       </div>
     );
   }

@@ -1,6 +1,6 @@
 import type { ItemDetail } from "@zal/api-client";
 import { describe, expect, it } from "vitest";
-import { formatDuration, formatTime } from "@/lib/format";
+import { formatDuration, formatDurationHuman, formatTime } from "@/lib/format";
 import {
   absoluteStreamUrl,
   activeCues,
@@ -12,6 +12,8 @@ import {
   nextAliveSource,
   nextEpisode,
   parseVtt,
+  pickInitialFileIndex,
+  preferNativeHls,
   resolveStreamUrl,
   segmentsEqual,
   spriteTileFor,
@@ -127,6 +129,16 @@ describe("format", () => {
     expect(formatDuration(null)).toBe("");
     expect(formatDuration(90)).toBe("1:30");
   });
+
+  it("formatDurationHuman — длительность словами, не таймкодом", () => {
+    // «2:16:00» в карточке читается как момент времени; кино-карточки
+    // показывают «2 ч 16 мин», серии — «24 мин».
+    expect(formatDurationHuman(8160)).toBe("2 ч 16 мин");
+    expect(formatDurationHuman(1420)).toBe("24 мин");
+    expect(formatDurationHuman(3600)).toBe("1 ч");
+    expect(formatDurationHuman(null)).toBe("");
+    expect(formatDurationHuman(0)).toBe("");
+  });
 });
 
 describe("nextAliveSource", () => {
@@ -155,6 +167,53 @@ describe("nextAliveSource", () => {
     const dead = [0, 1];
     nextAliveSource(dead, 5);
     expect(dead).toEqual([0, 1]);
+  });
+});
+
+describe("pickInitialFileIndex", () => {
+  const files = (ids: number[], sizes: Array<number | null> = []) =>
+    ids.map((qualityId, i) => ({
+      qualityId,
+      sizeBytes: sizes[i] ?? null,
+    }));
+
+  it("без размеров берёт минимальную qualityId", () => {
+    expect(pickInitialFileIndex(files([2160, 720, 480]))).toBe(2);
+    expect(pickInitialFileIndex(files([720, 1080]))).toBe(0);
+    expect(pickInitialFileIndex([])).toBe(0);
+  });
+
+  it("с размерами берёт самый лёгкий файл", () => {
+    // 2 ГБ против 1 ГБ — берём 1 ГБ, канал узкий (VPN из РФ).
+    expect(pickInitialFileIndex(files([1080, 1080], [2_000_000_000, 1_000_000_000]))).toBe(1);
+    expect(pickInitialFileIndex(files([720, 2160, 1080], [3_000_000_000, 8_000_000_000, 1_500_000_000]))).toBe(2);
+  });
+
+  it("размер важнее qualityId", () => {
+    // Резолвер ставит вперёд крупные ремуксы — лёгкий выигрывает независимо от qualityId.
+    expect(pickInitialFileIndex(files([2160, 1080, 720], [8_000_000_000, 1_200_000_000, 900_000_000]))).toBe(2);
+  });
+
+  it("перебирает мёртвые: лёгкий среди живых", () => {
+    expect(pickInitialFileIndex(files([2160, 1080, 720], [4_000_000_000, 2_000_000_000, 1_000_000_000]), [2])).toBe(1);
+    expect(pickInitialFileIndex(files([2160, 1080, 720]), [0, 1])).toBe(2);
+    expect(pickInitialFileIndex(files([2160, 1080]), [0, 1])).toBe(0);
+  });
+});
+
+describe("preferNativeHls", () => {
+  const videoWith = (type: string) =>
+    ({ canPlayType: () => type }) as unknown as HTMLVideoElement;
+
+  it("Safari с нативным HLS играет без hls.js", () => {
+    // AVFramework декодирует то, что MSE в Safari отвергает, и не оставляет
+    // «мёртвых» вкладок после воспроизведения в standalone-PWA.
+    expect(preferNativeHls(videoWith("maybe"))).toBe(true);
+    expect(preferNativeHls(videoWith("probably"))).toBe(true);
+  });
+
+  it("Chrome/Firefox идут через hls.js", () => {
+    expect(preferNativeHls(videoWith(""))).toBe(false);
   });
 });
 

@@ -5,7 +5,7 @@ import { PLAYBACK_SPEEDS, pollMediaTracks } from "@zal/shared";
 import type HlsJs from "hls.js";
 import { useRouter } from "next/navigation";
 /**
- * Плеер «Зал»: hls.js + собственный UI. Аудиодорожки, субтитры со сдвигом,
+ * Плеер «kino.pap»: hls.js + собственный UI. Аудиодорожки, субтитры со сдвигом,
  * резюме просмотра, пропуск интро, автоследующая серия, хоткеи, PiP.
  * hls.js грузится динамически: браузеры с нативным HLS не тянут ~150КБ в чанк.
  *
@@ -24,6 +24,7 @@ import {
   nextAliveSource,
   nextEpisode,
   type PlayerEpisodeGroup,
+  pickInitialFileIndex,
   resolveStreamUrl,
 } from "@/lib/player-logic";
 import { PlayerControls, PlayerTimeContext } from "./controls";
@@ -44,6 +45,9 @@ import {
   UnmuteOverlay,
 } from "./overlays";
 import { useStreamSetup } from "./stream-init";
+
+/** Скрываем контролы после стольких секунд бездействия (мышь или палец). */
+const CONTROLS_HIDE_MS = 5000;
 
 export interface PlayerProps {
   links: MediaLinks;
@@ -97,7 +101,6 @@ export function Player({
   const [controlsVisible, setControlsVisible] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isBuffering, setIsBuffering] = React.useState(false);
-  const [activeFileIndex, setActiveFileIndex] = React.useState(0);
   // gst-HLS недоступен (транскодер упал / версия без gst) — откат на прямой
   // HTTP-стрим: картинка и звук родными кодеками есть не у всех браузеров,
   // но это лучше, чем чёрный экран.
@@ -120,6 +123,13 @@ export function Player({
   // Растёт по «Попробовать снова»: перезапускает инициализацию потока, даже
   // если индекс раздачи не изменился (setActiveFileIndex(0) при нуле — no-op).
   const [sourceEpoch, setSourceEpoch] = React.useState(0);
+
+  // Стартуем с самой лёгкой раздачи: пока доступ из РФ идёт через VPN с узким
+  // каналом, 30-ГБ ремукс на холодных пирах может не выйти из буферизации
+  // дольше, чем длится просмотр (см. pickInitialFileIndex).
+  const [activeFileIndex, setActiveFileIndex] = React.useState(() =>
+    pickInitialFileIndex(links.files),
+  );
 
   const activeFile = links.files[activeFileIndex] ?? links.files[0];
   // Дубляж zero-storage: каждая дорожка — персональный HLS-мастер
@@ -167,6 +177,10 @@ export function Player({
   const onPlaybackStartRef = React.useRef(onPlaybackStart);
   onPlaybackStartRef.current = onPlaybackStart;
 
+  // iPad/Safari требует жеста для звука. Блокировку ловим сразу на
+  // `tryAutoplay()` — там, где манифест уже готов, — и ставим заголовок
+  // `muted` заранее (иначе нативный HLS стартует с ошибкой до первого play).
+  // Обычный десктоп CHrome/Firefox здесь проходит без звука с первой попытки.
   const tryAutoplay = React.useCallback(() => {
     const video = videoRef.current;
     if (!video || autoplayForMedia.current === links.mediaId) return;
@@ -176,15 +190,21 @@ export function Player({
     void video.play().then(
       () => setSoundBlocked(false),
       (err: unknown) => {
-        // NotAllowedError — политика автоплея со звуком. Один раз пробуем без
-        // звука и даём кнопку включения; прочие сбои не наш случай.
         const name = err instanceof Error ? err.name : "";
         if (name !== "NotAllowedError") return;
+        // iPad: первый play со звуком заблокирован — приглушаем заголовок,
+        // перезапускаем play и показываем кнопку «Включить звук».
         video.muted = true;
         setMuted(true);
         void video.play().then(
           () => setSoundBlocked(true),
-          () => {},
+          () => {
+            // Иногда даже muted-play блокируется (Low Power Mode / запрет
+            // автоплея в настройках Safari). Откат нужен, иначе видео останется
+            // приглушённым без оверлея.
+            video.muted = false;
+            setMuted(false);
+          },
         );
       },
     );
@@ -270,9 +290,9 @@ export function Player({
     gstRetryRef.current = 0;
     // Явная просьба играть — снимаем одноразовый флаг автоплея (см. выше).
     autoplayForMedia.current = null;
-    setActiveFileIndex(0);
+    setActiveFileIndex(pickInitialFileIndex(links.files));
     setSourceEpoch((n) => n + 1);
-  }, []);
+  }, [links.files]);
 
   useStreamSetup({
     videoRef,
@@ -325,6 +345,23 @@ export function Player({
       setIsBuffering(false);
       const err = video.error;
       if (!err) return;
+
+      // Нативный HLS (Safari): манифест, который gst ещё не собрал, приходит
+      // как код 4 «источник не поддерживается» или код 2 — как обычный сетевой
+      // сбой. Даём транскодеру тот же бюджет ретраев, что был у hls.js-пути,
+      // иначе первая же холодная раздача сгорала за секунды и перебор
+      // прокручивал весь список фильмов до ошибки.
+      const nativePath = !hlsRef.current;
+      if (nativePath && (err.code === 2 || err.code === 4) && gstRetryRef.current < 3) {
+        gstRetryRef.current += 1;
+        setIsBuffering(true);
+        loadRetryTimerRef.current = window.setTimeout(() => {
+          loadRetryTimerRef.current = null;
+          video.load();
+          tryAutoplayRef.current();
+        }, 2_000);
+        return;
+      }
 
       // Код 2 — сетевой сбой, он бывает транзиентным: одна повторная попытка
       // на раздачу. Коды 3 и 4 — декодер и «источник не поддерживается»:
@@ -504,16 +541,44 @@ export function Player({
 
   // Fullscreen — на контейнере, а не на <video>: вместе с видео уходят и
   // контролы, и оверлеи. Поэтому он не в useTransport.
+  //
+  // В standalone-PWA на iOS/iPadOS Fullscreen API для элементов недоступен
+  // (это не баг сайта — WebKit так устроен): requestFullscreen отсутствует
+  // или кидает. Тогда разворачиваем контейнер сами — fixed inset-0 поверх
+  // страницы, контролы остаются наши.
+  const [cssFullscreen, setCssFullscreen] = React.useState(false);
   const toggleFullscreen = React.useCallback(async () => {
     const el = containerRef.current;
     if (!el) return;
-    try {
-      if (document.fullscreenElement) await document.exitFullscreen();
-      else await el.requestFullscreen();
-    } catch {
-      // fullscren недоступен.
+    if (cssFullscreen || document.fullscreenElement) {
+      setCssFullscreen(false);
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+      } catch {
+        // выход из fullscreen недоступен — не страшно
+      }
+      return;
     }
-  }, []);
+    if (typeof el.requestFullscreen === "function") {
+      try {
+        await el.requestFullscreen();
+        return;
+      } catch {
+        // fell through к CSS-фолбэку
+      }
+    }
+    setCssFullscreen(true);
+  }, [cssFullscreen]);
+
+  // CSS-fullscreen накрывает страницу — гасим прокрутку фона под ним.
+  React.useEffect(() => {
+    if (!cssFullscreen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [cssFullscreen]);
 
   /* ---------- Хоткеи ---------- */
   // Клавиша не знает ни позиции, ни элемента — только намерение. Относительную
@@ -544,7 +609,9 @@ export function Player({
   // Таймер взводится при каждом показе контролов. Раньше deps был только
   // [playing]: таймаут ставился один раз на переход play, и после первого
   // скрытия mousemove показывал контролы уже навсегда. Заодно клик мыши
-  // в момент t=2.9s перевзводит таймер, а не прячет контролы через 0.1s.
+  // в момент t=4.9s перевзводит таймер, а не прячет контролы через 0.1s.
+  // 5 секунд бездействия — и на watch-странице, и в полноэкранном режиме;
+  // показывают контролы mousemove и касания (pointer-события покрывают оба).
   const hideTimerRef = React.useRef<number | null>(null);
   const clearHideTimer = React.useCallback(() => {
     if (hideTimerRef.current !== null) {
@@ -556,7 +623,7 @@ export function Player({
     clearHideTimer();
     hideTimerRef.current = window.setTimeout(() => {
       setControlsVisible(false);
-    }, 3000);
+    }, CONTROLS_HIDE_MS);
   }, [clearHideTimer]);
 
   React.useEffect(() => {
@@ -574,6 +641,9 @@ export function Player({
     document.addEventListener("fullscreenchange", onFs);
     return () => document.removeEventListener("fullscreenchange", onFs);
   }, []);
+
+  // Полноэкранным считаем и нативный Fullscreen API, и наш CSS-фолбэк.
+  const fullscreenActive = isFullscreen || cssFullscreen;
 
   /* ---------- Живое превью при перемотке (стримы без спрайта) ---------- */
   const {
@@ -634,8 +704,18 @@ export function Player({
   return (
     <div
       ref={containerRef}
-      className="relative w-full overflow-hidden rounded-[var(--radius-card)] bg-black select-none"
-      onMouseMove={() => {
+      className={
+        cssFullscreen
+          ? "fixed inset-0 z-[100] flex select-none flex-col items-center justify-center overflow-hidden bg-black"
+          : "relative w-full select-none overflow-hidden rounded-[var(--radius-card)] bg-black"
+      }
+      // Pointer-события покрывают и мышь, и палец: любое движение или касание
+      // показывает контролы и перевзводит таймер автоскрытия.
+      onPointerMove={() => {
+        setControlsVisible(true);
+        if (playing) armHideTimer();
+      }}
+      onPointerDown={() => {
         setControlsVisible(true);
         if (playing) armHideTimer();
       }}
@@ -643,10 +723,14 @@ export function Player({
     >
       <video
         ref={videoRef}
-        className="aspect-video w-full bg-black"
+        className={
+          cssFullscreen ? "h-full w-full bg-black object-contain" : "aspect-video w-full bg-black"
+        }
         onClick={togglePlay}
         playsInline
         preload="auto"
+        autoPlay
+        muted={muted}
         poster={links.posterUrl ?? undefined}
         aria-label={title}
         data-testid="player-video"
@@ -717,7 +801,7 @@ export function Player({
             spriteUrl={sprites?.url ?? null}
             scrubPreview={scrubPreview}
             onScrubTime={handleScrubTime}
-            isFullscreen={isFullscreen}
+            isFullscreen={fullscreenActive}
             onTogglePlay={togglePlay}
             onSeek={seek}
             onVolume={changeVolume}

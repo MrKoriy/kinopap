@@ -441,8 +441,20 @@ export async function getItem(db: Db, id: number): Promise<ItemDetail | null> {
 
   // Аниме без сезонов — это фильм: навигация по media-частям, не по сериям.
   if (serialLike && (seasonRows.length > 0 || SERIAL_LIKE.includes(row.type))) {
+    // Длительность сериала выводим из эпизодов: это самый точный источник
+    // (гидрация TMDb и AniLibria пишут реальные минуты). Раньше здесь
+    // оставалось то, что записал сид/ингест, — у сид-тайтлов это был фолбэк
+    // 7200, и весь топ каталога показывал «2:00:00».
+    const epRuntimes = eps.map((e) => e.runtime).filter((r) => r > 0);
     return {
       ...base,
+      duration:
+        epRuntimes.length > 0
+          ? {
+              average: Math.round(epRuntimes.reduce((n, r) => n + r, 0) / epRuntimes.length),
+              total: epRuntimes.reduce((n, r) => n + r, 0),
+            }
+          : base.duration,
       seasons: seasonRows.map((s) => ({
         id: s.id,
         number: s.number,
@@ -471,8 +483,18 @@ export async function getItem(db: Db, id: number): Promise<ItemDetail | null> {
         .where(eq(media.itemId, id))
         .orderBy(media.partNumber)
     : movieMediaRows!;
+  // У discovery-фильмов runtime_avg исторически не записывался, а длительность
+  // лежит в media.runtime — выводим её на чтении, пока бэкфилл не перенесёт.
+  const partRuntimes = mediaRows.map((m) => m.runtime).filter((r) => r > 0);
   return {
     ...base,
+    duration:
+      row.runtimeAvg == null && partRuntimes.length > 0
+        ? {
+            average: Math.round(partRuntimes.reduce((n, r) => n + r, 0) / partRuntimes.length),
+            total: row.runtimeTotal ?? partRuntimes.reduce((n, r) => n + r, 0),
+          }
+        : base.duration,
     seasons: null,
     media: mediaRows.map((m) => ({
       id: m.id,
@@ -747,6 +769,122 @@ export async function markTrailerChecked(db: Db, itemId: number): Promise<void> 
     .update(items)
     .set({ trailerCheckedAt: new Date() })
     .where(eq(items.id, itemId));
+}
+
+/* ---------- Бэкфилл длительности ---------- */
+
+/** Маркер сида: до фикса tmdbMeta всем тайтлам писали fallback 7200. */
+export const SEED_RUNTIME_FALLBACK = 7200;
+
+export interface RuntimeBackfillRow {
+  id: number;
+  type: string;
+  title: string;
+  tmdbId: number;
+  tmdbType: string | null;
+}
+
+/**
+ * Тайтлы для бэкфилла длительности из TMDb: runtime_avg пуст или равен
+ * сид-фолбэку 7200, а tmdb_id есть (у AniLibria-тайтлов его нет — их
+ * длительность выводится из эпизодов SQL-фазой).
+ */
+export async function listItemsMissingRuntime(
+  db: Db,
+  opts: { limit?: number; afterId?: number } = {},
+): Promise<RuntimeBackfillRow[]> {
+  const rows = await db
+    .select({
+      id: items.id,
+      type: items.type,
+      title: items.title,
+      tmdbId: items.tmdbId,
+      tmdbType: items.tmdbType,
+    })
+    .from(items)
+    .where(
+      and(
+        isNotNull(items.tmdbId),
+        or(isNull(items.runtimeAvg), eq(items.runtimeAvg, SEED_RUNTIME_FALLBACK)),
+        gt(items.id, opts.afterId ?? 0),
+      ),
+    )
+    .orderBy(items.id)
+    .limit(opts.limit ?? 200);
+  return rows as RuntimeBackfillRow[];
+}
+
+/** Сколько тайтлов ещё ждут длительность — прогресс бэкфилла. */
+export async function countItemsMissingRuntime(db: Db): Promise<number> {
+  const rows = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(items)
+    .where(
+      and(
+        isNotNull(items.tmdbId),
+        or(isNull(items.runtimeAvg), eq(items.runtimeAvg, SEED_RUNTIME_FALLBACK)),
+      ),
+    );
+  return rows[0]?.n ?? 0;
+}
+
+/** Точечная запись длительности (бэкфилл TMDb-фазы). */
+export async function setItemRuntime(db: Db, itemId: number, runtimeAvg: number): Promise<void> {
+  await db
+    .update(items)
+    .set({ runtimeAvg, updatedAt: new Date() })
+    .where(eq(items.id, itemId));
+}
+
+/**
+ * SQL-фаза бэкфилла: длительность из собственных данных, без внешних API.
+ *
+ * Сериалы/аниме — среднее и сумма по эпизодам (гидрация TMDb и AniLibria пишут
+ * реальные минуты). Фильмы — среднее по media-частям, только там, где
+ * runtime_avg пуст (записанное TMDb/ингестом не перезатираем). Возвращает,
+ * сколько строк обновила каждая фаза.
+ */
+export async function backfillRuntimeFromLocalData(
+  db: Db,
+): Promise<{ serials: number; movies: number }> {
+  const serials = await db.execute(sql`
+    update ${items} as i set
+      runtime_avg = s.avg_runtime,
+      runtime_total = s.total_runtime,
+      updated_at = now()
+    from (
+      select se.item_id,
+             round(avg(ep.runtime))::int as avg_runtime,
+             sum(ep.runtime)::int as total_runtime
+      from ${episodes} ep
+      join ${seasons} se on se.id = ep.season_id
+      where ep.runtime > 0
+      group by se.item_id
+    ) as s
+    where i.id = s.item_id
+      and (i.runtime_avg is distinct from s.avg_runtime
+           or i.runtime_total is distinct from s.total_runtime)
+  `);
+
+  const movies = await db.execute(sql`
+    update ${items} as i set
+      runtime_avg = s.avg_runtime,
+      updated_at = now()
+    from (
+      select m.item_id, round(avg(m.runtime))::int as avg_runtime
+      from ${media} m
+      where m.runtime > 0
+      group by m.item_id
+    ) as s
+    where i.id = s.item_id
+      and i.runtime_avg is null
+  `);
+
+  const count = (r: unknown): number => {
+    const row = (r as { rowCount?: number; changes?: number } | null) ?? null;
+    return row?.rowCount ?? row?.changes ?? 0;
+  };
+  return { serials: count(serials), movies: count(movies) };
 }
 
 export type { SortDir };

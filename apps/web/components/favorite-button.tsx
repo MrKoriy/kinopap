@@ -7,6 +7,7 @@ import { Bookmark, BookmarkCheck } from "lucide-react";
  * молча ничего не делающая кнопка хуже, чем честный призыв войти.
  */
 import * as React from "react";
+import { useFavoritesBatch } from "@/components/favorites-batch";
 import { useOptionalAuth } from "@/lib/auth";
 
 export interface FavoriteButtonProps {
@@ -28,8 +29,16 @@ export function FavoriteButton({
   const [saved, setSaved] = React.useState(false);
   const [ready, setReady] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const batch = useFavoritesBatch();
 
   React.useEffect(() => {
+    // Внутри ленты — статус из батча (один запрос на всю рельсу).
+    if (batch) {
+      if (!batch.ready) return;
+      setSaved(batch.has(itemId));
+      setReady(true);
+      return;
+    }
     if (!api || !user) {
       setReady(true);
       return;
@@ -42,13 +51,13 @@ export function FavoriteButton({
         setReady(true);
       },
       () => {
-        if (!cancelled) setReady(true);
+        if (cancelled) setReady(true);
       },
     );
     return () => {
       cancelled = true;
     };
-  }, [api, user, itemId]);
+  }, [batch, api, user, itemId]);
 
   const toggle = React.useCallback(async () => {
     if (!api || busy) return;

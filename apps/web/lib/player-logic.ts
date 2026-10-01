@@ -177,6 +177,65 @@ export function nextAliveSource(dead: readonly number[], total: number): number 
   return null;
 }
 
+/**
+ * Раздача для старта: самая лёгкая (минимальный `sizeBytes`) среди
+ * непробованных, иначе минимальная по `qualityId`.
+ *
+ * Пока доступ из РФ идёт через VPN с узким каналом, выбирать лёгкий релиз
+ * критично: 1 ГБ уйдёт в буфер в разы быстрее ремукса на 30 ГБ — и на
+ * холодном торренте с 0–2 сидами «тяжёлый» релиз может не выйти из
+ * буферизации дольше, чем длится просмотр. `sizeBytes` приходит из
+ * `RutorRelease.sizeBytes` через `MediaFile`, у CDN-релизов (AniLibria) он
+ * `null` — тогда падаем на `qualityId`. Перебор мёртвых как раньше.
+ */
+export function pickInitialFileIndex(
+  files: readonly Pick<MediaFile, "qualityId" | "sizeBytes">[],
+  dead: readonly number[] = [],
+): number {
+  if (files.length === 0) return 0;
+  const alive: number[] = [];
+  for (let i = 0; i < files.length; i += 1) if (!dead.includes(i)) alive.push(i);
+  if (alive.length === 0) return 0;
+
+  let bestBySize = -1;
+  let bestSize = Number.POSITIVE_INFINITY;
+  for (const i of alive) {
+    const s = files[i]!.sizeBytes;
+    if (typeof s === "number" && s > 0 && s < bestSize) {
+      bestSize = s;
+      bestBySize = i;
+    }
+  }
+  if (bestBySize !== -1) return bestBySize;
+
+  let bestByQ = alive[0]!;
+  let bestQ = files[bestByQ]!.qualityId;
+  for (const i of alive) {
+    const q = files[i]!.qualityId;
+    if (q < bestQ) {
+      bestQ = q;
+      bestByQ = i;
+    }
+  }
+  return bestByQ;
+}
+
+/* ---------- Выбор движка воспроизведения ---------- */
+
+/**
+ * Играть ли этот HLS нативно, без hls.js.
+ *
+ * Safari (macOS, iPadOS, iOS) умеет HLS сам, и его декодер надёжнее нашего
+ * MSE-пути: кодеки, которые MSE в Safari отвергает (и плеер летел в перебор
+ * раздач), AVFoundation играет спокойно. В standalone-PWA MSE-видео после
+ * перехода на другую страницу ещё и замораживает ввод — известный баг WebKit.
+ * Поэтому нативный HLS всегда предпочтительнее; hls.js остаётся для браузеров
+ * без нативной поддержки (Chrome, Firefox).
+ */
+export function preferNativeHls(video: HTMLVideoElement): boolean {
+  return video.canPlayType("application/vnd.apple.mpegurl") !== "";
+}
+
 /* ---------- Адрес потока ---------- */
 
 /**

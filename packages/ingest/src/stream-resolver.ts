@@ -463,8 +463,9 @@ export class StreamResolver {
 
     if (known && best && known.magnet === best.magnet) {
       // Сервер TorrServer мог перезапуститься — заново приоткрываем голову
-      // файла, чтобы первый сегмент не ждал DHT.
-      void this.torrServer.preopenStream(known.hash, known.fileIndex).catch(() => {});
+      // файла, чтобы первый сегмент не ждал DHT. Ноунейм-релизам — 32МБ.
+      const noName = (best.seeds ?? 0) <= 1;
+      void this.torrServer.preopenStream(known.hash, known.fileIndex, noName).catch(() => {});
       return { ...known, url: this.torrServer.getStreamUrl(known.hash, known.fileIndex) };
     }
     if (best) {
@@ -641,10 +642,11 @@ export class StreamResolver {
       const index = best ? best.id : 1;
       const filename = (best as { path: string } | null)?.path.split(/[\\/]/).pop();
 
-      // Предоткрытие: тянем 2МБ головы файла — TorrServer подключает пиров
-      // и закачивает первые куски в кэш. Транскодеру потом не ждать DHT:
-      // манифест и init.mp4 собираются из тёплого кэша. Fire-and-forget.
-      void this.torrServer.preopenStream(hash, index).catch(() => {});
+      // Предоткрытие: тянем голову файла — TorrServer подключает пиров и
+      // закачивает первые куски в кэш. Ноунейм-фильмам (0–1 сид) даём 32МБ,
+      // чтобы первые сегменты gst не ждали по 2–3 секунды каждый. Fire-and-forget.
+      const noName = (rel.seeds ?? 0) <= 1;
+      void this.torrServer.preopenStream(hash, index, noName).catch(() => {});
 
       return {
         magnet: rel.magnet,

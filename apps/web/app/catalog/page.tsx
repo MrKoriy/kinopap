@@ -1,15 +1,15 @@
 import { ITEM_TYPE_TITLES, type ItemType } from "@zal/api-client";
 import type { Metadata } from "next";
 import Link from "next/link";
-import { ItemCard } from "@/components/item-card";
-import { type CatalogParams, fetchItems } from "@/lib/api";
+import { CatalogGrid } from "@/components/catalog-grid";
+import { fetchGenres, fetchItems } from "@/lib/api";
 
 export const revalidate = 30;
 
 export const metadata: Metadata = {
-  title: "Каталог — Зал",
+  title: "Каталог — kino.pap",
   description:
-    "Каталог закрытого стриминг-клуба «Зал»: фильмы, сериалы, аниме, концерты и документальное кино — с фильтрами по типу, году и рейтингу.",
+    "Каталог kino.pap: фильмы, сериалы, аниме и документальное кино — с фильтрами по типу, году и рейтингу.",
 };
 
 const SORTS: { value: string; label: string }[] = [
@@ -18,6 +18,20 @@ const SORTS: { value: string; label: string }[] = [
   { value: "rating-", label: "По рейтингу" },
   { value: "views-", label: "Популярное" },
   { value: "title", label: "По алфавиту" },
+];
+
+/** Годы: конкретные свежие + декадами (формат парсит parseYearRange API). */
+const YEARS: { value: string; label: string }[] = [
+  { value: "2026", label: "2026" },
+  { value: "2025", label: "2025" },
+  { value: "2024", label: "2024" },
+  { value: "2023", label: "2023" },
+  { value: "2022", label: "2022" },
+  { value: "2021", label: "2021" },
+  { value: "2020", label: "2020" },
+  { value: "2010-2019", label: "2010-е" },
+  { value: "2000-2009", label: "2000-е" },
+  { value: "1990-1999", label: "90-е" },
 ];
 
 /** Чип-ссылка фильтра: сохраняет остальные параметры. */
@@ -64,9 +78,13 @@ export default async function CatalogPage({
   const sort = pick("sort");
   const cursor = pick("cursor");
   const title = pick("title");
+  const genre = pick("genre");
+  const year = pick("year");
 
-  const params: CatalogParams = { type, sort, cursor, title, limit: 24 };
-  const page = await fetchItems(params);
+  const [page, genres] = await Promise.all([
+    fetchItems({ type, sort, cursor, title, genre, year, limit: 24 }),
+    fetchGenres(type),
+  ]);
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
@@ -78,7 +96,7 @@ export default async function CatalogPage({
       <div className="mb-3 flex flex-wrap gap-2" data-testid="type-filters">
         <Chip
           active={!type}
-          params={{ sort, title }}
+          params={{ sort, title, genre, year }}
           label="Всё"
           testId="type-all"
         />
@@ -86,7 +104,7 @@ export default async function CatalogPage({
           <Chip
             key={id}
             active={type === id}
-            params={{ type: id, sort, title }}
+            params={{ type: id, sort, title, genre: undefined, year }}
             label={label}
             testId={`type-${id}`}
           />
@@ -94,48 +112,64 @@ export default async function CatalogPage({
       </div>
 
       {/* Сортировка */}
-      <div className="mb-8 flex flex-wrap gap-2" data-testid="sort-filters">
+      <div className="mb-3 flex flex-wrap gap-2" data-testid="sort-filters">
         {SORTS.map((s) => (
           <Chip
             key={s.value}
             active={(sort ?? "updated-") === s.value}
-            params={{ type, sort: s.value, title }}
+            params={{ type, sort: s.value, title, genre, year }}
             label={s.label}
             testId={`sort-${s.value}`}
           />
         ))}
       </div>
 
-      {page.items.length === 0 ? (
-        <p className="py-16 text-center text-muted" data-testid="catalog-empty">
-          Ничего не найдено.
-        </p>
-      ) : (
-        <div
-          className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6"
-          data-testid="catalog-grid"
-        >
-          {page.items.map((item) => (
-            <ItemCard key={item.id} item={item} />
+      {/* Жанры: id жанра в ?genre= (CSV на стороне API). Смена типа сбрасывает жанр —
+          id из другого раздела каталога молча ничего не отфильтруют. */}
+      {genres.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2" data-testid="genre-filters">
+          <Chip
+            active={!genre}
+            params={{ type, sort, title, year }}
+            label="Все жанры"
+            testId="genre-all"
+          />
+          {genres.slice(0, 14).map((g) => (
+            <Chip
+              key={g.id}
+              active={genre === String(g.id)}
+              params={{ type, sort, title, genre: String(g.id), year }}
+              label={g.title}
+              testId={`genre-${g.id}`}
+            />
           ))}
         </div>
       )}
 
-      {page.nextCursor && (
-        <div className="mt-10 flex justify-center">
-          <Link
-            href={`/catalog?${new URLSearchParams(
-              Object.entries({ type, sort, title, cursor: page.nextCursor }).filter(
-                ([, v]) => v !== undefined && v !== "",
-              ) as [string, string][],
-            ).toString()}`}
-            className="rounded-full border border-border px-6 py-2.5 text-sm font-medium text-white transition hover:bg-surface-2"
-            data-testid="load-more"
-          >
-            Показать ещё
-          </Link>
-        </div>
-      )}
+      {/* Годы */}
+      <div className="mb-8 flex flex-wrap gap-2" data-testid="year-filters">
+        <Chip
+          active={!year}
+          params={{ type, sort, title, genre }}
+          label="Все годы"
+          testId="year-all"
+        />
+        {YEARS.map((y) => (
+          <Chip
+            key={y.value}
+            active={year === y.value}
+            params={{ type, sort, title, genre, year: y.value }}
+            label={y.label}
+            testId={`year-${y.value}`}
+          />
+        ))}
+      </div>
+
+      <CatalogGrid
+        initialItems={page.items}
+        initialCursor={page.nextCursor}
+        baseParams={{ type, sort, title, genre, year, limit: 24 }}
+      />
     </main>
   );
 }

@@ -25,6 +25,17 @@ export function formatDuration(totalSeconds: number | null | undefined): string 
   return formatTime(totalSeconds);
 }
 
+/**
+ * Длительность тайтла/серии в секундах → «2 ч 16 мин» / «46 мин»; null → "".
+ *
+ * Отличие от formatDuration: та даёт таймкод «2:16:00» — он уместен в плеере,
+ * а в карточке/списке серий читается как момент времени, а не длительность.
+ */
+export function formatDurationHuman(totalSeconds: number | null | undefined): string {
+  if (totalSeconds == null || totalSeconds <= 0) return "";
+  return formatRuntime(Math.round(totalSeconds / 60));
+}
+
 /** Дата комментария/публикации: "12 марта 2026, 14:33". */
 export function formatDate(iso: string): string {
   const d = new Date(iso);

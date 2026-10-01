@@ -13,7 +13,7 @@ import type {
   UserListDetailDto,
   UserListDto,
 } from "@zal/api-client";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   comments,
@@ -81,6 +81,37 @@ export async function getFavorite(
     .limit(1);
   const row = rows[0];
   return row ? mapFavorite(row.createdAt, row.item) : null;
+}
+
+/** Батч-проверка закладок — один SELECT вместо N getFavorite на рельсе/каталоге. */
+export async function getFavoritesBatch(
+  db: Db,
+  profileId: number,
+  itemIds: number[],
+): Promise<Set<number>> {
+  if (itemIds.length === 0) return new Set();
+  const rows = await db
+    .select({ itemId: favorites.itemId })
+    .from(favorites)
+    .where(and(eq(favorites.profileId, profileId), inArray(favorites.itemId, itemIds)));
+  return new Set(rows.map((r) => r.itemId));
+}
+
+/**
+ * Принадлежность item подборкам — один SELECT вместо N getList на открытие меню.
+ * Возвращает set id подборок, где лежит item.
+ */
+export async function listsContainingItem(
+  db: Db,
+  profileId: number,
+  itemId: number,
+): Promise<Set<number>> {
+  const rows = await db
+    .select({ listId: listEntries.listId })
+    .from(listEntries)
+    .innerJoin(lists, eq(lists.id, listEntries.listId))
+    .where(and(eq(lists.profileId, profileId), eq(listEntries.itemId, itemId)));
+  return new Set(rows.map((r) => r.listId));
 }
 
 /**

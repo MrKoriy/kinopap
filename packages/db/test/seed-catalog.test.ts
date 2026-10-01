@@ -71,6 +71,12 @@ function makeTmdbFetch(): { fetch: typeof fetch; state: MockState } {
         ],
       });
     }
+    // Детали: сид берёт отсюда длительность (movie — runtime минуты,
+    // tv — episode_run_time[0]). Поиск и discover это поле не отдают.
+    if (/^\/3\/(movie|tv)\/\d+$/.test(url.pathname)) {
+      const tv = url.pathname.startsWith("/3/tv/");
+      return json(tv ? { episode_run_time: [47] } : { runtime: 142 });
+    }
     return json({});
   }) as typeof fetch;
 
@@ -132,6 +138,9 @@ describe("seedCatalog", () => {
     expect(bb?.tmdbId).toBe(state.ids.get("Breaking Bad"));
     expect(bb?.plot).toBe("Описание из TMDb");
     expect(bb?.posterMedium).toContain("/w500/poster.jpg");
+    // Длительность — из деталей TMDb, а не фолбэк 7200: сериал получает
+    // среднюю серию (47 мин → 2820с).
+    expect(bb?.runtimeAvg).toBe(2820);
 
     // Жанры TMDb смапились в локальные (9999 без локального отброшен),
     // хардкод-фолбэк «Триллер» не нужен — жанры нашлись.
@@ -180,6 +189,10 @@ describe("seedCatalog", () => {
     expect(rows[0]?.id).toBe(old.id);
     expect(rows[0]?.tmdbId).toBe(state.ids.get("Breaking Bad"));
     expect(rows[0]?.plot).toBe("Описание из TMDb");
+    // Сид-фолбэк 7200 перезаписан реальной длительностью из деталей.
+    expect(rows[0]?.runtimeAvg).toBe(2820);
+    const [oldMedia] = await db.select().from(media).where(eq(media.itemId, old.id));
+    expect(oldMedia?.runtime).toBe(2820);
 
     // Хардкод-жанр остался на месте, TMDb-жанры дописались сверху.
     expect(await genreTitlesOf(db, old.id)).toEqual([
@@ -201,6 +214,54 @@ describe("seedCatalog", () => {
       "Криминал",
       "Триллер",
     ]);
+  });
+
+  it("tmdb_id, занятый другим тайтлом, не перезаписывается (duplicate key)", async () => {
+    const db = await createTestDb();
+    await seedLocalGenres(db);
+    const { fetch: fetchFn, state } = makeTmdbFetch();
+
+    // Состояние прода 01.10.2026: два «Графа Монте-Кристо» — у одного tmdb_id
+    // из fill, второй создан позже с другим id. TMDb-поиск по названию отдаёт
+    // id первого — и update второго падал на unique (tmdb_type, tmdb_id).
+    // Мок обязан вернуть именно занятый id, а не свежий из счётчика.
+    state.ids.set("Le Comte de Monte-Cristo", 1084736);
+    const [holder] = await db
+      .insert(items)
+      .values({
+        type: "movie",
+        title: "Граф Монте-Кристо",
+        year: 2024,
+        tmdbType: "movie",
+        tmdbId: 1084736,
+      })
+      .returning();
+    const [other] = await db
+      .insert(items)
+      .values({
+        type: "movie",
+        title: "Граф Монте-Кристо",
+        year: 2024,
+        tmdbType: "movie",
+        tmdbId: 71033,
+      })
+      .returning();
+
+    await seedCatalog({ db, fetch: fetchFn, tmdbKey: "test-key" });
+
+    // Обе строки живы, сид не упал: пара (movie, 1084736) по-прежнему одна.
+    const rows = await db.select().from(items).where(eq(items.title, "Граф Монте-Кристо"));
+    expect(rows).toHaveLength(2);
+    const withSame = rows.filter((r) => r.tmdbId === 1084736);
+    expect(withSame).toHaveLength(1);
+    // Владелец не разжалован, второй не получил дубль.
+    const holderRow = rows.find((r) => r.id === holder.id);
+    const otherRow = rows.find((r) => r.id === other.id);
+    expect(holderRow?.tmdbId).toBe(1084736);
+    expect(otherRow?.tmdbId).not.toBe(1084736);
+    // Порядок existing-строки не важен: селект без order может вернуть любую,
+    // второй от этого не должен пострадать.
+    expect(otherRow?.id).toBe(other.id);
   });
 
   it("без ключа TMDb сеть не трогается, tmdb_id существующего не затирается", async () => {

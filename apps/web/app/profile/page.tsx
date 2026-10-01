@@ -160,7 +160,7 @@ export default function ProfilePage() {
         <p className="mt-1 text-sm text-muted">{user.email}</p>
         {user.createdAt && (
           <p className="mt-0.5 text-sm text-muted">
-            В Зале с {formatMemberSince(user.createdAt)}
+            В kino.pap с {formatMemberSince(user.createdAt)}
           </p>
         )}
       </section>

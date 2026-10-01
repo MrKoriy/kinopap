@@ -13,5 +13,16 @@ export default defineConfig({
   test: {
     environment: "jsdom",
     include: ["test/**/*.test.{ts,tsx}"],
+    coverage: {
+      provider: "v8",
+      // Пороги ниже фактических (65/66/62/68) с запасом: ловят деградацию,
+      // не флейкуя на переферийных файлах. Применяются только с --coverage.
+      thresholds: {
+        statements: 60,
+        branches: 60,
+        functions: 55,
+        lines: 62,
+      },
+    },
   },
 });

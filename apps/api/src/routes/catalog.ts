@@ -444,41 +444,43 @@ export async function catalogRoutes(
     });
     if (resolved.files.length === 0) return null;
 
+    const guessed = !resolved.warm && resolved.files.length > 0;
     const entry = makeEntry(resolved.files, resolved.audios, resolved.intro, resolved.warm);
-    cacheResolveEntry(`${id}:${mediaId}`, entry);
+    if (!guessed) {
+      cacheResolveEntry(`${id}:${mediaId}`, entry);
+    }
     console.log(
       `resolve: item=${id} media=${mediaId} in ${Date.now() - startedAt}ms ` +
-        `files=${resolved.files.length} warm=${resolved.warm ? "ready" : "pending"}`,
+        `files=${resolved.files.length} warm=${resolved.warm ? "ready" : guessed ? "guess" : "pending"}`,
     );
-    void saveSource(db, {
-      itemId: id,
-      mediaId,
-      files: resolved.files,
-      audios: resolved.audios,
-      intro: resolved.intro,
-      warm: resolved.warm,
-    }).catch(() => {
-      // Кэш в БД опционален — падение записи не должно ломать просмотр.
-    });
-    // Прогрев не уложился в бюджет — когда доедет, пересохраняем полную запись (warm+files),
-    // чтобы кэш и БД не отдавали угаданный index=1 до истечения TTL.
-    if (!resolved.warm) {
+    if (!guessed) {
+      void saveSource(db, {
+        itemId: id,
+        mediaId,
+        files: resolved.files,
+        audios: resolved.audios,
+        intro: resolved.intro,
+        warm: resolved.warm,
+      }).catch(() => {});
+    } else {
+      // Угаданный fileIndex=1 — не в БД и не продлеваем: дождёмся точного warm
+      // и только его сохраняем (патч warm + инвалидация L1, чтобы следующий
+      // медиалинк перестроил URLs уже с реальным индексом).
       void streamResolver
         .warmFor(id, mediaId)
         .then((warm2) => {
           if (!warm2) return;
-          const files = entry.files.map((f) => {
-            // Если файл был с угаданным index=1, а warm даёт реальный fileIndex — пересобираем URL.
-            // Для простоты пересохраняем entry как есть с новым warm; следующий резолв пересоберёт URLs.
-            return f;
-          });
-          return saveSource(db, {
-            itemId: id,
-            mediaId,
-            files,
-            audios: entry.audios,
-            intro: entry.intro,
-            warm: warm2,
+          const cacheKey = `${id}:${mediaId}`;
+          resolveCache.delete(cacheKey);
+          return patchSource(db, id, mediaId, { warm: warm2 }).catch(() => {
+            return saveSource(db, {
+              itemId: id,
+              mediaId,
+              files: resolved.files,
+              audios: entry.audios,
+              intro: entry.intro,
+              warm: warm2,
+            }).catch(() => {});
           });
         })
         .catch(() => {});

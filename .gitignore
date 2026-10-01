@@ -18,6 +18,10 @@ coverage/
 !.env.example
 .DS_Store
 apps/mobile/dist-e2e
+# Дубликаты «* 2.*» от облачного синка macOS и исходники лого в корне.
+* 2.*
+/Logo Redesign Sep 29 2026.png
+/logo.png
 # Нативные проекты генерируются prebuild'ом (CNG) — не в git.
 apps/mobile/ios/
 apps/mobile/android/

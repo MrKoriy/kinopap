@@ -31,14 +31,31 @@ console.log("migrations: ok");
 
 const db = createDb(pool);
 
-// Гигиена: протухшие refresh-токены раньше не удалялись никогда.
-{
-  const purged = await purgeStaleRefreshTokens(db);
-  if (purged > 0) console.log(`auth: purged ${purged} stale refresh tokens`);
-  // Кэш резолва живёт 6 часов — старое в БД держать незачем.
-  const stale = await purgeStaleSources(db, 6 * 60 * 60 * 1000);
-  if (stale > 0) console.log(`resolve: purged ${stale} stale media_sources`);
+// Гигиена: при старте + каждый час (раньше только при старте — на
+// долгоживущем процессе без рестарта media_sources разрасталась бесконечно).
+const PURGE_TOKENS_INTERVAL_MS = 60 * 60 * 1000;
+const PURGE_SOURCES_INTERVAL_MS = 60 * 60 * 1000;
+const RESOLVE_SOURCE_TTL_MS = 6 * 60 * 60 * 1000;
+
+async function purgeOnce() {
+  try {
+    const purged = await purgeStaleRefreshTokens(db);
+    if (purged > 0) console.log(`auth: purged ${purged} stale refresh tokens`);
+  } catch (err) {
+    console.warn("auth: purge failed:", String(err).slice(0, 200));
+  }
+  try {
+    const stale = await purgeStaleSources(db, RESOLVE_SOURCE_TTL_MS);
+    if (stale > 0) console.log(`resolve: purged ${stale} stale media_sources`);
+  } catch (err) {
+    console.warn("resolve: purge failed:", String(err).slice(0, 200));
+  }
 }
+await purgeOnce();
+const purgeTokensTimer = setInterval(() => void purgeOnce(), PURGE_TOKENS_INTERVAL_MS);
+const purgeSourcesTimer = setInterval(() => void purgeOnce(), PURGE_SOURCES_INTERVAL_MS);
+purgeTokensTimer.unref();
+purgeSourcesTimer.unref();
 
 // TorrServer: прогрев настроек буфера (read-ahead, кэш). Best-effort —
 // недоступный сервер не мешает старту API, стримы резолвятся лениво.
@@ -180,6 +197,8 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
       const exitTimer = setTimeout(() => process.exit(1), 10_000);
       exitTimer.unref();
       try {
+        clearInterval(purgeTokensTimer);
+        clearInterval(purgeSourcesTimer);
         await app.close();
         // BullMQ-очереди и Redis-коннекты раньше не закрывались вовсе:
         // event loop держался до force-exit, коннекты обрывались грязно.

@@ -9,7 +9,7 @@ import * as React from "react";
 import { FavoriteButton } from "@/components/favorite-button";
 import { PosterImage } from "@/components/poster-image";
 import { Badge } from "@/components/ui/badge";
-import { formatDuration } from "@/lib/format";
+import { formatDurationHuman } from "@/lib/format";
 
 /**
  * Бейдж типа показываем только там, где он различает контент в сетке
@@ -95,7 +95,7 @@ export function ItemCard({
           <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/70 to-transparent p-3 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
             <p className="text-sm font-semibold leading-tight text-white">{item.title}</p>
             <p className="mt-1 text-xs text-white/70">
-              {[item.year, item.duration.average ? formatDuration(item.duration.average) : null]
+              {[item.year, item.duration.average ? formatDurationHuman(item.duration.average) : null]
                 .filter(Boolean)
                 .join(" · ")}
             </p>

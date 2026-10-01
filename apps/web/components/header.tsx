@@ -1,6 +1,7 @@
 "use client";
 
 /** Шапка сайта: логотип, навигация, состояние авторизации. */
+import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
@@ -12,16 +13,24 @@ export function Header() {
   const [query, setQuery] = React.useState("");
   const [unread, setUnread] = React.useState(0);
 
-  // Badge непросмотренных новинок по подпискам.
+  // Badge непросмотренных новинок — с 60с кэшем (раньше на каждый маунт/ререндер).
+  const unreadCacheRef = React.useRef<{ at: number; value: number } | null>(null);
   React.useEffect(() => {
     if (!user) {
       setUnread(0);
       return;
     }
+    const cached = unreadCacheRef.current;
+    if (cached && Date.now() - cached.at < 60_000) {
+      setUnread(cached.value);
+      return;
+    }
     let cancelled = false;
     api.getNewEpisodes().then(
       (res: { total: number }) => {
-        if (!cancelled) setUnread(res.total);
+        if (cancelled) return;
+        unreadCacheRef.current = { at: Date.now(), value: res.total };
+        setUnread(res.total);
       },
       () => {},
     );
@@ -33,8 +42,9 @@ export function Header() {
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/80 backdrop-blur">
       <div className="mx-auto flex h-16 max-w-7xl items-center gap-6 px-4">
-        <Link href="/" className="text-2xl font-bold tracking-tight text-white">
-          Зал<span className="text-accent">.</span>
+        <Link href="/" className="flex items-center gap-2 text-2xl font-bold tracking-tight text-white">
+          <Image src="/logo.png" alt="" width={32} height={32} className="h-8 w-8" priority />
+          kino<span className="text-accent">.</span>pap
         </Link>
 
         <nav className="flex gap-4 text-sm text-muted">

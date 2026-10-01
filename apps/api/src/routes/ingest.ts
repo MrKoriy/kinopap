@@ -54,7 +54,10 @@ export async function ingestRoutes(
    */
   app.post(
     "/ingest",
-    { preHandler: [app.authenticate, requireRole("owner", "admin")] },
+    {
+      preHandler: [app.authenticate, requireRole("owner", "admin")],
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
     async (request, reply) => {
     const body = parseOrThrow(ingestRequestSchema, request.body);
     let row: IngestJobRow;

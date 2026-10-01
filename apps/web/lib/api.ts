@@ -182,6 +182,26 @@ export async function fetchSimilar(id: number): Promise<ItemPage> {
   );
 }
 
+/** Жанры каталога (для чипов фильтра). id идут в ?genre= CSV-параметром. */
+export interface CatalogGenre {
+  id: number;
+  title: string;
+  type: string;
+}
+
+export async function fetchGenres(type?: string): Promise<CatalogGenre[]> {
+  const qs = type ? `?type=${encodeURIComponent(type)}` : "";
+  try {
+    const res = (await getJson(`/v1/genres${qs}`, 300)) as {
+      genres?: CatalogGenre[];
+    };
+    return res.genres ?? [];
+  } catch {
+    // Чипы жанров — опциональное удобство: пусто = просто без фильтра.
+    return [];
+  }
+}
+
 /** null — пары item/media нет (404). Сбой — исключение. Холодный резолв
  *  ходит в rutor/AniLibria/TorrServer и может занять десятки секунд —
  *  таймаут здесь щедрее дефолтного. */

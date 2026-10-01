@@ -19,7 +19,7 @@ import { PosterImage } from "@/components/poster-image";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { useOptionalAuth } from "@/lib/auth";
-import { formatDuration } from "@/lib/format";
+import { formatDurationHuman } from "@/lib/format";
 
 /**
  * Тонкий адаптер: pickDefaultSeason выбирает сезон по id, а веб-карточка
@@ -64,7 +64,7 @@ function EpisodeRow({
         )}
         <span className="min-w-0 flex-1 truncate text-sm">{label}</span>
         {episode.runtime > 0 && (
-          <span className="shrink-0 text-xs text-muted">{formatDuration(episode.runtime)}</span>
+          <span className="shrink-0 text-xs text-muted">{formatDurationHuman(episode.runtime)}</span>
         )}
       </div>
     );
@@ -93,7 +93,7 @@ function EpisodeRow({
       </span>
       <EpisodeWatchState entry={entry} />
       {episode.runtime > 0 && (
-        <span className="shrink-0 text-xs text-muted">{formatDuration(episode.runtime)}</span>
+        <span className="shrink-0 text-xs text-muted">{formatDurationHuman(episode.runtime)}</span>
       )}
     </Link>
   );
@@ -193,7 +193,7 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
       rows.push({ label: "Части", value: String(item.media.length) });
     }
     if (item.duration.total) {
-      rows.push({ label: "Общая длительность", value: formatDuration(item.duration.total) });
+      rows.push({ label: "Общая длительность", value: formatDurationHuman(item.duration.total) });
     }
     if (item.finished != null) {
       rows.push({ label: "Статус", value: item.finished ? "завершён" : "выходит" });
@@ -260,7 +260,7 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
             {item.genres.map((g) => (
               <Badge key={g.id}>{g.title}</Badge>
             ))}
-            {item.duration.average ? <Badge>{formatDuration(item.duration.average)}</Badge> : null}
+            {item.duration.average ? <Badge>{formatDurationHuman(item.duration.average)}</Badge> : null}
           </div>
           <div className="mt-5 flex flex-wrap items-center gap-3">
             <Link

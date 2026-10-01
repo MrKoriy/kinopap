@@ -8,7 +8,7 @@ import Link from "next/link";
  */
 import * as React from "react";
 import { useOptionalAuth } from "@/lib/auth";
-import { formatDate, formatDuration } from "@/lib/format";
+import { formatDate, formatDurationHuman } from "@/lib/format";
 
 export default function SubscriptionsPage() {
   const auth = useOptionalAuth();
@@ -98,7 +98,7 @@ export default function SubscriptionsPage() {
                   <span className="text-xs text-muted">{formatDate(ep.publishedAt)}</span>
                 </span>
                 {ep.runtime > 0 && (
-                  <span className="text-xs text-muted">{formatDuration(ep.runtime)}</span>
+                  <span className="text-xs text-muted">{formatDurationHuman(ep.runtime)}</span>
                 )}
               </Link>
             </li>

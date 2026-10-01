@@ -18,7 +18,7 @@ export default function ErrorPage({
       </h1>
       <p className="max-w-md text-center text-muted" data-testid="error-message">
         {apiDown
-          ? "Не удалось связаться с сервером «Зал». Проверьте соединение или зайдите чуть позже."
+          ? "Не удалось связаться с сервером kino.pap. Проверьте соединение или зайдите чуть позже."
           : "Страница отрендерилась с ошибкой. Попробуйте ещё раз."}
       </p>
       <div className="flex gap-3">

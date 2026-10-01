@@ -14,7 +14,7 @@ export const revalidate = 0;
 
 // Без запроса страница пустая, с запросом — бесконечные варианты URL: не индексируем.
 export const metadata: Metadata = {
-  title: "Поиск — Зал",
+  title: "Поиск — kino.pap",
   robots: { index: false },
 };
 

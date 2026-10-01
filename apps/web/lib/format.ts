@@ -2,6 +2,7 @@
 export {
   formatDate,
   formatDuration,
+  formatDurationHuman,
   formatRuntime,
   formatShift,
   formatTime,

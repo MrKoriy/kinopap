@@ -18,10 +18,12 @@ import {
   deleteUserList,
   findUserById,
   getFavorite,
+  getFavoritesBatch,
   getUserList,
   listFavorites,
   listHistory,
   listItemProgress,
+  listsContainingItem,
   listUserLists,
   profileStats,
   removeFavorite,
@@ -84,6 +86,22 @@ export async function profileRoutes(
     return { items: await listFavorites(db, profileId) };
   });
 
+  /** Батч-проверка закладок — один SELECT вместо N getFavorite на рельсе. */
+  app.get("/favorites/batch", { preHandler: app.authenticate }, async (request) => {
+    const q = parseOrThrow(
+      z.object({ ids: z.string().min(1) }),
+      request.query ?? {},
+    );
+    const ids = q.ids
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0)
+      .slice(0, 100);
+    const profileId = await requireProfileId(db, request);
+    const set = await getFavoritesBatch(db, profileId, ids);
+    return { favorites: [...set] };
+  });
+
   app.get("/favorites/:itemId", { preHandler: app.authenticate }, async (request) => {
     const { itemId } = parseOrThrow(itemParamsSchema, request.params);
     const profileId = await requireProfileId(db, request);
@@ -106,6 +124,17 @@ export async function profileRoutes(
   });
 
   /* ---------- Подборки ---------- */
+
+  /** Принадлежность тайтла подборкам — один SELECT вместо N getList. */
+  app.get("/lists/membership", { preHandler: app.authenticate }, async (request) => {
+    const q = parseOrThrow(
+      z.object({ itemId: z.coerce.number().int().positive() }),
+      request.query ?? {},
+    );
+    const profileId = await requireProfileId(db, request);
+    const set = await listsContainingItem(db, profileId, q.itemId);
+    return { lists: [...set] };
+  });
 
   app.get("/lists", { preHandler: app.authenticate }, async (request) => {
     const profileId = await requireProfileId(db, request);

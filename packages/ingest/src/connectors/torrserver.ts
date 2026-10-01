@@ -250,18 +250,23 @@ export class TorrServerConnector {
   }
 
   /**
-   * Предоткрытие потока: читаем 10МБ головы файла по внутреннему адресу.
+   * Предоткрытие потока: читаем голову файла по внутреннему адресу. Размер
+   * зависит от режима:
+   *  - торренты с редкими сидами (`noName = true`) — 32 МБ, чтобы первые
+   *    сегменты gst не ждали пиров по несколько секунд каждый;
+   *  - обычные — 10 МБ, достаточно для старта.
    * TorrServer при этом коннектится к пирам и качает первые куски в кэш,
    * а ближайшие запросы (проба/мастер/сегменты) обслуживаются из тёплого
    * кэша. Вызывается fire-and-forget, ошибки игнорируются вызывающим.
    */
-  async preopenStream(hash: string, fileIndex: number): Promise<void> {
+  async preopenStream(hash: string, fileIndex: number, noName = false): Promise<void> {
     try {
+      const bytes = noName ? 32 * 1024 * 1024 - 1 : 10 * 1024 * 1024 - 1;
       const res = await fetch(
         `${this.baseUrl}/stream?link=${hash}&index=${fileIndex}&play`,
         {
-          headers: { Range: "bytes=0-10485759" },
-          signal: AbortSignal.timeout(12_000),
+          headers: { Range: `bytes=0-${bytes}` },
+          signal: AbortSignal.timeout(noName ? 20_000 : 12_000),
         },
       );
       // Читаем чанк и закрываем — цель: форсировать приоритет головы файла.

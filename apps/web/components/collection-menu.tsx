@@ -41,23 +41,20 @@ export function CollectionMenu({ itemId, className }: CollectionMenuProps) {
   }, [open]);
 
   // Открытие тянет подборки и их состав: чекбоксы должны отражать реальность.
+  // Один запрос на membership вместо N getList — было N+1, теперь 2 запроса всего.
   React.useEffect(() => {
     if (!open || !api || !user) return;
     let cancelled = false;
     setLoading(true);
     void (async () => {
       try {
-        const { items } = await api.listLists();
-        const details = await Promise.all(
-          items.map((l) => api.getList(l.id).catch(() => null)),
-        );
+        const [{ items }, { lists: memberIds }] = await Promise.all([
+          api.listLists(),
+          api.getListsMembership(itemId),
+        ]);
         if (cancelled) return;
         setLists(items);
-        const ids = new Set<number>();
-        for (const d of details) {
-          if (d?.list.items.some((it) => it.id === itemId)) ids.add(d.list.id);
-        }
-        setMember(ids);
+        setMember(new Set(memberIds));
       } catch {
         // Список недоступен — меню остаётся с пустым состоянием и формой.
       } finally {

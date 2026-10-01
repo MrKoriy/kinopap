@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ItemDetail, ItemProgressDto } from "@zal/api-client";
 import type * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -263,36 +263,3 @@ describe("ItemDetailView — подпись главной кнопки у фи�
   });
 });
 
-describe("ItemDetailView — трейлер", () => {
-  it("честно называет поиск, когда трейлера нет", () => {
-    render(<ItemDetailView item={itemDetail} />);
-    const button = screen.getByTestId("trailer-button");
-    expect(button.textContent).toContain("Найти трейлер");
-
-    fireEvent.click(button);
-    const dialog = screen.getByRole("dialog");
-    expect(dialog.textContent).toContain("Поиск трейлера");
-    expect(dialog.textContent).toContain("поиск на YouTube");
-    expect((screen.getByTitle("Трейлер Сталкер") as HTMLIFrameElement).src).toContain(
-      "listType=search",
-    );
-  });
-
-  it("встраивает реальный трейлер, если он есть", () => {
-    render(
-      <ItemDetailView
-        item={{ ...itemDetail, trailer: { id: null, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } }}
-      />,
-    );
-    const button = screen.getByTestId("trailer-button");
-    expect(button.textContent).toContain("Трейлер");
-
-    fireEvent.click(button);
-    const dialog = screen.getByRole("dialog");
-    expect(dialog.textContent).toContain("Трейлер: Сталкер");
-    expect(dialog.textContent).not.toContain("поиск на YouTube");
-    expect((screen.getByTitle("Трейлер Сталкер") as HTMLIFrameElement).src).toContain(
-      "embed/dQw4w9WgXcQ",
-    );
-  });
-});

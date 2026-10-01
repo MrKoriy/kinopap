@@ -1,13 +1,17 @@
 import { decodeCursor, parseCatalogQuery } from "@zal/api-client";
+import { eq } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import {
+  backfillRuntimeFromLocalData,
   getItem,
   getItemsByIds,
   listItems,
+  listItemsMissingRuntime,
   listItemsMissingTrailer,
   markTrailerChecked,
   mediaLinks,
   searchItems,
+  setItemRuntime,
   setItemTrailer,
   shortcutItems,
   similarItems,
@@ -212,6 +216,83 @@ describe("getItem", () => {
   it("returns null for unknown id", async () => {
     const db = await createTestDb();
     expect(await getItem(db, 99999)).toBeNull();
+  });
+});
+
+describe("длительность карточки: вывод из своих данных", () => {
+  it("сериалу длительность выводится из эпизодов — даже если сид написал 7200", async () => {
+    const db = await createTestDb();
+    const ids = await seedFixtures(db);
+    // Состояние сида до фикса: фиктивные «2 часа» у всего топа.
+    await db
+      .update(schema.items)
+      .set({ runtimeAvg: 7200 })
+      .where(eq(schema.items.id, ids.got));
+
+    const detail = await getItem(db, ids.got);
+    // (62 + 56) / 2 = 59, сумма 118 — реальные минуты эпизодов.
+    expect(detail!.duration).toEqual({ average: 59, total: 118 });
+  });
+
+  it("фильму без runtime_avg длительность выводится из media", async () => {
+    const db = await createTestDb();
+    const ids = await seedFixtures(db);
+    // Discovery исторически не записывал runtime_avg — только media.runtime.
+    await db
+      .update(schema.items)
+      .set({ runtimeAvg: null, runtimeTotal: null })
+      .where(eq(schema.items.id, ids.matrix));
+
+    const detail = await getItem(db, ids.matrix);
+    expect(detail!.duration).toEqual({ average: 136, total: 136 });
+  });
+
+  it("записанную длительность фильма вывод не перезатирает", async () => {
+    const db = await createTestDb();
+    const ids = await seedFixtures(db);
+    const detail = await getItem(db, ids.matrix);
+    expect(detail!.duration).toEqual({ average: 136, total: 136 });
+  });
+
+  it("бэкфилл SQL-фазой раскладывает длительность по items", async () => {
+    const db = await createTestDb();
+    const ids = await seedFixtures(db);
+    // У сериала пусто, у фильма пусто — как после discovery-заливки.
+    await db
+      .update(schema.items)
+      .set({ runtimeAvg: null, runtimeTotal: null })
+      .where(eq(schema.items.id, ids.got));
+
+    await backfillRuntimeFromLocalData(db);
+
+    const [got] = await db.select().from(schema.items).where(eq(schema.items.id, ids.got));
+    expect(got?.runtimeAvg).toBe(59);
+    expect(got?.runtimeTotal).toBe(118);
+    const [matrix] = await db.select().from(schema.items).where(eq(schema.items.id, ids.matrix));
+    // У фильма был runtime_avg — не тронут; запись идёт только в пустые.
+    expect(matrix?.runtimeAvg).toBe(136);
+  });
+
+  it("выборка TMDb-фазы: пустой или сид-фолбэк runtime_avg при наличии tmdbId", async () => {
+    const db = await createTestDb();
+    const ids = await seedFixtures(db);
+    // Два тайтла с tmdbId: у одного пусто, у другого сид-фолбэк 7200.
+    await db
+      .update(schema.items)
+      .set({ tmdbId: 500 })
+      .where(eq(schema.items.id, ids.got));
+    await db
+      .update(schema.items)
+      .set({ tmdbId: 600, runtimeAvg: 7200 })
+      .where(eq(schema.items.id, ids.matrix));
+
+    const rows = await listItemsMissingRuntime(db);
+    expect(rows.map((r) => r.tmdbId).sort()).toEqual([500, 600]);
+
+    await setItemRuntime(db, rows.find((r) => r.tmdbId === 600)!.id, 8160);
+    // Записанное выпадает из выборки — скрипт прерываем и идемпотентен.
+    const after = await listItemsMissingRuntime(db);
+    expect(after.map((r) => r.tmdbId)).toEqual([500]);
   });
 });
 

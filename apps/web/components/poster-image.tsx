@@ -1,23 +1,11 @@
+import { allowedImageHosts, parseExtraImageHosts } from "@zal/shared/image-hosts";
 import Image from "next/image";
 
 /**
- * Постеры: next/image (lazy/sizes/priority) для известных хостов,
- * обычный <img> для остальных — свой storage за произвольным доменом
- * не роняет рендер, если не попал в remotePatterns. Дополнительные
- * домены задаются через NEXT_PUBLIC_EXTRA_IMAGE_HOSTS (через запятую).
+ * Постеры: next/image для известных хостов, обычный <img> для остальных.
+ * Список хостов — единый с next.config (через @zal/shared/image-hosts).
  */
-const EXTRA_HOSTS = (process.env.NEXT_PUBLIC_EXTRA_IMAGE_HOSTS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
-
-const ALLOWED_HOSTS = new Set([
-  "image.tmdb.org",
-  "localhost:3001",
-  "127.0.0.1:3001",
-  "localhost:9000",
-  ...EXTRA_HOSTS,
-]);
+const ALLOWED_HOSTS = allowedImageHosts(parseExtraImageHosts());
 
 export function isOptimizableImageSrc(src: string): boolean {
   try {

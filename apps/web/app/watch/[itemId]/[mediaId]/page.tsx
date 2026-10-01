@@ -18,7 +18,7 @@ export async function generateMetadata({
   const { itemId } = await params;
   const item = await fetchItem(Number(itemId));
   return {
-    title: `${item?.title ?? "Просмотр"} — смотреть — Зал`,
+    title: `${item?.title ?? "Просмотр"} — смотреть — kino.pap`,
     robots: { index: false },
   };
 }

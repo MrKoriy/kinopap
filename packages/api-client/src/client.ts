@@ -5,6 +5,7 @@
  * ретрай GET при сетевом сбое, ошибки — в ApiError.
  */
 
+import { z } from "zod";
 import {
   type AuthResponse,
   authResponseSchema,
@@ -437,6 +438,11 @@ export function createApiClient(opts: ApiClientOptions) {
       request("/v1/favorites", favoriteListResponseSchema, { auth: true }),
     getFavorite: (itemId: number) =>
       request(`/v1/favorites/${itemId}`, favoriteResponseSchema, { auth: true }),
+    getFavoritesBatch: (ids: number[]) =>
+      request("/v1/favorites/batch", z.object({ favorites: z.array(z.number().int()) }), {
+        query: { ids: ids.join(",") },
+        auth: true,
+      }),
     addFavorite: (itemId: number) =>
       request(`/v1/favorites/${itemId}`, favoriteResponseSchema, {
         method: "PUT",
@@ -450,6 +456,11 @@ export function createApiClient(opts: ApiClientOptions) {
 
     /* lists (подборки) */
     listLists: () => request("/v1/lists", userListListResponseSchema, { auth: true }),
+    getListsMembership: (itemId: number) =>
+      request("/v1/lists/membership", z.object({ lists: z.array(z.number().int()) }), {
+        query: { itemId },
+        auth: true,
+      }),
     createList: (input: UserListCreate) => {
       userListCreateSchema.parse(input);
       return request("/v1/lists", userListResponseSchema, {

@@ -11,6 +11,7 @@
  */
 import type HlsJs from "hls.js";
 import * as React from "react";
+import { preferNativeHls } from "@/lib/player-logic";
 import type { SubtitleTrack } from "./hooks";
 
 export interface StreamSetupParams {
@@ -68,9 +69,13 @@ export function useStreamSetup(params: StreamSetupParams): void {
     gstRetryRef.current = 0;
 
     const isHls = !directFallback && (streamUrl.includes(".m3u8") || Boolean(activeFile?.urls.hls));
-    // MSE доступен → грузим hls.js динамически; нативный HLS (iOS Safari)
-    // играет напрямую, не скачивая ~150КБ библиотеки.
+    // Нативный HLS (Safari на macOS/iPadOS/iOS) всегда предпочтительнее hls.js:
+    // AVFoundation декодирует то, что MSE в Safari отвергает (из-за этого
+    // плеер срывался в перебор раздач), и не оставляет «мёртвых» страниц после
+    // воспроизведения в standalone-PWA — известный баг WebKit с MSE-видео.
+    // hls.js грузим только браузерам без нативного HLS (Chrome/Firefox).
     const canMse = typeof MediaSource !== "undefined";
+    const canNativeHls = isHls && preferNativeHls(video);
 
     let cancelled = false;
     let hls: HlsJs | null = null;
@@ -81,7 +86,7 @@ export function useStreamSetup(params: StreamSetupParams): void {
     let gstRetryTimer: number | null = null;
 
     void (async () => {
-      if (isHls && canMse) {
+      if (isHls && canMse && !canNativeHls) {
         const { default: Hls } = await import("hls.js");
         if (cancelled) return;
         hls = new Hls({
@@ -198,7 +203,7 @@ export function useStreamSetup(params: StreamSetupParams): void {
         return;
       }
 
-      // Safari или прямой HTTP Range-стрим (TorrServer / MP4)
+      // Нативный HLS (Safari) или прямой HTTP Range-стрим (TorrServer / MP4)
       video.src = streamUrl;
       video.load();
       tryAutoplayRef.current();

@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { createDb, createPool, type Db } from "./db";
 import { genres, itemGenres, items, media } from "./schema/index";
 
@@ -33,6 +33,35 @@ interface TmdbMeta {
 
 const TMDB_BASE = "https://api.themoviedb.org/3";
 
+/**
+ * Длительность из деталей TMDb: movie — `runtime`, tv — `episode_run_time[0]`
+ * (минуты). Поиск и discover это поле не отдают, только /movie/{id} и /tv/{id}.
+ * null — деталь не нашлась или источник промолчал.
+ */
+async function tmdbDetailRuntime(
+  kind: "movie" | "tv",
+  tmdbId: number,
+  key: string | null,
+  fetchFn: typeof fetch,
+): Promise<number | null> {
+  if (!key) return null;
+  const url = `${TMDB_BASE}/${kind}/${tmdbId}?api_key=${key}&language=ru-RU`;
+  try {
+    const res = await fetchFn(url, { signal: AbortSignal.timeout(8000) });
+    if (!res.ok) return null;
+    const data = (await res.json()) as { runtime?: unknown; episode_run_time?: unknown };
+    const raw =
+      kind === "movie"
+        ? data.runtime
+        : Array.isArray(data.episode_run_time)
+          ? data.episode_run_time[0]
+          : null;
+    return typeof raw === "number" && raw > 0 ? raw * 60 : null;
+  } catch {
+    return null;
+  }
+}
+
 async function tmdbMeta(
   seed: MovieSeed,
   key: string | null,
@@ -66,16 +95,16 @@ async function tmdbMeta(
 
     const date = String(hit.release_date ?? hit.first_air_date ?? "");
     const year = date.length >= 4 ? parseInt(date.slice(0, 4), 10) : null;
-    const runtimeRaw =
-      seed.type === "movie"
-        ? hit.runtime
-        : Array.isArray(hit.episode_run_time)
-          ? hit.episode_run_time[0]
-          : null;
+    // Поиск TMDb не отдаёт длительность — только детали (/movie/{id},
+    // /tv/{id}). Раньше runtime читался из выдачи поиска, его там не было,
+    // и все сид-тайтлы получали фолбэк «7200».
+    const tmdbId = typeof hit.id === "number" ? hit.id : null;
+    const kind = seed.type === "serial" ? "tv" : "movie";
+    const runtimeSeconds = tmdbId ? await tmdbDetailRuntime(kind, tmdbId, key, fetchFn) : null;
     const posterPath = hit.poster_path ? String(hit.poster_path) : null;
 
     return {
-      tmdbId: typeof hit.id === "number" ? hit.id : null,
+      tmdbId,
       genreIds: Array.isArray(hit.genre_ids)
         ? hit.genre_ids.filter((g): g is number => typeof g === "number")
         : [],
@@ -89,8 +118,7 @@ async function tmdbMeta(
         typeof hit.vote_average === "number" && hit.vote_average > 0
           ? Math.round(hit.vote_average * 10) / 10
           : seed.rating,
-      runtimeSeconds:
-        typeof runtimeRaw === "number" && runtimeRaw > 0 ? runtimeRaw * 60 : null,
+      runtimeSeconds,
       posterSmall: posterPath ? `https://image.tmdb.org/t/p/w185${posterPath}` : seed.poster,
       posterMedium: posterPath ? `https://image.tmdb.org/t/p/w500${posterPath}` : seed.poster,
       posterBig: posterPath ? `https://image.tmdb.org/t/p/original${posterPath}` : seed.poster,
@@ -780,15 +808,50 @@ export async function seedCatalog(opts: SeedCatalogOptions = {}) {
     const posterMedium = meta?.posterMedium ?? item.poster;
     const posterBig = meta?.posterBig ?? item.poster;
     const originalTitle = meta?.originalTitle ?? item.originalTitle;
-    const runtime = meta?.runtimeSeconds ?? 7200;
+    // null — TMDb не дал длительности: лучше пустая карточка (длительность
+    // выведется из media/эпизодов), чем универсальные «2 часа» у всего топа.
+    const runtime = meta?.runtimeSeconds ?? null;
 
     const existing = await customDb
-      .select({ id: items.id })
+      .select({ id: items.id, tmdbType: items.tmdbType })
       .from(items)
       .where(eq(items.title, title))
       .limit(1);
 
     let itemId = existing[0]?.id;
+
+    // TMDb-дубль: id, найденный поиском по названию, может уже принадлежать
+    // другому тайтлу каталога (два «Графа Монте-Кристо», 2024). Перезапись
+    // роняла update на unique (tmdb_type, tmdb_id) и убивала весь seed.
+    // Метаданные при этом обновляем — отдаём без tmdb_id.
+    let tmdbIdSet: number | null = null;
+    if (meta?.tmdbId != null && itemId != null) {
+      const currentType = existing[0]?.tmdbType ?? null;
+      if (currentType == null) {
+        // tmdb_type в строке пуст — под partial-unique (WHERE NOT NULL) не
+        // попадаем, конфликта быть не может.
+        tmdbIdSet = meta.tmdbId;
+      } else {
+        const clash = await customDb
+          .select({ id: items.id })
+          .from(items)
+          .where(
+            and(
+              eq(items.tmdbType, currentType),
+              eq(items.tmdbId, meta.tmdbId),
+              ne(items.id, itemId),
+            ),
+          )
+          .limit(1);
+        if (clash.length > 0) {
+          console.warn(
+            `! tmdb id ${meta.tmdbId} уже у item ${clash[0].id} — «${title}» обновляю без tmdb_id`,
+          );
+        } else {
+          tmdbIdSet = meta.tmdbId;
+        }
+      }
+    }
 
     if (itemId) {
       // Обновляем метаданные существующих: битые хардкод-постеры сида
@@ -803,17 +866,22 @@ export async function seedCatalog(opts: SeedCatalogOptions = {}) {
           posterSmall,
           posterMedium,
           posterBig,
-          runtimeAvg: runtime,
+          // Длительность перезаписываем только когда источник её дал: сбой TMDb
+          // не должен стирать уже записанное значение нуллом.
+          ...(runtime != null ? { runtimeAvg: runtime } : {}),
           updatedAt: new Date(),
-          // tmdbId дописываем, только когда мета нашлась: сбой TMDb не должен
-          // затирать уже записанный id нуллом.
-          ...(meta?.tmdbId != null ? { tmdbId: meta.tmdbId } : {}),
+          // tmdbId дописываем, только когда мета нашлась и id свободен:
+          // сбой TMDb не должен затирать уже записанный id нуллом, а занятый
+          // id — уводить в duplicate key (см. проверку выше).
+          ...(tmdbIdSet != null ? { tmdbId: tmdbIdSet } : {}),
         })
         .where(eq(items.id, itemId));
-      await customDb
-        .update(media)
-        .set({ runtime })
-        .where(eq(media.itemId, itemId));
+      if (runtime != null) {
+        await customDb
+          .update(media)
+          .set({ runtime })
+          .where(eq(media.itemId, itemId));
+      }
       // Жанры существующим тоже дописываем: у сид-тайтлов был один
       // хардкод-жанр, TMDb даёт полный набор. onConflictDoNothing держит
       // идемпотентность повторных прогонов.
@@ -865,7 +933,7 @@ export async function seedCatalog(opts: SeedCatalogOptions = {}) {
     await customDb.insert(media).values({
       itemId,
       title,
-      runtime,
+      ...(runtime != null ? { runtime } : {}),
     });
 
     console.log(`+ Seeded: ${title} (${year})`);

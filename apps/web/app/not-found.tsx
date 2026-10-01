@@ -6,7 +6,7 @@ export default function NotFoundPage() {
     <main className="mx-auto flex max-w-7xl flex-col items-center justify-center gap-4 px-4 py-24">
       <h1 className="text-2xl font-bold text-white">Не нашлось</h1>
       <p className="text-muted" data-testid="not-found-message">
-        Такой страницы или тайтла в «Зале» нет.
+        Такой страницы или тайтла в kino.pap нет.
       </p>
       <Link
         href="/"
