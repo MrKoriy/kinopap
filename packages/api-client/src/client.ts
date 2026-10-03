@@ -380,6 +380,9 @@ export function createApiClient(opts: ApiClientOptions) {
         query: q,
         auth: opts?.auth ?? !!accessToken,
       }),
+    /** Подсказки по мере ввода: локальный каталог, до 8 тайтлов, без discovery. */
+    suggestItems: (q: string, type?: ItemType) =>
+      request("/v1/items/suggest", itemPageSchema, { query: { q, type, limit: 8 } }),
     getItem: (id: number) => request(`/v1/items/${id}`, itemDetailSchema),
     /** Батч карточек по id: ленты «продолжить смотреть» берут всё одним
      * запросом вместо getItem на каждую запись прогресса. */

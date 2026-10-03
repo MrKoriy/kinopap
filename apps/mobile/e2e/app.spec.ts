@@ -30,7 +30,7 @@ test("каталог, поиск, вход, голос, подписка и ко
 
   // 1. Главная: ленты из реального API.
   await page.goto("/");
-  await expect(page.getByText("Новинки")).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText("Свежее")).toBeVisible({ timeout: 30_000 });
   await expect(screen("item-card").first()).toBeVisible({ timeout: 30_000 });
 
   // Постер ингеста: react-native-web рисует его фоном + скрытым img,

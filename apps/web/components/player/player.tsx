@@ -16,6 +16,7 @@ import { useRouter } from "next/navigation";
  */
 import * as React from "react";
 import { useAuth } from "@/lib/auth";
+import { audioLabel, getAudioPref, getGuestProgress, setAudioPref } from "@/lib/guest-progress";
 import {
   absoluteStreamUrl,
   activeCues,
@@ -427,6 +428,11 @@ export function Player({
     if (!video || resumeDone.current === links.mediaId) return;
     resumeDone.current = links.mediaId;
     if (!isAuthed) {
+      // Гость: позиция из localStorage.
+      const g = getGuestProgress(links.mediaId);
+      if (g && g.positionSeconds > 5 && g.durationSeconds > 0 && g.positionSeconds / g.durationSeconds < 0.95) {
+        video.currentTime = g.positionSeconds;
+      }
       resumeSettled.current = links.mediaId;
       return;
     }
@@ -458,6 +464,7 @@ export function Player({
   // обратном порядке регистрации, и нулевая позиция не пройдёт порог в 5с.
   const reportProgress = useProgressReporting({
     videoRef,
+    itemId: links.itemId,
     mediaId: links.mediaId,
     api,
     enabled: isAuthed,
@@ -513,6 +520,27 @@ export function Player({
     },
     [audios, swapStream],
   );
+
+  // Выбор дубляжа пользователем запоминаем на тайтл — следующая серия
+  // стартует с той же озвучкой.
+  const pickAudio = React.useCallback(
+    (index: number) => {
+      const a = audios[index];
+      if (a) setAudioPref(links.itemId, audioLabel(a));
+      changeAudio(index);
+    },
+    [audios, changeAudio, links.itemId],
+  );
+
+  const audioPrefApplied = React.useRef<number | null>(null);
+  React.useEffect(() => {
+    if (audios.length < 2 || audioPrefApplied.current === links.mediaId) return;
+    audioPrefApplied.current = links.mediaId;
+    const pref = getAudioPref(links.itemId);
+    if (!pref) return;
+    const idx = audios.findIndex((a) => audioLabel(a) === pref);
+    if (idx > 0 && idx !== activeAudioRef.current) changeAudio(idx);
+  }, [audios, changeAudio, links.itemId, links.mediaId]);
 
   const changeSubtitle = React.useCallback(
     (index: number | null) => {
@@ -806,7 +834,7 @@ export function Player({
             onSeek={seek}
             onVolume={changeVolume}
             onRate={changeRate}
-            onAudio={changeAudio}
+            onAudio={pickAudio}
             onSubtitle={changeSubtitle}
             onShift={shiftSubtitles}
             onPip={togglePip}

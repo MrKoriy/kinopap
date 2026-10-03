@@ -56,6 +56,26 @@ export default function SearchScreen() {
     }
   }, [api, query, field]);
 
+  // Подсказки по мере ввода (по названию): debounce 250 мс, устаревшие
+  // ответы отбрасывает тот же счётчик поколений, что и у полного поиска.
+  React.useEffect(() => {
+    const q = query.trim();
+    if (field || q.length < 2) return;
+    const t = setTimeout(() => {
+      const gen = ++genRef.current;
+      api.suggestItems(q).then(
+        (page) => {
+          if (gen !== genRef.current) return;
+          setResults(page.items);
+          setSearched(true);
+          setError(null);
+        },
+        () => {},
+      );
+    }, 250);
+    return () => clearTimeout(t);
+  }, [api, query, field]);
+
   return (
     <View testID="search-screen" style={styles.container}>
       <View style={styles.searchRow}>

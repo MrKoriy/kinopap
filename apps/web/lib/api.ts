@@ -99,6 +99,7 @@ export type CatalogParams = {
   letter?: string;
   actor?: string;
   director?: string;
+  rating?: string;
   sort?: string;
   limit?: number;
   cursor?: string;
@@ -193,6 +194,16 @@ export interface CatalogGenre {
   id: number;
   title: string;
   type: string;
+}
+
+/** Страны каталога (чипы фильтра). Сбой — пусто, фильтр просто скрыт. */
+export async function fetchCountries(): Promise<Array<{ id: number; title: string }>> {
+  try {
+    const res = (await getJson("/v1/countries", 3600)) as { countries?: Array<{ id: number; title: string }> };
+    return res.countries ?? [];
+  } catch {
+    return [];
+  }
 }
 
 export async function fetchGenres(type?: string): Promise<CatalogGenre[]> {

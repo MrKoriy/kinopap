@@ -9,6 +9,7 @@
 import { absorbAnilibriaItem, absorbAnilibriaSeason, type Db, findAnimeSeasonPairs, findAnimeSourcePairs } from "@zal/db";
 import { sql } from "drizzle-orm";
 import type { Config } from "../config";
+import { matchAnilibriaViaTmdb } from "./anime-tmdb-match";
 import { localizeForeignTitles } from "./localize-titles";
 import { LONG_SEASON, regroupLongSeasons } from "./season-layout";
 import { hydrateSerialSeasons } from "./tmdb";
@@ -70,7 +71,7 @@ export async function mergeAnimeSeasons(
   return merged;
 }
 
-export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: number; regrouped: number; merged: number; localized: number }> {
+export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: number; regrouped: number; merged: number; localized: number; enriched: number }> {
   const res = await db.execute<{ id: number; tmdb_id: number }>(sql`
     select i.id, i.tmdb_id from items i
     where i.type = 'serial' and i.tmdb_id is not null
@@ -100,7 +101,8 @@ export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: n
   const merged =
     (await mergeAnimeDuplicates(db, config, { limit: 30 })) + (await mergeAnimeSeasons(db, { limit: 30 }));
   const localized = await localizeForeignTitles(db, config, { limit: 50 }).catch(() => 0);
-  return { hydrated, regrouped, merged, localized };
+  const viaTmdb = await matchAnilibriaViaTmdb(db, config, { limit: 40 }).catch(() => ({ merged: 0, enriched: 0 }));
+  return { hydrated, regrouped, merged: merged + viaTmdb.merged, localized, enriched: viaTmdb.enriched };
 }
 
 export function startGapFiller(db: Db, config: Config): () => void {
@@ -110,9 +112,9 @@ export function startGapFiller(db: Db, config: Config): () => void {
     running = true;
     try {
       const out = await gapFillOnce(db, config);
-      if (out.hydrated || out.regrouped || out.merged || out.localized) {
+      if (out.hydrated || out.regrouped || out.merged || out.localized || out.enriched) {
         console.log(
-          `gap-fill: hydrated=${out.hydrated} regrouped=${out.regrouped} merged=${out.merged} localized=${out.localized}`,
+          `gap-fill: hydrated=${out.hydrated} regrouped=${out.regrouped} merged=${out.merged} localized=${out.localized} enriched=${out.enriched}`,
         );
       }
     } catch (err) {

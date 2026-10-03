@@ -22,6 +22,7 @@ import {
   listCountries,
   listGenres,
   listItems,
+  markSourceAvailability,
   media,
   mediaLinks,
   patchSource,
@@ -510,6 +511,10 @@ export async function catalogRoutes(
       externalId,
       warm,
     });
+    // «Пустышки»: фильм или первая серия без единой раздачи — прячем тайтл
+    // из лент (после двух промахов подряд), находка — возвращает обратно.
+    const isEntryMedia = ctx.seasonNumber == null || (ctx.seasonNumber <= 1 && (ctx.episodeNumber ?? 1) <= 1);
+    if (isEntryMedia) void markSourceAvailability(db, id, resolved.files.length > 0).catch(() => {});
     if (resolved.files.length === 0) return null;
 
     const guessed = !resolved.warm && resolved.files.length > 0;

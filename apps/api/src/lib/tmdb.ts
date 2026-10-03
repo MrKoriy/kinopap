@@ -38,7 +38,7 @@ interface TmdbVideoRow {
  * Сначала русская дорожка: локализованных трейлеров меньше, но если он есть —
  * он полезнее для зрителя.
  */
-async function tmdbTrailer(
+export async function tmdbTrailer(
   config: Config,
   kind: "movie" | "tv",
   tmdbId: number,

@@ -61,8 +61,31 @@ describe("следующая серия", () => {
     render(
       <NextEpisodeOverlay next={{ mediaId: 202, label: "S2E5", title: null }} onPlay={onPlay} />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "S2E5" }));
+    expect(screen.getByText("S2E5")).toBeTruthy();
+    fireEvent.click(screen.getByTestId("next-episode-play"));
     expect(onPlay).toHaveBeenCalledTimes(1);
+  });
+
+  it("отсчёт 10 с и автопереход; «Отмена» его останавливает", () => {
+    vi.useFakeTimers();
+    try {
+      const onPlay = vi.fn();
+      const { unmount } = render(
+        <NextEpisodeOverlay next={{ mediaId: 202, label: "S2E5", title: null }} onPlay={onPlay} />,
+      );
+      expect(screen.getByTestId("next-episode-play").textContent).toContain("через 10");
+      for (let i = 0; i < 10; i++) act(() => vi.advanceTimersByTime(1000));
+      expect(onPlay).toHaveBeenCalledTimes(1);
+      unmount();
+
+      const onPlay2 = vi.fn();
+      render(<NextEpisodeOverlay next={{ mediaId: 203, label: "S2E6", title: null }} onPlay={onPlay2} />);
+      fireEvent.click(screen.getByTestId("next-episode-cancel"));
+      for (let i = 0; i < 12; i++) act(() => vi.advanceTimersByTime(1000));
+      expect(onPlay2).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

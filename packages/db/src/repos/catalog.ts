@@ -88,6 +88,9 @@ const itemColumns = {
   trailerUrl: items.trailerUrl,
   trailerCheckedAt: items.trailerCheckedAt,
   titleLocalizedAt: items.titleLocalizedAt,
+  noSourceCount: items.noSourceCount,
+  noSourceAt: items.noSourceAt,
+  tmdbMatchedAt: items.tmdbMatchedAt,
   seasonLayout: items.seasonLayout,
   createdAt: items.createdAt,
   updatedAt: items.updatedAt,
@@ -228,10 +231,20 @@ function sortValue(row: ItemRow, field: SortField): string | number | null {
 
 function buildFilters(f: CatalogFilters): SQL[] {
   const conds: SQL[] = [];
+  // Тайтлы без единой раздачи (два пустых резолва подряд за неделю) не
+  // показываем в лентах и каталоге — поиск и прямая ссылка их находят.
+  conds.push(
+    sql`not (${items.noSourceCount} >= 2 and ${items.noSourceAt} > now() - interval '7 days')`,
+  );
   if (f.type) conds.push(eq(items.type, f.type));
   if (f.title) conds.push(sql`${items.title} ilike ${`${f.title}%`}`);
   if (f.yearFrom != null) conds.push(sql`${items.year} >= ${f.yearFrom}`);
   if (f.yearTo != null) conds.push(sql`${items.year} <= ${f.yearTo}`);
+  if (f.ratingMin != null) {
+    conds.push(
+      sql`coalesce(nullif(${items.rating}, 0), ${items.imdbRating}, ${items.tmdbRating}, ${items.kinopoiskRating}, 0) >= ${f.ratingMin}`,
+    );
+  }
   if (f.letter) {
     const pat = `${f.letter}%`;
     conds.push(
@@ -890,3 +903,14 @@ export async function backfillRuntimeFromLocalData(
 }
 
 export type { SortDir };
+
+/** Итог резолва первой серии/фильма: пусто — +1 к счётчику, нашлось — сброс. */
+export async function markSourceAvailability(db: Db, itemId: number, found: boolean): Promise<void> {
+  if (found) {
+    await db.execute(sql`update items set no_source_count = 0, no_source_at = null
+      where id = ${itemId} and no_source_count > 0`);
+  } else {
+    await db.execute(sql`update items set no_source_count = no_source_count + 1, no_source_at = now()
+      where id = ${itemId}`);
+  }
+}

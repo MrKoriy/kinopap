@@ -81,8 +81,12 @@ export function isIntroVisible(
 }
 
 /** Показывать ли оверлей «следующая серия» (последние 10 секунд). */
+/** Окно «Следующая серия»: последние 25 с (титры) — с отсчётом 10 с автопереход
+ * случается за ~15 с до конца; на самом конце (ended) окно остаётся открытым. */
+export const NEAR_END_SECONDS = 25;
+
 export function isNearEnd(timeSeconds: number, duration: number): boolean {
-  return duration > 0 && duration - timeSeconds <= 10 && timeSeconds < duration;
+  return duration > NEAR_END_SECONDS * 2 && duration - timeSeconds <= NEAR_END_SECONDS && timeSeconds > 0;
 }
 
 /* ---------- Буфер воспроизведения ---------- */

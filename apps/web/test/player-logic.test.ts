@@ -113,11 +113,12 @@ describe("маркеры интро и автоследующая серия", (
     expect(isIntroVisible(10, null)).toBe(false);
   });
 
-  it("isNearEnd — последние 10 секунд", () => {
-    expect(isNearEnd(115, 120)).toBe(true);
+  it("isNearEnd — последние 25 секунд, конец включительно", () => {
+    expect(isNearEnd(100, 120)).toBe(true);
     expect(isNearEnd(50, 120)).toBe(false);
-    expect(isNearEnd(120, 120)).toBe(false);
+    expect(isNearEnd(120, 120)).toBe(true);
     expect(isNearEnd(5, 0)).toBe(false);
+    expect(isNearEnd(10, 30)).toBe(false);
   });
 });
 

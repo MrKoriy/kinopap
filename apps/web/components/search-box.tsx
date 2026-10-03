@@ -11,6 +11,7 @@ import { useRouter } from "next/navigation";
 import * as React from "react";
 import { PosterImage } from "@/components/poster-image";
 import { fetchSuggest } from "@/lib/api";
+import { displayRating } from "@/lib/format";
 
 const DEBOUNCE_MS = 220;
 
@@ -123,7 +124,7 @@ export function SearchBox() {
             <ul>
               {items.map((it, i) => {
                 const poster = it.posters.small ?? it.posters.medium ?? it.posters.big;
-                const rating = it.rating > 0 ? it.rating : it.imdb.rating;
+                const rating = displayRating(it);
                 return (
                   <li key={it.id}>
                     <Link

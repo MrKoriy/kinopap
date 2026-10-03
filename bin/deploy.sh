@@ -384,10 +384,13 @@ if [ -d "$APP_DIR/bin/systemd" ]; then
   install -m 644 "$APP_DIR/bin/systemd/kinopap-backup.timer" /etc/systemd/system/
   install -m 644 "$APP_DIR/bin/systemd/kinopap-ts-prune.service" /etc/systemd/system/
   install -m 644 "$APP_DIR/bin/systemd/kinopap-ts-prune.timer" /etc/systemd/system/
-  chmod +x "$APP_DIR/bin/backup.sh" "$APP_DIR/bin/fill-catalog.sh" "$APP_DIR/bin/restart-apps.sh"
+  install -m 644 "$APP_DIR/bin/systemd/kinopap-healthcheck.service" /etc/systemd/system/
+  install -m 644 "$APP_DIR/bin/systemd/kinopap-healthcheck.timer" /etc/systemd/system/
+  chmod +x "$APP_DIR/bin/backup.sh" "$APP_DIR/bin/fill-catalog.sh" "$APP_DIR/bin/restart-apps.sh" "$APP_DIR/bin/healthcheck.sh"
   systemctl daemon-reload
   systemctl enable --now kinopap-backup.timer >/dev/null 2>&1 || true
   systemctl enable --now kinopap-ts-prune.timer >/dev/null 2>&1 || true
+  systemctl enable --now kinopap-healthcheck.timer >/dev/null 2>&1 || true
 fi
 
 # --- кэш media_sources: выкидываем ссылки с зашитым хостом ---

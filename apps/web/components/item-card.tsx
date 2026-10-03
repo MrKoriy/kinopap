@@ -7,9 +7,10 @@ import Link from "next/link";
 /** Карточка тайтла: постер, hover-оверлей, закладка и бейдж типа. */
 import * as React from "react";
 import { FavoriteButton } from "@/components/favorite-button";
+import { ItemHoverPreview, useHoverPreview } from "@/components/item-hover-preview";
 import { PosterImage } from "@/components/poster-image";
 import { Badge } from "@/components/ui/badge";
-import { formatDurationHuman } from "@/lib/format";
+import { displayRating, formatDurationHuman } from "@/lib/format";
 
 /**
  * Бейдж типа показываем только там, где он различает контент в сетке
@@ -33,8 +34,9 @@ export function ItemCard({
   progress?: number;
 }) {
   const [imgError, setImgError] = React.useState(false);
+  const preview = useHoverPreview();
   const poster = !imgError ? (item.posters.medium ?? item.posters.small ?? item.posters.big) : null;
-  const rating = item.rating > 0 ? item.rating : item.imdb.rating;
+  const rating = displayRating(item);
   const typeTitle = TYPED_BADGE.has(item.type) ? ITEM_TYPE_TITLES[item.type] : null;
   const progressRatio =
     progress != null ? Math.min(1, Math.max(0, progress)) : null;
@@ -42,7 +44,12 @@ export function ItemCard({
   return (
     // Закладка — сосед ссылки, а не вложенный в неё элемент: <a> внутри <a>
     // ломает разметку и всплытие кликов.
-    <div className={cn("group relative w-full", className)}>
+    // biome-ignore lint/a11y/noStaticElementInteractions: hover лишь открывает превью — те же действия доступны ссылкой карточки
+    <div
+      className={cn("group relative w-full", className)}
+      onMouseEnter={(e) => preview.onEnter(e.currentTarget)}
+      onMouseLeave={preview.onLeave}
+    >
       <Link
         href={`/item/${item.id}`}
         className="block w-full"
@@ -118,6 +125,15 @@ export function ItemCard({
       </Link>
 
       <FavoriteButton itemId={item.id} variant="icon" className="absolute right-2 top-2 z-10" />
+      {preview.rect && (
+        <ItemHoverPreview
+          item={item}
+          rect={preview.rect}
+          onKeep={preview.keep}
+          onLeave={preview.onLeave}
+          onTrailerOpen={preview.setTrailerOpen}
+        />
+      )}
     </div>
   );
 }

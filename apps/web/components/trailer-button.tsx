@@ -27,12 +27,23 @@ export function youtubeId(trailer: { id: string | null; url: string | null }): s
 export function TrailerButton({
   trailer,
   title,
+  className,
+  onOpenChange,
 }: {
   trailer: { id: string | null; url: string | null };
   title: string;
+  className?: string;
+  /** Превью карточки держит себя открытым, пока смотрят трейлер. */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const id = youtubeId(trailer);
-  const [open, setOpen] = React.useState(false);
+  const [open, setOpenState] = React.useState(false);
+  const onOpenChangeRef = React.useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  const setOpen = React.useCallback((v: boolean) => {
+    setOpenState(v);
+    onOpenChangeRef.current?.(v);
+  }, []);
 
   React.useEffect(() => {
     if (!open) return;
@@ -46,7 +57,7 @@ export function TrailerButton({
       document.body.style.overflow = prev;
       window.removeEventListener("keydown", onKey);
     };
-  }, [open]);
+  }, [open, setOpen]);
 
   if (!id) return null;
 
@@ -54,7 +65,7 @@ export function TrailerButton({
     <>
       <button
         type="button"
-        className={buttonVariants({ variant: "secondary" })}
+        className={className ?? buttonVariants({ variant: "secondary" })}
         onClick={() => setOpen(true)}
         data-testid="trailer-button"
       >

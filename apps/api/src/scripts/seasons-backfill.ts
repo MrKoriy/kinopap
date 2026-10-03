@@ -10,11 +10,13 @@
  *   ... --merge-anime [--dry]  — склеить дубли «релиз AniLibria ↔ TMDb-сериал»
  *   ... --merge-seasons [--dry] — релизы сезонов («… 2») в сезон N TMDb-тайтла
  *   ... --localize [--dry]     — русские/английские названия вместо иероглифов
+ *   ... --tmdb-match [--dry]   — релизы AniLibria без пары: поиск в TMDb (склейка/метаданные)
  * Флаги: --hydrate, --regroup, --merge-anime, --dry (только показать раскладку), --limit=N, --item=ID.
  */
 import { createDb, createPool } from "@zal/db";
 import { sql } from "drizzle-orm";
 import { loadConfig } from "../config";
+import { matchAnilibriaViaTmdb } from "../lib/anime-tmdb-match";
 import { mergeAnimeDuplicates, mergeAnimeSeasons } from "../lib/gap-filler";
 import { localizeForeignTitles } from "../lib/localize-titles";
 import { LONG_SEASON, regroupLongSeasons } from "../lib/season-layout";
@@ -99,6 +101,10 @@ try {
   if (args.has("--merge-seasons")) {
     const n = await mergeAnimeSeasons(db, { limit, dryRun, log: (l) => console.log(l) });
     console.log(`merge-seasons: склеено ${n}${dryRun ? " (dry run)" : ""}`);
+  }
+  if (args.has("--tmdb-match")) {
+    const n = await matchAnilibriaViaTmdb(db, config, { limit, dryRun, log: (l) => console.log(l) });
+    console.log(`tmdb-match: склеено ${n.merged}, дополнено ${n.enriched}${dryRun ? " (dry run)" : ""}`);
   }
   if (args.has("--localize")) {
     const n = await localizeForeignTitles(db, config, { limit, dryRun, log: (l) => console.log(l) });

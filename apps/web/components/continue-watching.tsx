@@ -10,6 +10,7 @@ import Link from "next/link";
 import * as React from "react";
 import { PosterImage } from "@/components/poster-image";
 import { useAuth } from "@/lib/auth";
+import { listGuestProgress } from "@/lib/guest-progress";
 
 interface ContinueEntry {
   progress: ProgressDto;
@@ -110,16 +111,16 @@ export function ContinueWatching() {
   const [loaded, setLoaded] = React.useState(false);
 
   React.useEffect(() => {
-    if (!isAuthed) {
-      setEntries([]);
-      setLoaded(true);
-      return;
-    }
     let cancelled = false;
     void (async () => {
       try {
-        const { items: progressRows } = await api.listProgress();
+        // Гость — прогресс из localStorage (смотреть можно без входа).
+        const progressRows = isAuthed ? (await api.listProgress()).items : listGuestProgress();
         const unique = selectContinueProgress(progressRows);
+        if (unique.length === 0) {
+          if (!cancelled) setEntries([]);
+          return;
+        }
         // Один батч-запрос вместо getItem на каждую запись (было до 8 RT).
         const { items } = await api.getItemsSummary(unique.map((p) => p.itemId));
         if (cancelled) return;
@@ -141,13 +142,15 @@ export function ContinueWatching() {
     <section className="mb-10" data-testid="continue-rail">
       <div className="mb-4 flex items-baseline justify-between">
         <h2 className="text-xl font-semibold text-white">Продолжить смотреть</h2>
-        <Link
-          href="/profile"
-          className="text-sm text-muted transition hover:text-white"
-          data-testid="continue-all-history"
-        >
-          Вся история →
-        </Link>
+        {isAuthed && (
+          <Link
+            href="/profile"
+            className="text-sm text-muted transition hover:text-white"
+            data-testid="continue-all-history"
+          >
+            Вся история →
+          </Link>
+        )}
       </div>
       <div className="flex gap-4 overflow-x-auto pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
         {entries.map((e) => (
