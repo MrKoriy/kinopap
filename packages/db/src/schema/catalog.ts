@@ -64,6 +64,8 @@ export const items = pgTable(
      * тайтла дописываются в последний сезон, а не в «Сезон 1» источника.
      */
     seasonLayout: varchar("season_layout", { length: 64 }),
+    /** Когда последний раз брали локализованное название из /translations TMDb. */
+    titleLocalizedAt: timestamp("title_localized_at", { withTimezone: true }),
     tmdbType: varchar("tmdb_type", { length: 8 }),
     tmdbRating: doublePrecision("tmdb_rating"),
     tmdbVotes: integer("tmdb_votes"),
@@ -227,3 +229,22 @@ export const itemRedirects = pgTable("item_redirects", {
     .references(() => items.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
+
+/**
+ * Дополнительные релизы источника, влитые в сезон тайтла: «Магическая битва 2»
+ * AniLibria → сезон 2 TMDb-тайтла. Повторный импорт релиза находит по алиасу
+ * карточку и сезон (у items одна пара external_* — под релиз первого сезона).
+ */
+export const itemExternalAliases = pgTable(
+  "item_external_aliases",
+  {
+    source: varchar("source", { length: 32 }).notNull(),
+    externalId: varchar("external_id", { length: 64 }).notNull(),
+    itemId: integer("item_id")
+      .notNull()
+      .references(() => items.id, { onDelete: "cascade" }),
+    seasonNumber: integer("season_number").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.source, t.externalId] })],
+);

@@ -6,9 +6,10 @@
  * карточку и ждал. Теперь раз в час берём пачку самых популярных сериалов без
  * серий, гидрируем и сразу раскладываем длинные сезоны.
  */
-import { absorbAnilibriaItem, type Db, findAnimeSourcePairs } from "@zal/db";
+import { absorbAnilibriaItem, absorbAnilibriaSeason, type Db, findAnimeSeasonPairs, findAnimeSourcePairs } from "@zal/db";
 import { sql } from "drizzle-orm";
 import type { Config } from "../config";
+import { localizeForeignTitles } from "./localize-titles";
 import { LONG_SEASON, regroupLongSeasons } from "./season-layout";
 import { hydrateSerialSeasons } from "./tmdb";
 
@@ -46,7 +47,30 @@ export async function mergeAnimeDuplicates(
   return merged;
 }
 
-export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: number; regrouped: number; merged: number }> {
+/** Релизы сезонов AniLibria («Синий оркестр 2») → сезон N TMDb-тайтла. */
+export async function mergeAnimeSeasons(
+  db: Db,
+  opts: { limit?: number; dryRun?: boolean; log?: (s: string) => void } = {},
+): Promise<number> {
+  const pairs = await findAnimeSeasonPairs(db, opts.limit ?? 50);
+  let merged = 0;
+  for (const p of pairs) {
+    if (opts.dryRun) {
+      opts.log?.(`  ${p.anilibriaId} → ${p.tmdbItemId} S${p.seasonNumber} «${p.title}» (${p.anilibriaEpisodes} / ${p.seasonEpisodes})`);
+      continue;
+    }
+    try {
+      const n = await absorbAnilibriaSeason(db, p.anilibriaId, p.tmdbItemId, p.seasonNumber);
+      merged++;
+      opts.log?.(`  #${p.anilibriaId} → #${p.tmdbItemId} S${p.seasonNumber} «${p.title}»: ${n} серий`);
+    } catch (err) {
+      console.warn(`anime-season-merge: #${p.anilibriaId} → #${p.tmdbItemId} failed:`, String(err).slice(0, 200));
+    }
+  }
+  return merged;
+}
+
+export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: number; regrouped: number; merged: number; localized: number }> {
   const res = await db.execute<{ id: number; tmdb_id: number }>(sql`
     select i.id, i.tmdb_id from items i
     where i.type = 'serial' and i.tmdb_id is not null
@@ -73,8 +97,10 @@ export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: n
     const out = await regroupLongSeasons(db, config, Number(r.item_id)).catch(() => null);
     if (out?.status === "regrouped") regrouped++;
   }
-  const merged = await mergeAnimeDuplicates(db, config, { limit: 30 });
-  return { hydrated, regrouped, merged };
+  const merged =
+    (await mergeAnimeDuplicates(db, config, { limit: 30 })) + (await mergeAnimeSeasons(db, { limit: 30 }));
+  const localized = await localizeForeignTitles(db, config, { limit: 50 }).catch(() => 0);
+  return { hydrated, regrouped, merged, localized };
 }
 
 export function startGapFiller(db: Db, config: Config): () => void {
@@ -84,8 +110,10 @@ export function startGapFiller(db: Db, config: Config): () => void {
     running = true;
     try {
       const out = await gapFillOnce(db, config);
-      if (out.hydrated || out.regrouped || out.merged) {
-        console.log(`gap-fill: hydrated=${out.hydrated} regrouped=${out.regrouped} merged=${out.merged}`);
+      if (out.hydrated || out.regrouped || out.merged || out.localized) {
+        console.log(
+          `gap-fill: hydrated=${out.hydrated} regrouped=${out.regrouped} merged=${out.merged} localized=${out.localized}`,
+        );
       }
     } catch (err) {
       console.warn("gap-fill: failed:", String(err).slice(0, 200));

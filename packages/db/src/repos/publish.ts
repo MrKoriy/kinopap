@@ -20,6 +20,7 @@ import {
   seasons,
   subtitles,
 } from "../schema/index";
+import { findExternalAlias } from "./aliases";
 import {
   appendEpisodeToLastSeason,
   findEpisodeByAbsolute,
@@ -167,6 +168,9 @@ export async function upsertItem(
       }
       return ext.id;
     }
+    // Релиз влит в сезон другого тайтла («Магическая битва 2» → сезон 2).
+    const alias = await findExternalAlias(db, draft.externalSource, draft.externalId);
+    if (alias) return alias.itemId;
   }
 
   const existing = await db
@@ -276,12 +280,21 @@ export async function publishIngest(
         reuseEpisode = true;
       }
     }
+    // Релиз влит в сезон N тайтла: его серия k — это SNEk, а не сквозная k.
+    const aliasSeason =
+      input.item.externalSource && input.item.externalId && input.media.episode
+        ? ((await findExternalAlias(tx as unknown as Db, input.item.externalSource, input.item.externalId))
+            ?.seasonNumber ?? null)
+        : null;
+    if (aliasSeason != null && input.media.episode) {
+      input = { ...input, media: { ...input.media, episode: { ...input.media.episode, seasonNumber: aliasSeason } } };
+    }
     if (input.media.episode && !reuseEpisode) {
       const ep = input.media.episode;
       const txDb = tx as unknown as Db;
       // Релиз AniLibria, влитый в TMDb-тайтл: серия k — это k-я по сквозному
       // номеру, а не S1Ek (у TMDb сезонов может быть несколько).
-      const byAbsolute = input.media.sourceKey?.startsWith("anilibria:")
+      const byAbsolute = input.media.sourceKey?.startsWith("anilibria:") && aliasSeason == null
         ? await findEpisodeByAbsolute(txDb, itemId, ep.episodeNumber)
         : null;
       const byOrig =

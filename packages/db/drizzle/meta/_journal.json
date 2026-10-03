@@ -134,6 +134,13 @@
       "when": 1791063483176,
       "tag": "0018_wooden_wong",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1791066531521,
+      "tag": "0019_slippery_red_ghost",
+      "breakpoints": true
     }
   ]
 }

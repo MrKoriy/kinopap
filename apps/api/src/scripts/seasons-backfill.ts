@@ -8,12 +8,15 @@
  *   pnpm --filter @zal/api exec tsx src/scripts/seasons-backfill.ts --regroup --dry
  *   pnpm --filter @zal/api exec tsx src/scripts/seasons-backfill.ts --hydrate --regroup
  *   ... --merge-anime [--dry]  — склеить дубли «релиз AniLibria ↔ TMDb-сериал»
+ *   ... --merge-seasons [--dry] — релизы сезонов («… 2») в сезон N TMDb-тайтла
+ *   ... --localize [--dry]     — русские/английские названия вместо иероглифов
  * Флаги: --hydrate, --regroup, --merge-anime, --dry (только показать раскладку), --limit=N, --item=ID.
  */
 import { createDb, createPool } from "@zal/db";
 import { sql } from "drizzle-orm";
 import { loadConfig } from "../config";
-import { mergeAnimeDuplicates } from "../lib/gap-filler";
+import { mergeAnimeDuplicates, mergeAnimeSeasons } from "../lib/gap-filler";
+import { localizeForeignTitles } from "../lib/localize-titles";
 import { LONG_SEASON, regroupLongSeasons } from "../lib/season-layout";
 import { hydrateSerialSeasons } from "../lib/tmdb";
 
@@ -92,6 +95,14 @@ try {
   if (args.has("--merge-anime")) {
     const n = await mergeAnimeDuplicates(db, config, { limit, dryRun, log: (l) => console.log(l) });
     console.log(`merge-anime: склеено ${n}${dryRun ? " (dry run)" : ""}`);
+  }
+  if (args.has("--merge-seasons")) {
+    const n = await mergeAnimeSeasons(db, { limit, dryRun, log: (l) => console.log(l) });
+    console.log(`merge-seasons: склеено ${n}${dryRun ? " (dry run)" : ""}`);
+  }
+  if (args.has("--localize")) {
+    const n = await localizeForeignTitles(db, config, { limit, dryRun, log: (l) => console.log(l) });
+    console.log(`localize: переименовано ${n}${dryRun ? " (dry run)" : ""}`);
   }
 } finally {
   await pool.end();
