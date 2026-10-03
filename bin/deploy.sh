@@ -121,7 +121,7 @@ rsync -az --delete \
 # отставал от репозитория на несколько правок, а заметить это было нечем:
 # локальный файл выглядел рабочим, а на сервере работал старый.
 rsync -az bin/backup.sh bin/fill-catalog.sh bin/restart-apps.sh \
-  bin/nginx-tune.py bin/torrserver-tune.sh bin/ts-cache-prune.py \
+  bin/nginx-tune.py bin/torrserver-tune.sh bin/ts-cache-prune.py bin/healthcheck.sh \
   "$SERVER:$APP_DIR/bin/"
 rsync -az bin/systemd/ "$SERVER:$APP_DIR/bin/systemd/"
 
