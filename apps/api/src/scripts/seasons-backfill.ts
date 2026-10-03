@@ -7,11 +7,13 @@
  *   set -a; . ./.env; set +a
  *   pnpm --filter @zal/api exec tsx src/scripts/seasons-backfill.ts --regroup --dry
  *   pnpm --filter @zal/api exec tsx src/scripts/seasons-backfill.ts --hydrate --regroup
- * Флаги: --hydrate, --regroup, --dry (только показать раскладку), --limit=N, --item=ID.
+ *   ... --merge-anime [--dry]  — склеить дубли «релиз AniLibria ↔ TMDb-сериал»
+ * Флаги: --hydrate, --regroup, --merge-anime, --dry (только показать раскладку), --limit=N, --item=ID.
  */
 import { createDb, createPool } from "@zal/db";
 import { sql } from "drizzle-orm";
 import { loadConfig } from "../config";
+import { mergeAnimeDuplicates } from "../lib/gap-filler";
 import { LONG_SEASON, regroupLongSeasons } from "../lib/season-layout";
 import { hydrateSerialSeasons } from "../lib/tmdb";
 
@@ -87,6 +89,10 @@ async function regroupAll() {
 try {
   if (args.has("--hydrate")) await hydrateAll();
   if (args.has("--regroup")) await regroupAll();
+  if (args.has("--merge-anime")) {
+    const n = await mergeAnimeDuplicates(db, config, { limit, dryRun, log: (l) => console.log(l) });
+    console.log(`merge-anime: склеено ${n}${dryRun ? " (dry run)" : ""}`);
+  }
 } finally {
   await pool.end();
 }

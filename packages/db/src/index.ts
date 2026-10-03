@@ -1,6 +1,7 @@
 export * from "./db";
 export * from "./password";
 export * from "./repos/accounts";
+export * from "./repos/anime-merge";
 export * from "./repos/catalog";
 export * from "./repos/dedupe";
 export * from "./repos/discovery";
