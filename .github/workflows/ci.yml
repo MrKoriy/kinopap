@@ -54,7 +54,17 @@ jobs:
           NEXT_PUBLIC_API_URL: http://localhost:3001
 
       - name: Web e2e (chromium, реальный ffmpeg-ингест)
-        run: pnpm --filter @zal/web exec playwright test --project=chromium
+        # github-репортер выводит упавшие тесты аннотациями прямо в PR.
+        run: pnpm --filter @zal/web exec playwright test --project=chromium --reporter=github,line
+
+      # Хвост лога e2e-харнесса (API+ингест) — аннотацией: без него падение
+      # на старте webServer видно только как «exit code 1».
+      - name: Лог e2e-харнесса при падении
+        if: failure()
+        run: |
+          [ -f /tmp/zal-e2e-server.log ] || { echo "::error title=e2e-server::лог не создан"; exit 0; }
+          msg=$(tail -60 /tmp/zal-e2e-server.log | cut -c1-300 | sed ':a;N;$!ba;s/%/%25/g;s/\r//g;s/\n/%0A/g')
+          echo "::error title=e2e-server log::$msg"
 
       - name: Mobile e2e (expo web, chromium)
         run: pnpm --filter @zal/mobile exec playwright test --project=chromium
