@@ -121,18 +121,29 @@ interface RawStream {
 
 /** Имя дорожки из тегов: title (mkv), name/handler_name (mp4). */
 function streamTitle(tags: RawStream["tags"]): string | null {
-  return tags?.title ?? tags?.name ?? tags?.handler_name ?? null;
+  const handler = tags?.handler_name?.trim();
+  // ffmpeg пишет в mp4 дефолтные «SoundHandler»/«VideoHandler»/«SubtitleHandler» —
+  // это не имя озвучки, а мусор, который иначе уезжал в authorTitle.
+  const meaningfulHandler =
+    handler && !/^(sound|video|subtitle|text)handler$/i.test(handler) ? handler : undefined;
+  return tags?.title ?? tags?.name ?? meaningfulHandler ?? null;
 }
 
 /** ffprobe → типизированная карточка медиафайла. */
 export async function probeMedia(
   filePath: string,
   cfg: FfmpegConfig = {},
+  /** Доп. аргументы перед входом (например, -protocol_whitelist для URL). */
+  inputArgs: string[] = [],
 ): Promise<SourceInfo> {
   const ffprobe = cfg.ffprobePath ?? "ffprobe";
   const { stdout } = await execWithTimeout(
     ffprobe,
-    ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath],
+    [
+      "-v", "error", "-print_format", "json", "-show_format", "-show_streams",
+      ...inputArgs,
+      filePath,
+    ],
     cfg.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
     32 * 1024 * 1024,
   );

@@ -91,7 +91,9 @@ describe("UrlSourceConnector", () => {
       workDir,
       subtitleRefs: [`${server.url}/sample.srt`],
     });
-    expect(pulled.filePath).toBe(path.join(workDir, "sample.mp4"));
+    expect(path.dirname(pulled.filePath)).toBe(workDir);
+    // Префикс против коллизий одинаковых basename (видео/сабы из разных папок).
+    expect(path.basename(pulled.filePath)).toMatch(/^[0-9a-f]{8}-sample\.mp4$/);
     expect(pulled.subtitlePaths).toHaveLength(1);
     const text = await readFile(pulled.subtitlePaths[0]!.path, "utf8");
     expect(text).toContain("Привет, мир");

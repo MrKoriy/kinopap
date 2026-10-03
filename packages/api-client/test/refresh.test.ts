@@ -34,6 +34,14 @@ function makeClient(impl: () => Promise<{ tokens: Tokens }>) {
   return client;
 }
 
+/** Так выглядит отказ API: ApiError со статусом 401. */
+function unauthorized(): Error {
+  return Object.assign(new Error("401"), {
+    status: 401,
+    body: { error: { code: "unauthorized" } },
+  });
+}
+
 describe("createTokenRefresher", () => {
   it("пять параллельных 401 дают одну ротацию", async () => {
     const client = makeClient(async () => {
@@ -75,7 +83,7 @@ describe("createTokenRefresher", () => {
 
   it("ротация не прошла — сессия объявлена мёртвой, повтор не нужен", async () => {
     const client = makeClient(async () => {
-      throw new Error("401");
+      throw unauthorized();
     });
     let lost = 0;
     const refresh = createTokenRefresher(() => client, {
@@ -95,7 +103,7 @@ describe("createTokenRefresher", () => {
     // что показать. Если состояние сессии чистится «когда-нибудь потом», UI
     // успевает отрисоваться с живым юзером, которого уже нет.
     const client = makeClient(async () => {
-      throw new Error("401");
+      throw unauthorized();
     });
     const order: string[] = [];
     const refresh = createTokenRefresher(() => client, {
@@ -108,6 +116,26 @@ describe("createTokenRefresher", () => {
     await refresh().then(() => order.push("returned"));
 
     expect(order).toEqual(["lost", "returned"]);
+  });
+
+  it("сеть/5xx/таймаут не убивают сессию", async () => {
+    for (const err of [
+      new Error("сеть"),
+      Object.assign(new Error("502"), { status: 502 }),
+      Object.assign(new Error("timeout"), { status: 0, body: { error: { code: "timeout" } } }),
+    ]) {
+      const client = makeClient(async () => {
+        throw err;
+      });
+      let lost = 0;
+      const refresh = createTokenRefresher(() => client, {
+        onSessionLost: () => {
+          lost += 1;
+        },
+      });
+      expect(await refresh()).toBe(false);
+      expect(lost).toBe(0);
+    }
   });
 
   it("провал не кэшируется: следующий 401 пробует ротацию снова", async () => {

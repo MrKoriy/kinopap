@@ -177,6 +177,19 @@ interface AbortSignalStatics {
 const signalStatics = AbortSignal as typeof AbortSignal & AbortSignalStatics;
 
 /** Внешний signal и дедлайн, сведённые в один signal. */
+/**
+ * `AbortController.abort(reason)` есть в Node 17.2+/современных браузерах, но
+ * в lib-типах React Native он объявлен без аргумента — вызываем через
+ * расширенную сигнатуру, а на старых рантаймах откатываемся на abort().
+ */
+function abortWithReason(ctrl: AbortController, reason: unknown): void {
+  try {
+    (ctrl.abort as (reason?: unknown) => void).call(ctrl, reason);
+  } catch {
+    ctrl.abort();
+  }
+}
+
 function requestSignal(
   external: AbortSignal | undefined,
   timeoutMs: number,
@@ -188,7 +201,7 @@ function requestSignal(
     } else {
       const ctrl = new AbortController();
       const timer = setTimeout(() => {
-        try { ctrl.abort(new DOMException("TimeoutError", "TimeoutError")); } catch { ctrl.abort(); }
+        abortWithReason(ctrl, new DOMException("TimeoutError", "TimeoutError"));
       }, timeoutMs);
       // Node: let timer not keep process alive
       if (typeof (timer as unknown as { unref?: () => void }).unref === "function") {
@@ -204,10 +217,10 @@ function requestSignal(
   const controller = new AbortController();
   for (const s of [external, deadline]) {
     if (s.aborted) {
-      controller.abort((s as unknown as { reason?: unknown }).reason);
+      abortWithReason(controller, (s as unknown as { reason?: unknown }).reason);
       return controller.signal;
     }
-    s.addEventListener("abort", () => controller.abort((s as unknown as { reason?: unknown }).reason), { once: true });
+    s.addEventListener("abort", () => abortWithReason(controller, (s as unknown as { reason?: unknown }).reason), { once: true });
   }
   return controller.signal;
 }

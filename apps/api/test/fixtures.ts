@@ -138,3 +138,30 @@ export async function makeOwnerWithInvite(db: Db): Promise<{ invite: string }> {
   const invite = await createInvite(db, { createdBy: owner.id, maxUses: 1 });
   return { invite: invite.code };
 }
+
+/** Заголовок авторизации обычного участника (инвайт → регистрация → логин). */
+export async function memberAuth(
+  app: { inject: (opts: never) => Promise<{ statusCode: number; json: () => unknown }> },
+  db: Db,
+  email = `member-${Math.random().toString(36).slice(2, 10)}@zal.local`,
+): Promise<{ authorization: string }> {
+  const { invite } = await makeOwnerWithInvite(db);
+  const inject = app.inject.bind(app) as unknown as (opts: object) => Promise<{
+    statusCode: number;
+    json: () => { tokens?: { accessToken: string } };
+  }>;
+  const reg = await inject({
+    method: "POST",
+    url: "/v1/auth/register",
+    payload: { invite, email, password: "hunter2hunter2", name: "Member" },
+  });
+  if (reg.statusCode !== 201) throw new Error(`register failed: ${reg.statusCode}`);
+  const login = await inject({
+    method: "POST",
+    url: "/v1/auth/login",
+    payload: { email, password: "hunter2hunter2" },
+  });
+  const token = login.json().tokens?.accessToken;
+  if (!token) throw new Error(`login failed: ${login.statusCode}`);
+  return { authorization: `Bearer ${token}` };
+}

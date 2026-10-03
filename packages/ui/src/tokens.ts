@@ -18,6 +18,7 @@ export const tokens = {
     accentHover: "#ff1f2b",
     success: "#2ecc71",
     warning: "#f39c12",
+    danger: "#ff4d4f",
   },
   radius: {
     sm: 6,

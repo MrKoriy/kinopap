@@ -57,6 +57,8 @@ module.exports = {
         MEDIA_BASE_URL: process.env.MEDIA_BASE_URL,
         COOKIE_SECURE: process.env.COOKIE_SECURE,
         ANILIBRIA_URL: process.env.ANILIBRIA_URL,
+        // Подпись ссылок /gst для nginx secure_link (см. bin/deploy.sh).
+        GST_LINK_SECRET: process.env.GST_LINK_SECRET,
         // API в проде за nginx — XFF доверяем явно (дефолт кода теперь
         // false: без прокси заголовок подделывается и обходит лимиты).
         // Перекрывается через .env, если топология изменится.

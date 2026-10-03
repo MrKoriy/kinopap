@@ -233,7 +233,7 @@ export default function WatchScreen() {
     if (!links) return null;
     const chosen = audioChoice == null ? null : links.audios[audioChoice];
     const candidates: Array<string | null> = [
-      chosen?.masterUrl,
+      chosen?.masterUrl ?? null,
       links.files.find((f) => f.urls.hls)?.urls.hls ?? null,
       links.files.find((f) => f.urls.http)?.urls.http ?? null,
     ];

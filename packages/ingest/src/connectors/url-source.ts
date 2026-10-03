@@ -7,9 +7,11 @@
  * источниками реализуют search сами.
  */
 
+import { randomUUID } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { createWriteStream } from "node:fs";
 import { unlink } from "node:fs/promises";
+import { BlockList, isIP } from "node:net";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -51,9 +53,14 @@ export class UrlSourceConnector implements SourceConnector {
   }
 
   async probe(ref: string): Promise<SourceInfo> {
-    // URL уходит в ffprobe — та же поверхность, что и у скачивания.
-    await assertSafeUrl(ref, this.cfg);
-    return probeMedia(ref, this.cfg);
+    // URL уходит в ffprobe — та же поверхность, что и у скачивания. ffprobe сам
+    // ходит по редиректам и по ссылкам внутри плейлистов, поэтому: 1) цепочку
+    // редиректов проходим заранее через guard и отдаём ему финальный URL;
+    // 2) запрещаем всё, кроме http(s), — никаких file:/concat:/data: из HLS.
+    const finalUrl = await resolveRedirects(this.cfg, ref);
+    return probeMedia(finalUrl, this.cfg, [
+      "-protocol_whitelist", "http,https,tcp,tls",
+    ]);
   }
 
   async pull(ref: string, opts: PullOptions): Promise<PulledSource> {
@@ -71,14 +78,26 @@ export class UrlSourceConnector implements SourceConnector {
 
 /* ---------- SSRF guard ---------- */
 
-const PRIVATE_V4 = [
-  /^127\./,
-  /^10\./,
-  /^192\.168\./,
-  /^172\.(1[6-9]|2\d|3[01])\./,
-  /^169\.254\./,
-  /^0\./,
-];
+/**
+ * Всё, что не является публичным unicast: loopback, RFC1918, CGNAT
+ * (100.64/10), link-local, документационные/бенчмарк-сети, multicast,
+ * reserved. Проверка через node:net.BlockList — без самодельных регэкспов.
+ */
+const BLOCKED = new BlockList();
+for (const [net, prefix] of [
+  ["0.0.0.0", 8], ["10.0.0.0", 8], ["100.64.0.0", 10], ["127.0.0.0", 8],
+  ["169.254.0.0", 16], ["172.16.0.0", 12], ["192.0.0.0", 24], ["192.0.2.0", 24],
+  ["192.88.99.0", 24], ["192.168.0.0", 16], ["198.18.0.0", 15],
+  ["198.51.100.0", 24], ["203.0.113.0", 24], ["224.0.0.0", 4], ["240.0.0.0", 4],
+] as const) {
+  BLOCKED.addSubnet(net, prefix, "ipv4");
+}
+for (const [net, prefix] of [
+  ["::", 128], ["::1", 128], ["100::", 64], ["2001::", 32], ["2001:db8::", 32],
+  ["fc00::", 7], ["fe80::", 10], ["fec0::", 10], ["ff00::", 8],
+] as const) {
+  BLOCKED.addSubnet(net, prefix, "ipv6");
+}
 
 function decodeIpv4Octet(raw: string): number | null {
   const s = raw.trim().toLowerCase();
@@ -95,16 +114,16 @@ function decodeIpv4Octet(raw: string): number | null {
   return Number.isFinite(n) && n >= 0 && n <= 255 ? n : null;
 }
 
+/** 0x7f000001 / 2130706433 / 0177.0.0.1 → «127.0.0.1». */
 function normalizeIpv4(input: string): string | null {
   const trimmed = input.trim();
   if (!trimmed) return null;
-  // Single decimal (e.g. 2130706433) -> 4 octets.
   if (/^\d+$/.test(trimmed)) {
     const n = Number(trimmed);
     if (!Number.isFinite(n) || n < 0 || n > 0xffffffff) return null;
     return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join(".");
   }
-  if (trimmed.toLowerCase().startsWith("0x")) {
+  if (/^0x[0-9a-f]+$/i.test(trimmed)) {
     const n = Number.parseInt(trimmed, 16);
     if (!Number.isFinite(n) || n < 0 || n > 0xffffffff) return null;
     return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join(".");
@@ -120,35 +139,66 @@ function normalizeIpv4(input: string): string | null {
   return octets.join(".");
 }
 
-function normalizeIp(raw: string): string {
-  const s = raw.trim().replace(/^\[|\]$/g, "").toLowerCase();
-  // IPv4-mapped IPv6 normalization: extract trailing v4 first.
-  const mapped = s.match(/^::ffff:(.+)$/);
-  if (mapped) {
-    const v4 = normalizeIpv4(mapped[1]!);
-    if (v4) return `::ffff:${v4}`;
-    return s;
+/** IPv6 → 16 байт (поддерживает «::» и хвост в dotted-quad). */
+function ipv6Bytes(ip: string): number[] | null {
+  let s = ip.toLowerCase().replace(/%.*$/, "");
+  const dotted = s.match(/^(.*:)(\d+\.\d+\.\d+\.\d+)$/);
+  if (dotted) {
+    const o = dotted[2]!.split(".").map(Number);
+    s = `${dotted[1]}${((o[0]! << 8) | o[1]!).toString(16)}:${((o[2]! << 8) | o[3]!).toString(16)}`;
   }
-  // Bare v4 forms (0x/decimal/octal) -> canonical dotted decimal.
-  const v4 = normalizeIpv4(s);
-  if (v4) return v4;
-  // Leave IPv6 as-is (lowercased) for prefix checks; :: expansion is handled in isPrivateIp.
-  return s;
+  const halves = s.split("::");
+  if (halves.length > 2) return null;
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  const fill = halves.length === 2 ? 8 - head.length - tail.length : 0;
+  if (fill < 0 || (halves.length === 1 && head.length !== 8)) return null;
+  const groups = [...head, ...Array(fill).fill("0"), ...tail];
+  if (groups.length !== 8) return null;
+  const bytes: number[] = [];
+  for (const g of groups) {
+    if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+    const v = Number.parseInt(g, 16);
+    bytes.push(v >> 8, v & 0xff);
+  }
+  return bytes;
 }
 
-function isPrivateIp(ip: string): boolean {
-  const normalized = normalizeIp(ip);
-  if (PRIVATE_V4.some((re) => re.test(normalized))) return true;
-  if (normalized === "::1" || normalized === "::") return true;
-  const lower = normalized.toLowerCase();
-  // fc00::/7 (ULA) и fe80::/10 (link-local).
-  if (lower.startsWith("fc") || lower.startsWith("fd") || lower.startsWith("fe8") || lower.startsWith("fe9") || lower.startsWith("fea") || lower.startsWith("feb")) {
-    return true;
+const v4 = (b: number[], at: number) => b.slice(at, at + 4).join(".");
+
+/**
+ * IPv4, спрятанный внутри IPv6: mapped (::ffff:a.b.c.d), compat (::a.b.c.d),
+ * NAT64 (64:ff9b::/96, 64:ff9b:1::/48), 6to4 (2002:AABB:CCDD::/16).
+ * Без этого [::ffff:127.0.0.1] и [64:ff9b::7f00:1] проходили guard.
+ */
+function embeddedIpv4(b: number[]): string | null {
+  const zero = (from: number, to: number) => b.slice(from, to).every((x) => x === 0);
+  if (zero(0, 10) && b[10] === 0xff && b[11] === 0xff) return v4(b, 12);
+  if (zero(0, 12)) return v4(b, 12);
+  if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b) {
+    if (zero(4, 12)) return v4(b, 12);
+    if (b[4] === 0x00 && b[5] === 0x01) return v4(b, 12);
   }
-  // IPv4-mapped IPv6 (::ffff:10.0.0.1) — уже нормализован выше.
-  const mapped = lower.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-  if (mapped) return PRIVATE_V4.some((re) => re.test(mapped[1]!));
-  return false;
+  if (b[0] === 0x20 && b[1] === 0x02) return v4(b, 2);
+  return null;
+}
+
+/** true — адрес не публичный (или не распарсился: fail closed). */
+export function isPrivateIp(raw: string): boolean {
+  const s = raw.trim().replace(/^\[|\]$/g, "");
+  const asV4 = normalizeIpv4(s);
+  if (asV4) return BLOCKED.check(asV4, "ipv4");
+  if (isIP(s.replace(/%.*$/, "")) !== 6) return true;
+  const bytes = ipv6Bytes(s);
+  if (!bytes) return true;
+  const inner = embeddedIpv4(bytes);
+  if (inner && BLOCKED.check(inner, "ipv4")) return true;
+  return BLOCKED.check(s.replace(/%.*$/, ""), "ipv6");
+}
+
+/** Хост — IP-литерал в любой форме (включая 0x/десятичную/IPv6)? */
+function isIpLiteral(host: string): boolean {
+  return normalizeIpv4(host) != null || isIP(host) === 6;
 }
 
 /**
@@ -176,19 +226,20 @@ export async function assertSafeUrl(raw: string, cfg: UrlSourceOptions): Promise
   }
 
   const hostname = url.hostname.replace(/^\[|\]$/g, "");
-  // Literal IP in URL (including 0x/decimal forms) — block without DNS.
-  const literal = normalizeIp(hostname);
-  if (literal !== hostname.toLowerCase() || /^\d+\.\d+\.\d+\.\d+$/.test(literal) || literal.includes(":")) {
-    if (isPrivateIp(literal)) {
-      throw new Error(`url source: private address ${literal} is blocked (set allowPrivateHosts for LAN sources)`);
-    }
-  } else if (isPrivateIp(hostname)) {
+  if (hostname.toLowerCase() === "localhost" || hostname.toLowerCase().endsWith(".localhost")) {
     throw new Error(`url source: private address ${hostname} is blocked (set allowPrivateHosts for LAN sources)`);
+  }
+  // IP-литерал (включая 0x/десятичную форму и IPv6) — решаем без DNS.
+  if (isIpLiteral(hostname)) {
+    if (isPrivateIp(hostname)) {
+      throw new Error(`url source: private address ${hostname} is blocked (set allowPrivateHosts for LAN sources)`);
+    }
+    return url;
   }
   try {
     const records = await lookup(hostname, { all: true });
     for (const r of records) {
-      if (isPrivateIp(normalizeIp(r.address))) {
+      if (isPrivateIp(r.address)) {
         throw new Error(
           `url source: private address ${r.address} is blocked (set allowPrivateHosts for LAN sources)`,
         );
@@ -201,11 +252,41 @@ export async function assertSafeUrl(raw: string, cfg: UrlSourceOptions): Promise
   return url;
 }
 
+/* ---------- Редиректы для ffprobe ---------- */
+
+/**
+ * Проходит цепочку редиректов вручную (каждый Location — через guard) и
+ * возвращает финальный URL. Нужен для probe: ffprobe следует редиректам сам,
+ * и без этого публичный URL с 302 на http://127.0.0.1 обходил защиту.
+ */
+export async function resolveRedirects(cfg: UrlSourceOptions, rawUrl: string): Promise<string> {
+  let current = (await assertSafeUrl(rawUrl, cfg)).toString();
+  if (cfg.allowPrivateHosts) return current;
+  const doFetch = cfg.fetch ?? fetch;
+  const maxRedirects = cfg.maxRedirects ?? 3;
+  for (let i = 0; i <= maxRedirects; i++) {
+    const res = await doFetch(current, {
+      method: "HEAD",
+      redirect: "manual",
+      signal: AbortSignal.timeout(15_000),
+    });
+    await res.body?.cancel().catch(() => {});
+    if (![301, 302, 303, 307, 308].includes(res.status)) return current;
+    const location = res.headers.get("location");
+    if (!location) throw new Error("url source: redirect without Location");
+    current = (await assertSafeUrl(new URL(location, current).toString(), cfg)).toString();
+  }
+  throw new Error(`url source: too many redirects (>${maxRedirects})`);
+}
+
 /* ---------- Скачивание ---------- */
 
 async function download(cfg: UrlSourceOptions, rawUrl: string, workDir: string): Promise<string> {
   const url = await assertSafeUrl(rawUrl, cfg);
-  const name = path.basename(url.pathname) || "source.bin";
+  // Уникальный префикс: видео и сабы с одинаковым basename (…/a/index.srt,
+  // …/b/index.srt) раньше перезаписывали друг друга в workDir.
+  const base = path.basename(decodeURIComponent(url.pathname)).replace(/[^\w.-]+/g, "_");
+  const name = `${randomUUID().slice(0, 8)}-${base || "source.bin"}`;
 
   const maxBytes = cfg.maxBytes ?? 20 * 1024 * 1024 * 1024;
   const overallTimeoutMs = cfg.downloadTimeoutMs ?? 2 * 60 * 60 * 1000;

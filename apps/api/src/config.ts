@@ -26,6 +26,11 @@ const envSchema = z.object({
     * доступе к порту подделка заголовка обходит per-IP rate limit.
     * За nginx (прод) включать явно: TRUST_PROXY=1. */
   TRUST_PROXY: z.stringbool().default(false),
+  /** Секрет подписи ссылок /gst (nginx secure_link). Пусто — ссылки без подписи. */
+  GST_LINK_SECRET: z
+    .string()
+    .optional()
+    .refine((v) => !v || v.length >= 32, "GST_LINK_SECRET: минимум 32 символа"),
 });
 
 export interface Config {
@@ -40,6 +45,7 @@ export interface Config {
   corsOrigin: string;
   cookieSecure: boolean;
   trustProxy: boolean;
+  gstLinkSecret?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -56,5 +62,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     corsOrigin: e.CORS_ORIGIN,
     cookieSecure: e.COOKIE_SECURE,
     trustProxy: e.TRUST_PROXY,
+    gstLinkSecret: e.GST_LINK_SECRET || undefined,
   };
 }
