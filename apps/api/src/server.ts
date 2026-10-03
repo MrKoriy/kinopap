@@ -21,6 +21,7 @@ import {
   noopCatalogFillQueue,
   noopIngestQueue,
 } from "./ingest-queue";
+import { startGapFiller } from "./lib/gap-filler";
 import { HttpError } from "./lib/http";
 
 const config = loadConfig();
@@ -56,6 +57,9 @@ const purgeTokensTimer = setInterval(() => void purgeOnce(), PURGE_TOKENS_INTERV
 const purgeSourcesTimer = setInterval(() => void purgeOnce(), PURGE_SOURCES_INTERVAL_MS);
 purgeTokensTimer.unref();
 purgeSourcesTimer.unref();
+
+// Догон дыр каталога: сериалы без серий, длинные сезоны (GAP_FILL=1 в проде).
+if (config.gapFill) startGapFiller(db, config);
 
 // TorrServer: прогрев настроек буфера (read-ahead, кэш). Best-effort —
 // недоступный сервер не мешает старту API, стримы резолвятся лениво.

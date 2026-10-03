@@ -1,6 +1,7 @@
 import { createDb, createPool, reconcileStaleIngestJobs } from "@zal/db";
 import { fillCatalog, stopActiveChildren } from "@zal/ingest";
 import { Redis } from "ioredis";
+import { startAutopilot } from "./autopilot";
 import { createCatalogWorker } from "./catalog";
 import { makeWorkerDeps } from "./deps";
 import { createTranscoderWorker } from "./worker";
@@ -81,6 +82,17 @@ const catalogWorker = createCatalogWorker(catalogConnection, {
   },
 });
 console.log("worker: catalog-fill queue ready");
+
+// Автопилот: свежие релизы, новые серии аниме, трейлеры — по расписанию.
+if (process.env.AUTOPILOT !== "0" && tmdbApiKey) {
+  const autopilotConnection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  autopilotConnection.on("error", (err) => {
+    console.warn("worker: autopilot redis error (non-fatal):", String(err).slice(0, 300));
+  });
+  void startAutopilot(autopilotConnection).catch((err) => {
+    console.warn("worker: autopilot failed to start (non-fatal):", String(err).slice(0, 300));
+  });
+}
 
 // BullMQ-воркеры и Redis-коннекты эмитят 'error' (сбой jobs, реконнект).
 // Без слушателя an unhandled 'error' роняет процесс — падение Redis

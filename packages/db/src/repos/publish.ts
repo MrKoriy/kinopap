@@ -277,7 +277,7 @@ export async function publishIngest(
       const byOrig = await findEpisodeByOrig(txDb, itemId, ep.seasonNumber, ep.episodeNumber);
       if (byOrig != null) {
         episodeId = byOrig;
-      } else if (await itemSeasonLayout(txDb, itemId)) {
+      } else if ((await itemSeasonLayout(txDb, itemId))?.startsWith("tmdb-group:")) {
         episodeId = await appendEpisodeToLastSeason(txDb, itemId, {
           seasonNumber: ep.seasonNumber,
           episodeNumber: ep.episodeNumber,
