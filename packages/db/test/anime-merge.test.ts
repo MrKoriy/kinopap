@@ -82,13 +82,13 @@ describe("anime-merge: AniLibria → TMDb", () => {
     expect(s2e2.rows[0]!.key).toBe("anilibria:9001:5");
   });
 
-  it("фильм-релиз AniLibria вливается в фильм TMDb", async () => {
+  it("фильм-релиз AniLibria вливается в фильм TMDb (пунктуация не мешает)", async () => {
     const db = await createTestDb();
-    const [t] = await db.insert(items).values({ type: "movie", title: "Тоннель в лето", year: 2022, tmdbId: 1 }).returning();
+    const [t] = await db.insert(items).values({ type: "movie", title: "Тоннель в лето, выход прощаний", year: 2022, tmdbId: 1 }).returning();
     const tid = t!.id;
     await db.insert(media).values({ itemId: tid, title: "Тоннель в лето" });
     const movieRelease: PublishIngestInput = {
-      item: { type: "anime" as const, title: "Тоннель в лето", year: 2022, externalSource: "anilibria", externalId: "9516" },
+      item: { type: "anime" as const, title: "Тоннель в лето — выход прощаний", year: 2022, externalSource: "anilibria", externalId: "9516" },
       media: { title: "Фильм", duration: 5000, sourceKey: "anilibria:9516:1" },
       files: [],
       audios: [],
