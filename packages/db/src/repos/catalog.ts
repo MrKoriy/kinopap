@@ -87,6 +87,7 @@ const itemColumns = {
   trailerId: items.trailerId,
   trailerUrl: items.trailerUrl,
   trailerCheckedAt: items.trailerCheckedAt,
+  titleLocalizedAt: items.titleLocalizedAt,
   seasonLayout: items.seasonLayout,
   createdAt: items.createdAt,
   updatedAt: items.updatedAt,
