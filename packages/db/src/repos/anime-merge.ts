@@ -36,19 +36,27 @@ export async function findAnimeSourcePairs(db: Db, limit = 1000): Promise<AnimeP
     te: number;
   }>(sql`
     with a as (
-      select id, title, original_title, year from items where external_source = 'anilibria'
+      select id, title, year,
+        regexp_replace(lower(title), '[^[:alnum:]]+', '', 'g') as nt,
+        regexp_replace(lower(original_title), '[^[:alnum:]]+', '', 'g') as no
+      from items where external_source = 'anilibria'
     ),
     t as (
-      select id, title, original_title, year from items
+      select id, title, year,
+        regexp_replace(lower(title), '[^[:alnum:]]+', '', 'g') as nt,
+        regexp_replace(lower(original_title), '[^[:alnum:]]+', '', 'g') as no
+      from items
       where external_source is null and tmdb_id is not null and type in ('serial', 'anime', 'movie')
     ),
     p as (
       select distinct on (a.id) a.id as aid, t.id as tid, a.title
       from a join t
-        on (lower(a.title) = lower(t.title)
-            or (a.original_title is not null and lower(a.original_title) = lower(t.original_title)))
+        -- сравнение без регистра и пунктуации: «Магическая битва 0. Фильм» =
+        -- «Магическая битва 0 Фильм», «—» = «–», хвостовой «♀»
+        -- (пустая нормализация — только точное совпадение, без «'' = ''»)
+        on ((a.nt <> '' and a.nt = t.nt) or (a.no <> '' and a.no = t.no) or lower(a.title) = lower(t.title))
        and coalesce(abs(a.year - t.year), 0) <= 1
-      order by a.id, (lower(a.title) = lower(t.title)) desc, t.id
+      order by a.id, (a.nt = t.nt) desc, t.id
     )
     select p.aid, p.tid, p.title,
       (select count(*) from media m where m.item_id = p.aid)::int as am,
