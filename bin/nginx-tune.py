@@ -98,7 +98,7 @@ def tune(path: str) -> None:
     s = re.sub(r"\n?[ \t]*# BEGIN kinopap-perf.*?# END kinopap-perf[^\n]*\n?", "\n", s, flags=re.S)
     # /torrents наружу — 403 (любая прежняя форма блока).
     s = re.sub(r"[ \t]*location /torrents \{[^}]*\}", TORRENTS_LOCKED, s)
-    m = re.search(r"^[ \t]*location[^\{]*\{", s, flags=re.M)
+    m = re.compile(r"^[ \t]+location\s[^{\n]*\{", re.M).search(s, max(s.find("server {"), 0))
     if not m:
         sys.exit(f"{path}: не найден ни один location")
     s = s[: m.start()] + BLOCK + "\n" + s[m.start():]

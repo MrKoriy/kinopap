@@ -20,6 +20,7 @@ import {
   seasons,
   subtitles,
 } from "../schema/index";
+import { appendEpisodeToLastSeason, findEpisodeByOrig, itemSeasonLayout } from "./seasons";
 
 export interface PublishItemDraft {
   type: ItemType;
@@ -255,7 +256,37 @@ export async function publishIngest(
     const itemId = await upsertItem(tx, input.item);
 
     let episodeId: number | null = null;
-    if (input.media.episode) {
+    // Повторный импорт той же серии: эпизод уже есть — берём его как есть.
+    // После перестройки сезонов «S1E245» источника живёт в «Сезоне 12»,
+    // и поиск по season/number создал бы дубль в первом сезоне.
+    let reuseEpisode = false;
+    if (input.media.episode && input.media.sourceKey) {
+      const [prev] = await tx
+        .select({ episodeId: media.episodeId })
+        .from(media)
+        .where(and(eq(media.itemId, itemId), eq(media.sourceKey, input.media.sourceKey)))
+        .limit(1);
+      if (prev?.episodeId != null) {
+        episodeId = prev.episodeId;
+        reuseEpisode = true;
+      }
+    }
+    if (input.media.episode && !reuseEpisode) {
+      const ep = input.media.episode;
+      const txDb = tx as unknown as Db;
+      const byOrig = await findEpisodeByOrig(txDb, itemId, ep.seasonNumber, ep.episodeNumber);
+      if (byOrig != null) {
+        episodeId = byOrig;
+      } else if (await itemSeasonLayout(txDb, itemId)) {
+        episodeId = await appendEpisodeToLastSeason(txDb, itemId, {
+          seasonNumber: ep.seasonNumber,
+          episodeNumber: ep.episodeNumber,
+          title: ep.title ?? null,
+          runtime: input.media.duration,
+        });
+      }
+    }
+    if (input.media.episode && episodeId == null) {
       const ep = input.media.episode;
       const [season] = await tx
         .insert(seasons)
