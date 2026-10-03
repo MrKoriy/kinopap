@@ -58,6 +58,12 @@ export const items = pgTable(
     externalSource: varchar("external_source", { length: 32 }),
     externalId: varchar("external_id", { length: 64 }),
     tmdbId: integer("tmdb_id"),
+    /**
+     * Раскладка сезонов, если её перестроили (`tmdb-group:<id>`). Пусто —
+     * сезоны как у источника. Нужна импорту: новые серии регрупнутого
+     * тайтла дописываются в последний сезон, а не в «Сезон 1» источника.
+     */
+    seasonLayout: varchar("season_layout", { length: 64 }),
     tmdbType: varchar("tmdb_type", { length: 8 }),
     tmdbRating: doublePrecision("tmdb_rating"),
     tmdbVotes: integer("tmdb_votes"),
@@ -135,6 +141,15 @@ export const episodes = pgTable(
     runtime: integer("runtime").notNull().default(0),
     thumbnailUrl: text("thumbnail_url"),
     airDate: timestamp("air_date", { withTimezone: true }),
+    /**
+     * Координаты серии у источника (TMDb S/E, у AniLibria — 1/ordinal).
+     * После перестройки сезонов season/number — наша раскладка, а резолвер
+     * и импорт ищут серию по этим полям. NULL — совпадают с season/number.
+     */
+    origSeason: integer("orig_season"),
+    origNumber: integer("orig_number"),
+    /** Сквозной номер серии (245-я серия «Блича») — для подписи и торрентов. */
+    absoluteNumber: integer("absolute_number"),
   },
   (t) => [uniqueIndex("episodes_season_number_uq").on(t.seasonId, t.number)],
 );

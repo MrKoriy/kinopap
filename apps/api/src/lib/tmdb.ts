@@ -153,7 +153,7 @@ interface TmdbEpisode {
   thumbnailUrl: string | null;
 }
 
-async function tmdbGet<T>(
+export async function tmdbGet<T>(
   config: Config,
   path: string,
   language = "ru-RU",

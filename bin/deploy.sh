@@ -271,7 +271,9 @@ block = """
         try_files \$uri \$uri/ =404;
     }
 """
-m = re.search(r"location[^\{]*\{", s)
+# Первый location ВНУТРИ server{} (а не слово «location» в комментарии).
+srv = s.find("server {")
+m = re.compile(r"^[ \t]+location\s[^{\n]*\{", re.M).search(s, max(srv, 0))
 if m:
     s = s[:m.start()] + block.strip("\n") + "\n    " + s[m.start():]
     open(p, "w").write(s)
@@ -311,7 +313,7 @@ block = """
     location /gst/ {
         return 403;
     }
-    location ~ ^/gst-s/(?<gst_exp>[0-9]+)/(?<gst_sig>[A-Za-z0-9_-]+)/(?<gst_hash>[0-9a-fA-F]{40})/(?<gst_rest>.*)$ {
+    location ~ "^/gst-s/(?<gst_exp>[0-9]+)/(?<gst_sig>[A-Za-z0-9_-]+)/(?<gst_hash>[0-9a-fA-F]{40})/(?<gst_rest>.*)$" {
         secure_link \$gst_sig,\$gst_exp;
         secure_link_md5 "\$gst_exp\$gst_hash SECRET";
         if (\$secure_link = "") { return 403; }
@@ -323,7 +325,9 @@ block = """
     }
     # END kinopap-gst
 """.replace("SECRET", secret)
-m = re.search(r"location[^\{]*\{", s)
+# Первый location ВНУТРИ server{} (а не слово «location» в комментарии).
+srv = s.find("server {")
+m = re.compile(r"^[ \t]+location\s[^{\n]*\{", re.M).search(s, max(srv, 0))
 if m:
     s = s[:m.start()] + block.strip("\n").lstrip() + "\n    " + s[m.start():]
     open(p, "w").write(s)
@@ -346,7 +350,9 @@ block = """
         proxy_send_timeout 300s;
     }
 """
-m = re.search(r"location[^\{]*\{", s)
+# Первый location ВНУТРИ server{} (а не слово «location» в комментарии).
+srv = s.find("server {")
+m = re.compile(r"^[ \t]+location\s[^{\n]*\{", re.M).search(s, max(srv, 0))
 if m:
     s = s[:m.start()] + block.strip("\n") + "\n    " + s[m.start():]
     open(p, "w").write(s)
@@ -563,7 +569,7 @@ npx tsx src/seed-catalog.ts 2>&1 | tail -3
 REMOTE
 
 echo "==> 4b: TorrServer — дисковый кэш и быстрый старт"
-ssh "$SERVER" "$APP_DIR/bin/torrserver-tune.sh" || echo "  ВНИМАНИЕ: TorrServer не настроен (не отвечает?)" >&2
+ssh "$SERVER" "bash $APP_DIR/bin/torrserver-tune.sh" || echo "  ВНИМАНИЕ: TorrServer не настроен (не отвечает?)" >&2
 
 echo "==> 5/6: смоук"
 ssh "$SERVER" bash -s <<REMOTE

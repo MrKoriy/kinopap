@@ -25,6 +25,9 @@ import { formatDurationHuman } from "@/lib/format";
  * Тонкий адаптер: pickDefaultSeason выбирает сезон по id, а веб-карточка
  * открывает сезоны вкладками по индексу. null — сезон не нашли.
  */
+/** Серий на один диапазон длинного сезона. */
+const EPISODE_CHUNK = 50;
+
 function defaultSeasonIndex(
   item: Pick<ItemDetail, "seasons">,
   progress: ItemProgressDto | null,
@@ -225,6 +228,24 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
   const activeEpisodes = item.seasons?.[activeSeason]?.episodes ?? [];
   const firstPlayableInSeason = activeEpisodes.find((e) => e.mediaId)?.mediaId ?? null;
 
+  // Длинный сезон (мыльные оперы, аниме без раскладки) режем на диапазоны
+  // «1–50, 51–100…»: 1000 строк разом — секунды рендера и бесконечный скролл.
+  const chunked = activeEpisodes.length > EPISODE_CHUNK + EPISODE_CHUNK / 5;
+  const [activeChunk, setActiveChunk] = React.useState(0);
+  React.useEffect(() => {
+    const at = resumeMediaId != null ? activeEpisodes.findIndex((e) => e.mediaId === resumeMediaId) : -1;
+    setActiveChunk(at > 0 ? Math.floor(at / EPISODE_CHUNK) : 0);
+  }, [activeEpisodes, resumeMediaId]);
+  const chunks = chunked
+    ? Array.from({ length: Math.ceil(activeEpisodes.length / EPISODE_CHUNK) }, (_, i) => {
+        const part = activeEpisodes.slice(i * EPISODE_CHUNK, (i + 1) * EPISODE_CHUNK);
+        return `${part[0]?.number ?? i * EPISODE_CHUNK + 1}–${part.at(-1)?.number ?? (i + 1) * EPISODE_CHUNK}`;
+      })
+    : [];
+  const visibleEpisodes = chunked
+    ? activeEpisodes.slice(activeChunk * EPISODE_CHUNK, (activeChunk + 1) * EPISODE_CHUNK)
+    : activeEpisodes;
+
   return (
     <div>
       {/* Шапка — карточка с постером слева, инфо справа. Никакого full-bleed,
@@ -360,8 +381,26 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
               </button>
             ))}
           </div>
+          {chunked && (
+            <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1" data-testid="episode-ranges">
+              {chunks.map((label, i) => (
+                <button
+                  type="button"
+                  key={label}
+                  className={`shrink-0 rounded-md px-3 py-1 text-xs font-medium tabular-nums transition ${
+                    i === activeChunk
+                      ? "bg-white/15 text-white"
+                      : "bg-surface-2 text-muted hover:text-white"
+                  }`}
+                  onClick={() => setActiveChunk(i)}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
           <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
-            {activeEpisodes.map((ep) => (
+            {visibleEpisodes.map((ep) => (
               <li key={ep.id}>
                 <EpisodeRow
                   itemId={item.id}

@@ -8,6 +8,7 @@ export * from "./repos/ingest";
 export * from "./repos/profile";
 export * from "./repos/progress";
 export * from "./repos/publish";
+export * from "./repos/seasons";
 export * from "./repos/social";
 export * from "./repos/sources";
 export * from "./schema/index";

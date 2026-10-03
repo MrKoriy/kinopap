@@ -39,6 +39,7 @@ import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
 import { idParamsSchema } from "../lib/params";
+import { regroupLongSeasons } from "../lib/season-layout";
 import { signStreamLinks } from "../lib/stream-links";
 import { hydrateSerialSeasons, tmdbLookup } from "../lib/tmdb";
 import { optionalUser } from "../plugins/auth";
@@ -113,7 +114,12 @@ export async function catalogRoutes(
     mediaId: number,
   ): Promise<{ seasonNumber: number | null; episodeNumber: number | null }> {
     const rows = await targetDb
-      .select({ season: seasons.number, episode: episodes.number })
+      // Координаты источника: после перестройки сезонов «Сезон 12, серия 5»
+      // у нас — это s01e245 у TMDb/AniLibria, и искать поток надо по ним.
+      .select({
+        season: sql<number | null>`coalesce(${episodes.origSeason}, ${seasons.number})`,
+        episode: sql<number | null>`coalesce(${episodes.origNumber}, ${episodes.number})`,
+      })
       .from(media)
       .leftJoin(episodes, eq(episodes.id, media.episodeId))
       .leftJoin(seasons, eq(seasons.id, episodes.seasonId))
@@ -314,7 +320,14 @@ export async function catalogRoutes(
         config,
         item.id,
         item.tmdb.id ?? 0,
-      ).catch(() => false);
+      )
+        // Свежие сезоны длинного шоу (Конан: 1216 серий в «Сезоне 1») сразу
+        // раскладываем по эпизод-группам TMDb — до первого показа списка.
+        .then(async (ok) => {
+          if (ok) await regroupLongSeasons(db, config, id).catch(() => undefined);
+          return ok;
+        })
+        .catch(() => false);
       let timer: ReturnType<typeof setTimeout> | undefined;
       let fast = false;
       try {
