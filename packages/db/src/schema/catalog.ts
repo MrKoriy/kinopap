@@ -215,3 +215,15 @@ export const itemPeople = pgTable(
     index("item_people_role_idx").on(t.role),
   ],
 );
+
+/**
+ * Карточка влита в другую (склейка дублей): старые ссылки /item/<from>
+ * ведут на выжившую <to>, а не в 404.
+ */
+export const itemRedirects = pgTable("item_redirects", {
+  fromId: integer("from_id").primaryKey(),
+  toId: integer("to_id")
+    .notNull()
+    .references(() => items.id, { onDelete: "cascade" }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});

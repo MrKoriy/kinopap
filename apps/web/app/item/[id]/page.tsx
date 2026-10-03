@@ -1,6 +1,6 @@
 import type { ItemType } from "@zal/api-client";
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { Suspense } from "react";
 import { ItemDetailView } from "@/components/item-detail";
 import { ItemRail } from "@/components/item-rail";
@@ -68,6 +68,8 @@ export default async function ItemPage({
   const { id } = await params;
   const item = await fetchItem(Number(id));
   if (!item) notFound();
+  // Карточку влили в другую (склейка дублей) — постоянный редирект.
+  if (item.id !== Number(id)) permanentRedirect(`/item/${item.id}`);
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">

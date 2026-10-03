@@ -26,6 +26,7 @@ import {
   mediaLinks,
   patchSource,
   prewarmCandidates,
+  resolveItemRedirect,
   saveSource,
   searchItems,
   seasons,
@@ -306,6 +307,12 @@ export async function catalogRoutes(
   app.get("/items/:id", async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     let item = await getItem(db, id);
+    if (!item) {
+      // Карточку влили в другую (склейка дублей) — отдаём выжившую;
+      // веб по item.id ≠ :id делает постоянный редирект.
+      const to = await resolveItemRedirect(db, id);
+      if (to != null) item = await getItem(db, to);
+    }
     if (!item) throw notFound(`Item ${id} not found`);
 
     // Сериал без эпизодов (заливка из TMDb) — дотягиваем сезоны лениво.

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import { fetchItem } from "@/lib/api";
 import { episodeGroups } from "@/lib/player-logic";
 import { WatchClient } from "./watch-client";
@@ -32,6 +32,8 @@ export default async function WatchPage({
   const { itemId, mediaId } = await params;
   const item = await fetchItem(Number(itemId));
   if (!item) notFound();
+  // Карточку влили в другую (склейка дублей) — постоянный редирект.
+  if (item.id !== Number(itemId)) permanentRedirect(`/item/${item.id}`);
 
   // Список серий строится здесь и уходит в плеер целиком: и меню выбора, и
   // «следующая серия» выводятся из него, поэтому разойтись не могут.
