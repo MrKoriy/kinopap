@@ -27,7 +27,10 @@ export function WatchClient({
   /** Серии тайтла для меню в плеере; пусто у фильма. */
   episodeGroups: PlayerEpisodeGroup[];
 }) {
-  const { api } = useAuth();
+  // ready: сессия восстановлена (refresh по cookie завершён). Без ожидания
+  // media-links уходил без токена, ловил 401 и запускал второй refresh
+  // параллельно с AuthProvider — ротация одного и того же refresh-токена.
+  const { api, ready } = useAuth();
   const [links, setLinks] = React.useState<MediaLinks | null>(null);
   const [failed, setFailed] = React.useState(false);
   const [elapsed, setElapsed] = React.useState(0);
@@ -76,10 +79,11 @@ export function WatchClient({
   }, [api, item.id, mediaId]);
 
   React.useEffect(() => {
+    if (!ready) return;
     setLinks(null);
     load();
     return () => abortRef.current?.abort();
-  }, [load]);
+  }, [load, ready]);
 
   // Предподключение к origin медиа — удаляем при размонтаже, чтобы
   // не копить мусор в <head> при навигации watch→item→watch.

@@ -390,6 +390,8 @@ export function createApiClient(opts: ApiClientOptions) {
     getMediaLinks: (itemId: number, mediaId: number) =>
       request(`/v1/items/${itemId}/media-links`, mediaLinksSchema, {
         query: { mid: mediaId },
+        // Ссылки на поток выдаются только участникам клуба.
+        auth: true,
         // Холодный резолв ходит в rutor/AniLibria/TorrServer и занимает
         // десятки секунд — дефолтный дедлайн его срезал бы. Веб-обёртка
         // SSR держит для этого запроса те же 45с.
@@ -403,6 +405,7 @@ export function createApiClient(opts: ApiClientOptions) {
     getMediaTracks: (itemId: number, mediaId: number) =>
       request(`/v1/items/${itemId}/media-tracks`, mediaTracksSchema, {
         query: { mid: mediaId },
+        auth: true,
         timeoutMs: 45_000,
       }),
     getSimilar: (id: number) =>
