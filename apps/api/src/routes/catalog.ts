@@ -26,6 +26,7 @@ import {
   mediaLinks,
   patchSource,
   prewarmCandidates,
+  resolveItemRedirect,
   saveSource,
   searchItems,
   seasons,
@@ -182,6 +183,20 @@ export async function catalogRoutes(
     return { items: await getItemsByIds(db, q.ids) };
   });
 
+  // Подсказки в шапке (поиск по мере ввода): только локальный каталог, без
+  // on-the-fly discovery (иначе каждое нажатие клавиши ходило бы в rutor),
+  // свой лимит — 8 результатов, щедрый rate limit под debounce-запросы.
+  app.get(
+    "/items/suggest",
+    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const q = parseOrThrow(searchRawQuerySchema, request.query ?? {});
+      const result = await searchItems(db, { q: q.q, type: q.type, field: "title", limit: Math.min(q.limit, 8) });
+      reply.header("cache-control", "public, max-age=60");
+      return result;
+    },
+  );
+
   app.get(
     "/items/search",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
@@ -306,6 +321,12 @@ export async function catalogRoutes(
   app.get("/items/:id", async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     let item = await getItem(db, id);
+    if (!item) {
+      // Карточку влили в другую (склейка дублей) — отдаём выжившую;
+      // веб по item.id ≠ :id делает постоянный редирект.
+      const to = await resolveItemRedirect(db, id);
+      if (to != null) item = await getItem(db, to);
+    }
     if (!item) throw notFound(`Item ${id} not found`);
 
     // Сериал без эпизодов (заливка из TMDb) — дотягиваем сезоны лениво.

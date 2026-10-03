@@ -3,14 +3,12 @@
 /** Шапка сайта: логотип, навигация, состояние авторизации. */
 import Image from "next/image";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import * as React from "react";
+import { SearchBox } from "@/components/search-box";
 import { useAuth } from "@/lib/auth";
 
 export function Header() {
   const { user, api, logout } = useAuth();
-  const router = useRouter();
-  const [query, setQuery] = React.useState("");
   const [unread, setUnread] = React.useState(0);
 
   // Badge непросмотренных новинок — с 60с кэшем (раньше на каждый маунт/ререндер).
@@ -56,31 +54,7 @@ export function Header() {
           </Link>
         </nav>
 
-        <form
-          className="ml-auto flex items-center gap-2"
-          data-testid="search-form"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const q = query.trim();
-            if (q) router.push(`/search?q=${encodeURIComponent(q)}`);
-          }}
-        >
-          <input
-            className="w-40 rounded-full border border-border bg-surface-2 px-4 py-1.5 text-sm text-white outline-none transition focus:border-accent sm:w-56"
-            type="search"
-            placeholder="Поиск…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            data-testid="search-input"
-          />
-          <button
-            type="submit"
-            className="rounded-full bg-surface-2 px-4 py-1.5 text-sm text-muted transition hover:text-white"
-            data-testid="search-submit"
-          >
-            Найти
-          </button>
-        </form>
+        <SearchBox />
 
         {user ? (
           <div className="flex items-center gap-3">

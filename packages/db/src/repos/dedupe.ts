@@ -24,6 +24,7 @@
 import { sql } from "drizzle-orm";
 import type { Db } from "../db";
 import { items } from "../schema/index";
+import { recordItemRedirect } from "./redirects";
 
 export interface MergeDuplicatesOptions {
   /** trgm-сходство названий. Дефолт 0.6 — см. шапку модуля. */
@@ -285,6 +286,7 @@ async function mergePair(db: Db, victimId: number, targetId: number): Promise<vo
         then round(10.0 * votes_positive / (votes_positive + votes_negative)::float * 10) / 10
         else 0 end
       where id = ${targetId}`);
+    await recordItemRedirect(tx, victimId, targetId);
     await tx.execute(sql`delete from items where id = ${victimId}`);
   });
 }

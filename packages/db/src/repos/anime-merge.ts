@@ -15,6 +15,7 @@
  */
 import { sql } from "drizzle-orm";
 import type { Db } from "../db";
+import { recordItemRedirect } from "./redirects";
 import { flatEpisodes } from "./seasons";
 
 export interface AnimePair {
@@ -39,7 +40,7 @@ export async function findAnimeSourcePairs(db: Db, limit = 1000): Promise<AnimeP
     ),
     t as (
       select id, title, original_title, year from items
-      where external_source is null and tmdb_id is not null and type in ('serial', 'anime')
+      where external_source is null and tmdb_id is not null and type in ('serial', 'anime', 'movie')
     ),
     p as (
       select distinct on (a.id) a.id as aid, t.id as tid, a.title
@@ -54,8 +55,13 @@ export async function findAnimeSourcePairs(db: Db, limit = 1000): Promise<AnimeP
       (select count(*) from episodes e join seasons s on s.id = e.season_id
         where s.item_id = p.tid and s.number > 0)::int as te
     from p
+    join items ti on ti.id = p.tid
     -- один TMDb-тайтл принимает один релиз (у него одна пара external_*)
     where p.tid in (select tid from p group by tid having count(*) = 1)
+      -- фильм TMDb принимает только фильм-релиз: одна media, без сезонов
+      and (ti.type <> 'movie' or (
+        (select count(*) from media m where m.item_id = p.aid) = 1
+        and not exists (select 1 from seasons s where s.item_id = p.aid)))
     limit ${limit}
   `);
   return (res.rows as Array<{ aid: number; tid: number; title: string; am: number; te: number }>).map(
@@ -86,6 +92,14 @@ export async function absorbAnilibriaItem(
     `);
     const release = (src.rows as Array<{ external_id: string; plot: string | null }>)[0];
     if (!release) return 0;
+
+    const kind = await tx.execute<{ type: string }>(sql`select type from items where id = ${targetId}`);
+    const targetIsMovie = (kind.rows as Array<{ type: string }>)[0]?.type === "movie";
+    if (targetIsMovie) {
+      const moved = await absorbMovieMedia(tx, anilibriaId, targetId);
+      await moveSocialAndDelete(tx, anilibriaId, targetId, release, "movie");
+      return moved;
+    }
 
     const target = await flatEpisodes(tx, targetId);
     // Сквозная нумерация выжившего — по ней же импорт найдёт серию k релиза.
@@ -167,6 +181,48 @@ export async function absorbAnilibriaItem(
       moved++;
     }
 
+    await moveSocialAndDelete(tx, anilibriaId, targetId, release, "anime");
+    return moved;
+  });
+}
+
+/** Фильм-релиз AniLibria → плейсхолдер фильма TMDb (одна media без серии). */
+async function absorbMovieMedia(tx: Db, anilibriaId: number, targetId: number): Promise<number> {
+  const src = await tx.execute<{ id: number }>(sql`select id from media where item_id = ${anilibriaId} order by id limit 1`);
+  const m = (src.rows as Array<{ id: number }>)[0];
+  if (!m) return 0;
+  const ph = await tx.execute<{ id: number }>(sql`
+    select id from media where item_id = ${targetId} and episode_id is null
+    order by (source_key is null) desc, part_number nulls last, id limit 1
+  `);
+  const tm = (ph.rows as Array<{ id: number }>)[0];
+  if (!tm) {
+    await tx.execute(sql`update media set item_id = ${targetId} where id = ${m.id}`);
+    await tx.execute(sql`update watch_progress set item_id = ${targetId} where media_id = ${m.id}`);
+    return 1;
+  }
+  await tx.execute(sql`
+    update media t set
+      source_key = s.source_key,
+      runtime = case when t.runtime > 0 then t.runtime else s.runtime end
+    from media s where t.id = ${tm.id} and s.id = ${m.id}
+  `);
+  await tx.execute(sql`
+    delete from watch_progress w where w.media_id = ${m.id}
+      and exists (select 1 from watch_progress x where x.media_id = ${tm.id} and x.profile_id = w.profile_id)
+  `);
+  await tx.execute(sql`update watch_progress set media_id = ${tm.id}, item_id = ${targetId} where media_id = ${m.id}`);
+  await tx.execute(sql`delete from media where id = ${m.id}`);
+  return 1;
+}
+
+async function moveSocialAndDelete(
+  tx: Db,
+  anilibriaId: number,
+  targetId: number,
+  release: { external_id: string; plot: string | null },
+  type: "anime" | "movie",
+): Promise<void> {
     // Социалка и метаданные — как в общем дедупе.
     await tx.execute(sql`
       insert into item_genres (item_id, genre_id)
@@ -194,14 +250,13 @@ export async function absorbAnilibriaItem(
       update items set external_source = null, external_id = null where id = ${anilibriaId}`);
     await tx.execute(sql`
       update items t set
-        type = 'anime',
+        type = ${type},
         external_source = 'anilibria',
         external_id = ${release.external_id},
         plot = coalesce(t.plot, ${release.plot}),
         views = t.views + (select coalesce(views, 0) from items where id = ${anilibriaId}),
         updated_at = now()
       where t.id = ${targetId}`);
+    await recordItemRedirect(tx, anilibriaId, targetId);
     await tx.execute(sql`delete from items where id = ${anilibriaId}`);
-    return moved;
-  });
 }
