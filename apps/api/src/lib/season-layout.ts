@@ -63,6 +63,8 @@ export async function pickEpisodeGroupLayout(
   total: number,
 ): Promise<TmdbLayout | null> {
   const list = await tmdbGet<{ results?: GroupSummary[] }>(config, `/tv/${tmdbId}/episode_groups`);
+  // Сбой запроса ≠ «групп нет»: иначе транзиентная ошибка навсегда пометила бы тайтл.
+  if (!list) throw new Error(`tmdb: episode_groups ${tmdbId} unavailable`);
   const seasonish = (g: GroupSummary) => (SEASONISH.test(g.name) ? 0 : 1);
   const candidates = (list?.results ?? [])
     .filter(
@@ -155,14 +157,24 @@ export async function regroupLongSeasons(
   if (it.layout) return { status: "already" };
   if ((await longestSeason(db, itemId)) <= LONG_SEASON) return { status: "short" };
 
+  // Раскладки нет — помечаем «как у источника», чтобы фоновый догон не
+  // переспрашивал TMDb об этом тайтле каждый час. Новые серии таких тайтлов
+  // импорт кладёт как обычно (append только для tmdb-group:*).
+  const keepSource = async (status: RegroupStatus) => {
+    if (!opts.dryRun) {
+      await db.update(items).set({ seasonLayout: "source" }).where(eq(items.id, itemId));
+    }
+    return { status };
+  };
+
   const flat = await flatEpisodes(db, itemId);
   // У AniLibria серии — сквозные ordinal'ы «1/N», у TMDb — свои S/E.
   const byOrdinal = !it.tmdbId;
   const tmdbId = it.tmdbId ?? (await findTmdbAnimeId(config, [it.originalTitle, it.title]));
-  if (!tmdbId) return { status: "no-tmdb" };
+  if (!tmdbId) return keepSource("no-tmdb");
 
   const layout = await pickEpisodeGroupLayout(config, tmdbId, flat.length);
-  if (!layout) return { status: "no-groups" };
+  if (!layout) return keepSource("no-groups");
 
   const keyToId = new Map<string, number>();
   if (!byOrdinal) {
@@ -177,7 +189,7 @@ export async function regroupLongSeasons(
     for (const s of (show?.seasons ?? []).filter((x) => x.season_number > 0).sort((a, b) => a.season_number - b.season_number)) {
       for (let e = 1; e <= s.episode_count; e++) coords.push([s.season_number, e]);
     }
-    if (coords.length === 0 || flat.length > coords.length * 1.1) return { status: "low-coverage" };
+    if (coords.length === 0 || flat.length > coords.length * 1.1) return keepSource("low-coverage");
     for (const e of flat) {
       const c = e.origSeason === 1 ? coords[e.origNumber - 1] : undefined;
       if (c) keyToId.set(`${c[0]}:${c[1]}`, e.id);
@@ -189,10 +201,10 @@ export async function regroupLongSeasons(
     episodeIds: g.eps.map(([s, e]) => keyToId.get(`${s}:${e}`)).filter((id): id is number => id != null),
   }));
   const matched = groups.reduce((n, g) => n + g.episodeIds.length, 0);
-  if (matched < flat.length * 0.85) return { status: "low-coverage" };
+  if (matched < flat.length * 0.85) return keepSource("low-coverage");
   // У нас часть серий (ongoing, неполная заливка) — средний сезон считаем по нашим.
   const filled = groups.filter((g) => g.episodeIds.length > 0).length;
-  if (filled < 2 || matched / filled < MIN_AVG_GROUP) return { status: "no-groups" };
+  if (filled < 2 || matched / filled < MIN_AVG_GROUP) return keepSource("no-groups");
 
   const name = `tmdb-group:${layout.id}`;
   if (opts.dryRun) {

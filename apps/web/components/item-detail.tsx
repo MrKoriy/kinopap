@@ -16,6 +16,7 @@ import { Comments } from "@/components/comments";
 import { FavoriteButton } from "@/components/favorite-button";
 import { ItemActions } from "@/components/item-actions";
 import { PosterImage } from "@/components/poster-image";
+import { TrailerButton } from "@/components/trailer-button";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { useOptionalAuth } from "@/lib/auth";
@@ -304,6 +305,8 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
                 Сначала
               </Link>
             )}
+
+            <TrailerButton trailer={item.trailer} title={item.title} />
 
             <FavoriteButton itemId={item.id} />
 

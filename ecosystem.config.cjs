@@ -65,6 +65,8 @@ module.exports = {
         TRUST_PROXY: process.env.TRUST_PROXY ?? "true",
         // Фоновый прогрев популярного: клик «Смотреть» не ждёт rutor/TorrServer.
         PREWARM: process.env.PREWARM ?? "1",
+        // Догон серий сериалов и раскладка длинных сезонов — раз в час.
+        GAP_FILL: process.env.GAP_FILL ?? "1",
         RESOLVE_SOURCE_TTL_HOURS: process.env.RESOLVE_SOURCE_TTL_HOURS ?? "48",
       },
     },
@@ -83,6 +85,8 @@ module.exports = {
         MEDIA_BASE_URL: process.env.MEDIA_BASE_URL,
         LOCAL_SOURCE_ROOT: process.env.LOCAL_SOURCE_ROOT,
         TMDB_API_KEY: process.env.TMDB_API_KEY,
+        // Автопилот каталога: свежие релизы/аниме каждые 6 ч, широкий проход и трейлеры — раз в сутки.
+        AUTOPILOT: process.env.AUTOPILOT ?? "1",
       },
     },
     {

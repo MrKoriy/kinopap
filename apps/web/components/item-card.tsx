@@ -2,7 +2,7 @@
 
 import { ITEM_TYPE_TITLES, type ItemSummary } from "@zal/api-client";
 import { cn } from "@zal/ui";
-import { Film } from "lucide-react";
+import { Film, Play } from "lucide-react";
 import Link from "next/link";
 /** Карточка тайтла: постер, hover-оверлей, закладка и бейдж типа. */
 import * as React from "react";
@@ -45,10 +45,10 @@ export function ItemCard({
     <div className={cn("group relative w-full", className)}>
       <Link
         href={`/item/${item.id}`}
-        className="block w-full overflow-hidden rounded-[var(--radius-card)]"
+        className="block w-full"
         data-testid="item-card"
       >
-        <div className="relative aspect-[2/3] w-full overflow-hidden bg-surface-2">
+        <div className="relative aspect-[2/3] w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-2 ring-1 ring-white/5 transition group-hover:ring-white/20">
           {poster ? (
             <PosterImage
               src={poster}
@@ -70,14 +70,13 @@ export function ItemCard({
           )}
 
           {rating !== null && rating > 0 && (
-            <Badge className="absolute left-2 top-2 bg-black/70 text-white">
+            <Badge
+              className={cn(
+                "absolute left-2 top-2 border-transparent font-semibold tabular-nums text-white backdrop-blur-sm",
+                rating >= 7 ? "bg-emerald-600/90" : rating >= 5 ? "bg-amber-600/90" : "bg-black/70",
+              )}
+            >
               {rating.toFixed(1)}
-            </Badge>
-          )}
-
-          {typeTitle && (
-            <Badge className="absolute bottom-2 left-2 border-transparent bg-black/70 text-white">
-              {typeTitle}
             </Badge>
           )}
 
@@ -92,20 +91,29 @@ export function ItemCard({
           )}
 
           {/* Оверлей — чистый CSS-hover: motion тут дублировал group-hover. */}
-          <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/70 to-transparent p-3 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
-            <p className="text-sm font-semibold leading-tight text-white">{item.title}</p>
-            <p className="mt-1 text-xs text-white/70">
+          <div className="absolute inset-0 flex flex-col justify-end bg-gradient-to-t from-black/95 via-black/60 to-transparent p-3 opacity-0 transition-opacity duration-300 group-hover:opacity-100">
+            <span className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 scale-90 items-center justify-center rounded-full bg-accent/90 text-white shadow-lg transition duration-300 group-hover:scale-100">
+              <Play className="ml-0.5 h-5 w-5 fill-current" />
+            </span>
+            <p className="text-xs text-white/80">
               {[item.year, item.duration.average ? formatDurationHuman(item.duration.average) : null]
                 .filter(Boolean)
                 .join(" · ")}
             </p>
-            <p className="mt-0.5 line-clamp-1 text-xs text-white/60">
+            <p className="mt-0.5 line-clamp-2 text-xs text-white/60">
               {item.genres.map((g) => g.title).join(", ")}
             </p>
-            <span className="mt-2 w-fit rounded-full bg-accent px-3 py-1 text-xs font-semibold text-white">
-              Смотреть
-            </span>
           </div>
+        </div>
+        {/* Подпись под постером: на тач-экранах hover нет, и без неё сетка —
+            стена картинок без названий. */}
+        <div className="px-0.5 pt-2">
+          <p className="line-clamp-1 text-sm font-medium leading-tight text-white/90 group-hover:text-white">
+            {item.title}
+          </p>
+          <p className="mt-0.5 line-clamp-1 text-xs text-muted">
+            {[item.year, typeTitle].filter(Boolean).join(" · ") || "\u00a0"}
+          </p>
         </div>
       </Link>
 

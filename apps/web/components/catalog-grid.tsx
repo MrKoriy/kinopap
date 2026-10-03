@@ -45,6 +45,22 @@ export function CatalogGrid({
     }
   }, [cursor, loading, baseParams]);
 
+  // Бесконечная прокрутка: следующая страница грузится заранее, за ~1.5
+  // экрана до конца сетки. Кнопка «Показать ещё» остаётся запасным путём.
+  const sentinel = React.useRef<HTMLDivElement>(null);
+  React.useEffect(() => {
+    const el = sentinel.current;
+    if (!el || !cursor || typeof IntersectionObserver === "undefined") return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) void loadMore();
+      },
+      { rootMargin: "1200px 0px" },
+    );
+    io.observe(el);
+    return () => io.disconnect();
+  }, [cursor, loadMore]);
+
   return (
     <>
       <div
@@ -56,7 +72,7 @@ export function CatalogGrid({
         ))}
       </div>
       {cursor && (
-        <div className="mt-10 flex justify-center">
+        <div ref={sentinel} className="mt-10 flex justify-center">
           <button
             type="button"
             onClick={() => void loadMore()}

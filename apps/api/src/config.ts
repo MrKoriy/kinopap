@@ -35,6 +35,9 @@ const envSchema = z.object({
   RESOLVE_SOURCE_TTL_HOURS: z.coerce.number().positive().default(48),
   /** Фоновый прогрев популярного (PREWARM=1 в проде, в тестах выключен). */
   PREWARM: z.stringbool().default(false),
+  /** Фоновый догон сезонов: гидрация сериалов без серий + раскладка длинных. */
+  GAP_FILL: z.stringbool().default(false),
+  GAP_FILL_BATCH: z.coerce.number().int().positive().default(60),
   PREWARM_INTERVAL_MIN: z.coerce.number().positive().default(30),
   PREWARM_BATCH: z.coerce.number().int().positive().default(120),
   PREWARM_TOP: z.coerce.number().int().nonnegative().default(150),
@@ -56,6 +59,8 @@ export interface Config {
   gstLinkSecret?: string;
   resolveSourceTtlMs: number;
   prewarm: boolean;
+  gapFill: boolean;
+  gapFillBatch: number;
   prewarmIntervalMs: number;
   prewarmBatch: number;
   prewarmTop: number;
@@ -79,6 +84,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     gstLinkSecret: e.GST_LINK_SECRET || undefined,
     resolveSourceTtlMs: e.RESOLVE_SOURCE_TTL_HOURS * 60 * 60 * 1000,
     prewarm: e.PREWARM,
+    gapFill: e.GAP_FILL,
+    gapFillBatch: e.GAP_FILL_BATCH,
     prewarmIntervalMs: e.PREWARM_INTERVAL_MIN * 60 * 1000,
     prewarmBatch: e.PREWARM_BATCH,
     prewarmTop: e.PREWARM_TOP,
