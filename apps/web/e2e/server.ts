@@ -66,8 +66,11 @@ async function makeSampleMedia(dir: string): Promise<string> {
     "-c:a", "aac",
     "-metadata:s:a:0", "language=rus",
     "-metadata:s:a:0", "title=MVO Dublyazh",
+    // mp4-муксер ffmpeg 7 не сохраняет title дорожки — имя едет в handler_name.
+    "-metadata:s:a:0", "handler_name=MVO Dublyazh",
     "-metadata:s:a:1", "language=eng",
     "-metadata:s:a:1", "title=AVO Original",
+    "-metadata:s:a:1", "handler_name=AVO Original",
     videoPath,
   ]);
   await writeFile(

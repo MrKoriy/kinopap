@@ -69,6 +69,10 @@ test("голос, подписка, дерево комментариев и с�
   await page.getByTestId("comment-form-submit").click();
   const rootItem = page.locator('[data-testid="comment-item"]').filter({ hasText: rootText });
   await expect(rootItem).toBeVisible();
+  // Оптимистичная вставка живёт с временным отрицательным id, который после
+  // ответа сервера меняется на настоящий. Локатор по временному id в CI
+  // переставал находить узел — ждём подтверждённый id.
+  await expect(rootItem).toHaveAttribute("data-comment-id", /^\d+$/);
   const rootId = await rootItem.getAttribute("data-comment-id");
   // Карточка узла — прямой div-li: кнопки вложенных ответов не мешают.
   const rootCard = page.locator(
@@ -84,6 +88,7 @@ test("голос, подписка, дерево комментариев и с�
     .filter({ hasText: replyText })
     .last();
   await expect(replyItem).toBeVisible();
+  await expect(replyItem).toHaveAttribute("data-comment-id", /^\d+$/);
   const replyId = await replyItem.getAttribute("data-comment-id");
   const replyCard = page.locator(
     `[data-testid="comment-item"][data-comment-id="${replyId}"] > div`,

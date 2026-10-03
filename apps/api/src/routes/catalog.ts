@@ -38,6 +38,7 @@ import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
 import { idParamsSchema } from "../lib/params";
+import { signStreamLinks } from "../lib/stream-links";
 import { hydrateSerialSeasons, tmdbLookup } from "../lib/tmdb";
 import { optionalUser } from "../plugins/auth";
 
@@ -334,12 +335,24 @@ export async function catalogRoutes(
   });
 
   /** Ссылки на видео/аудио/субтитры для media (их /items/media-links). */
+  // Только для участников клуба: холодный резолв ходит в rutor/AniLibria и
+  // добавляет торренты в TorrServer, а ответ содержит ссылки на поток. Раньше
+  // любой аноним мог гонять это по всем id подряд (до 60 резолвов в минуту).
   app.get(
     "/items/:id/media-links",
-    { config: { rateLimit: { max: 60, timeWindow: "1 minute" } } },
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+    },
     async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const { mid } = parseOrThrow(mediaLinksQuerySchema, request.query ?? {});
+    const links = await resolveMediaLinks(id, mid);
+    return signStreamLinks(links, config.gstLinkSecret);
+    },
+  );
+
+  async function resolveMediaLinks(id: number, mid: number) {
     let links = await mediaLinks(db, id, mid, config.mediaBaseUrl);
     if (!links) {
       // Чужая пара (item, media) — 404. Заглушку создаём только если у item
@@ -350,6 +363,8 @@ export async function catalogRoutes(
         .where(eq(media.itemId, id))
         .limit(1);
       if (anyMedia.length > 0) throw notFound(`Media ${mid} not found for item ${id}`);
+      // Несуществующий item — 404, а не 500 от внешнего ключа на insert.
+      if (!(await getItem(db, id))) throw notFound(`Item ${id} not found`);
       const [insertedMedia] = await db
         .insert(media)
         .values({ itemId: id, partNumber: 1, title: "Основной" })
@@ -410,8 +425,7 @@ export async function catalogRoutes(
     }
 
     return links;
-    },
-  );
+  }
 
   /** Один холодный резолв пары (item, media): внешний мир → entry кэша. */
   async function resolveZeroStorage(
@@ -496,10 +510,21 @@ export async function catalogRoutes(
    */
   app.get(
     "/items/:id/media-tracks",
-    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
+    },
     async (request) => {
       const { id } = parseOrThrow(idParamsSchema, request.params);
       const { mid } = parseOrThrow(mediaLinksQuerySchema, request.query ?? {});
+      // Пара (item, media) обязана существовать: иначе warmFor ниже запускал
+      // полный внешний резолв для произвольной комбинации id.
+      const [owned] = await db
+        .select({ id: media.id })
+        .from(media)
+        .where(and(eq(media.id, mid), eq(media.itemId, id)))
+        .limit(1);
+      if (!owned) throw notFound(`Media ${mid} not found for item ${id}`);
       const key = `${id}:${mid}`;
       const inflight = trackProbes.get(key);
       if (inflight) return inflight;
@@ -535,7 +560,9 @@ export async function catalogRoutes(
 
       trackProbes.set(key, task);
       try {
-        return await task;
+        const tracks = await task;
+        const { audios } = signStreamLinks({ files: [], audios: tracks.audios }, config.gstLinkSecret);
+        return { ...tracks, audios };
       } finally {
         trackProbes.delete(key);
       }

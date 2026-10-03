@@ -205,6 +205,9 @@ test("полоса буфера: геометрия сходится с video.bu
     (url) => url.pathname.endsWith("/media-links"),
     async (route) => {
       const res = await route.fetch();
+      // 401 до восстановления сессии клиент сам повторит после refresh —
+      // такой ответ пропускаем как есть.
+      if (!res.ok()) return route.fulfill({ response: res });
       const body = (await res.json()) as { files: { urls: { hls: string | null } }[] };
       for (const file of body.files) {
         if (file.urls.hls) {
@@ -248,6 +251,14 @@ test("полоса буфера: геометрия сходится с video.bu
       });
     },
   );
+
+  // Ссылки на поток (media-links) выдаются только участникам клуба.
+  await page.goto("/");
+  await page.getByTestId("login-link").click();
+  await page.getByTestId("email-input").fill("e2e@zal.dev");
+  await page.getByTestId("password-input").fill("e2e-password-123");
+  await page.getByTestId("auth-submit").click();
+  await expect(page.getByTestId("logout-button")).toBeVisible();
 
   await page.goto(`/watch/${itemId}/${mediaId}`);
   await expect(page.getByTestId("player-screen")).toBeVisible({ timeout: 30_000 });

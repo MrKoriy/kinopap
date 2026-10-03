@@ -115,6 +115,9 @@ const videoState = (page: Page) =>
 
 test("плеер: персональный мастер дубляжа, субтитры и скорость", async ({ page }) => {
   const { itemId, mediaId } = await firstMedia();
+  // Ссылки на поток (media-links) выдаются только участникам клуба.
+  await page.goto("/");
+  await loginUi(page);
   await page.goto(`/watch/${itemId}/${mediaId}`);
   await expect(page.getByTestId("player-screen")).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId("player-seekbar")).toBeVisible({ timeout: 30_000 });

@@ -43,7 +43,9 @@ export default function WatchScreen() {
   const itemIdNum = Number(itemId);
   const mediaIdNum = Number(mediaId);
   const router = useRouter();
-  const { api } = useAuth();
+  // ready: токены из хранилища уже подняты. Без ожидания media-links уходил
+  // без токена, ловил 401 и делал лишнюю ротацию refresh-токена.
+  const { api, ready } = useAuth();
 
   const [links, setLinks] = React.useState<MediaLinks | null>(null);
   const [item, setItem] = React.useState<ItemDetail | null>(null);
@@ -103,6 +105,7 @@ export default function WatchScreen() {
   // стейт прошлого эпизода: субтитры, аудио, ошибку — иначе реплики
   // предыдущей серии рисуются поверх нового видео.
   React.useEffect(() => {
+    if (!ready) return;
     let cancelled = false;
     setCues([]);
     setActiveSub(null);
@@ -142,7 +145,7 @@ export default function WatchScreen() {
     return () => {
       cancelled = true;
     };
-  }, [api, itemIdNum, mediaIdNum]);
+  }, [api, ready, itemIdNum, mediaIdNum]);
 
   // 2. Следующая серия (для кнопки) — из карточки тайтла.
   React.useEffect(() => {
@@ -233,7 +236,7 @@ export default function WatchScreen() {
     if (!links) return null;
     const chosen = audioChoice == null ? null : links.audios[audioChoice];
     const candidates: Array<string | null> = [
-      chosen?.masterUrl,
+      chosen?.masterUrl ?? null,
       links.files.find((f) => f.urls.hls)?.urls.hls ?? null,
       links.files.find((f) => f.urls.http)?.urls.http ?? null,
     ];

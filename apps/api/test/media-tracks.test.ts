@@ -8,7 +8,7 @@ import type { AudioTrack, MediaFile, WarmRelease } from "@zal/api-client";
 import { mediaLinksSchema, mediaTracksSchema } from "@zal/api-client";
 import { getSource, saveSource } from "@zal/db";
 import { describe, expect, it } from "vitest";
-import { makeFixtures } from "./fixtures";
+import { makeFixtures, memberAuth } from "./fixtures";
 import { createTestApp } from "./setup";
 
 const FILE: MediaFile = {
@@ -61,6 +61,7 @@ describe("resolve cache (media_sources)", () => {
     const res = await app.inject({
       method: "GET",
       url: `/v1/items/${ids.serial}/media-links?mid=${ids.episodeMedia}`,
+      headers: await memberAuth(app, db),
     });
 
     expect(res.statusCode).toBe(200);
@@ -114,6 +115,7 @@ describe("GET /items/:id/media-tracks", () => {
     const res = await app.inject({
       method: "GET",
       url: `/v1/items/${ids.serial}/media-tracks?mid=${ids.episodeMedia}`,
+      headers: await memberAuth(app, db),
     });
 
     expect(res.statusCode).toBe(200);
@@ -129,6 +131,7 @@ describe("GET /items/:id/media-tracks", () => {
     const res = await app.inject({
       method: "GET",
       url: `/v1/items/${ids.movie}/media-tracks?mid=${ids.movieMedia}`,
+      headers: await memberAuth(app, db),
     });
 
     expect(res.statusCode).toBe(200);

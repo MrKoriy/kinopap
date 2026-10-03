@@ -12,14 +12,23 @@ import * as SecureStore from "expo-secure-store";
 import { Platform } from "react-native";
 import type { TokenStorage } from "./session";
 
+interface WebStorageLike {
+  getItem(key: string): string | null;
+  setItem(key: string, value: string): void;
+  removeItem(key: string): void;
+}
+
+// tsconfig мобилки без lib "dom" — берём localStorage через globalThis.
+const webLocalStorage = (): WebStorageLike | undefined =>
+  (globalThis as { localStorage?: WebStorageLike }).localStorage;
+
 const webStorage: TokenStorage = {
-  getItem: async (key) =>
-    typeof localStorage === "undefined" ? null : localStorage.getItem(key),
+  getItem: async (key) => webLocalStorage()?.getItem(key) ?? null,
   setItem: async (key, value) => {
-    if (typeof localStorage !== "undefined") localStorage.setItem(key, value);
+    webLocalStorage()?.setItem(key, value);
   },
   removeItem: async (key) => {
-    if (typeof localStorage !== "undefined") localStorage.removeItem(key);
+    webLocalStorage()?.removeItem(key);
   },
 };
 

@@ -181,6 +181,12 @@ describe("ProfilePage (авторизован)", () => {
 // откат при сбое), сама логика отката — в packages/shared/test/profile-actions.test.ts.
 describe("ProfilePage (оптимистичные мутации)", () => {
   it("удаляет запись истории сразу, при сбое возвращает, при успехе — нет", async () => {
+    // Сбой отдаём вручную: иначе отказ приходит раньше, чем waitFor успевает
+    // увидеть «строка ушла», и под нагрузкой тест флакает.
+    let failFirst: (err: Error) => void = () => {};
+    const firstCall = new Promise<never>((_, reject) => {
+      failFirst = reject;
+    });
     const api = {
       getProfileOverview: vi.fn().mockResolvedValue({
         profile: makeOverview({
@@ -189,7 +195,7 @@ describe("ProfilePage (оптимистичные мутации)", () => {
       }),
       deleteHistoryEntry: vi
         .fn()
-        .mockRejectedValueOnce(new Error("сеть"))
+        .mockReturnValueOnce(firstCall)
         .mockResolvedValue({ ok: true }),
     };
     mocks.auth = { user, api };
@@ -201,6 +207,7 @@ describe("ProfilePage (оптимистичные мутации)", () => {
     fireEvent.click(screen.getAllByTestId("history-delete")[0]!);
     await waitFor(() => expect(screen.getAllByTestId("history-row")).toHaveLength(1));
     expect(api.deleteHistoryEntry).toHaveBeenCalledWith(500);
+    failFirst(new Error("сеть"));
     await waitFor(() => expect(screen.getAllByTestId("history-row")).toHaveLength(2));
 
     // Второй клик: успех — строка остаётся удалённой.

@@ -5,7 +5,7 @@ import {
   mediaLinksSchema,
 } from "@zal/api-client";
 import { describe, expect, it } from "vitest";
-import { makeFixtures } from "./fixtures";
+import { makeFixtures, memberAuth } from "./fixtures";
 import { createTestApp } from "./setup";
 
 describe("catalog routes", () => {
@@ -185,6 +185,7 @@ describe("catalog routes", () => {
     const links = await app.inject({
       method: "GET",
       url: `/v1/items/${ids.movie}/media-links?mid=${ids.movieMedia}`,
+      headers: await memberAuth(app, db),
     });
     expect(links.statusCode).toBe(200);
     const parsed = mediaLinksSchema.parse(links.json());
@@ -197,6 +198,7 @@ describe("catalog routes", () => {
     const wrong = await app.inject({
       method: "GET",
       url: `/v1/items/${ids.serial}/media-links?mid=${ids.movieMedia}`,
+      headers: await memberAuth(app, db),
     });
     expect(wrong.statusCode).toBe(404);
   });

@@ -279,8 +279,54 @@ PY
   fi
   # /gst — HLS-транскодер TorrServer (AAC-звук для браузеров). Сегменты
   # генерируются на лету — буферизация nginx выключена, таймаут длинный.
-  if ! grep -q "location /gst/" "\$NGINX_SITE"; then
-    python3 - "\$NGINX_SITE" <<'PY'
+  #
+  # Раньше /gst/ проксировался наружу без проверки: любой мог попросить сервер
+  # скачать и раздать произвольный торрент по хешу. Теперь, если в .env задан
+  # GST_LINK_SECRET, наружу открыт только /gst-s/<expires>/<sig>/<hash>/... —
+  # подпись выдаёт API участникам клуба (apps/api/src/lib/stream-links.ts),
+  # nginx проверяет её модулем secure_link. Голый /gst/ — 403.
+  # Блок управляемый (маркеры BEGIN/END): при смене секрета пересоздаётся.
+  GST_SECRET=\$(grep -m1 '^GST_LINK_SECRET=' .env 2>/dev/null | cut -d= -f2- || true)
+  if [ -n "\$GST_SECRET" ]; then
+    GST_LINK_SECRET="\$GST_SECRET" python3 - "\$NGINX_SITE" <<'PY'
+import os, re, sys
+p = sys.argv[1]
+secret = os.environ["GST_LINK_SECRET"]
+if not re.fullmatch(r"[A-Za-z0-9_\-]{32,}", secret):
+    sys.exit("GST_LINK_SECRET: только [A-Za-z0-9_-], минимум 32 символа")
+s = open(p).read()
+# Старый открытый блок и прежняя версия управляемого — убираем.
+s = re.sub(r"\n?[ \t]*# BEGIN kinopap-gst.*?# END kinopap-gst[^\n]*\n?", "\n", s, flags=re.S)
+s = re.sub(r"\n?[ \t]*location /gst/ \{[^}]*\}\n?", "\n", s)
+block = """
+    # BEGIN kinopap-gst (managed by bin/deploy.sh)
+    location /gst/ {
+        return 403;
+    }
+    location ~ ^/gst-s/(?<gst_exp>[0-9]+)/(?<gst_sig>[A-Za-z0-9_-]+)/(?<gst_hash>[0-9a-fA-F]{40})/(?<gst_rest>.*)$ {
+        secure_link \$gst_sig,\$gst_exp;
+        secure_link_md5 "\$gst_exp\$gst_hash SECRET";
+        if (\$secure_link = "") { return 403; }
+        if (\$secure_link = "0") { return 410; }
+        proxy_pass http://127.0.0.1:7002/gst/\$gst_hash/\$gst_rest\$is_args\$args;
+        proxy_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+    # END kinopap-gst
+""".replace("SECRET", secret)
+m = re.search(r"location[^\{]*\{", s)
+if m:
+    s = s[:m.start()] + block.strip("\n").lstrip() + "\n    " + s[m.start():]
+    open(p, "w").write(s)
+    os.chmod(p, 0o640)
+    print("nginx: /gst закрыт подписью (secure_link)")
+PY
+  else
+    echo "  ВНИМАНИЕ: GST_LINK_SECRET не задан — /gst/ открыт наружу без проверки." >&2
+    echo '  Сгенерируйте: echo "GST_LINK_SECRET=\$(openssl rand -hex 32)" >> .env' >&2
+    if ! grep -q "location /gst/" "\$NGINX_SITE"; then
+      python3 - "\$NGINX_SITE" <<'PY'
 import re, sys
 p = sys.argv[1]
 s = open(p).read()
@@ -298,6 +344,7 @@ if m:
     open(p, "w").write(s)
     print("nginx: /gst добавлен")
 PY
+    fi
   fi
   nginx -t && systemctl reload nginx
 fi
@@ -372,7 +419,8 @@ tail -1 /tmp/kinopap-install.log
 # продолжает работать прежний релиз, и удалённая колонка уронит живой сайт.
 # Обратной совместимости здесь не на чем стоять — её обеспечивает только
 # порядок «сначала добавили, потом убрали в следующем релизе».
-if ! pnpm db:setup > /tmp/kinopap-db-setup.log 2>&1; then
+# ZAL_DEPLOY=1: сид не создаёт дефолтного владельца owner@zal.local/change-me-owner.
+if ! ZAL_DEPLOY=1 pnpm db:setup > /tmp/kinopap-db-setup.log 2>&1; then
   tail -30 /tmp/kinopap-db-setup.log >&2
   fail "миграции/сид упали (полный лог: /tmp/kinopap-db-setup.log)"
 fi
