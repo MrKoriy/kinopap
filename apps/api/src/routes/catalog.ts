@@ -25,6 +25,7 @@ import {
   media,
   mediaLinks,
   patchSource,
+  prewarmCandidates,
   saveSource,
   searchItems,
   seasons,
@@ -48,8 +49,8 @@ const genresQuerySchema = z.object({ type: z.string().optional() });
 /** TTL кэша on-the-fly резолва стримов: повторное открытие watch-страницы
  * не должно снова ходить в rutor (до ~12с латентности). */
 const RESOLVE_CACHE_TTL_MS = 30 * 60 * 1000;
-/** TTL кэша в БД: переживает рестарт API, но не копится бесконечно. */
-const RESOLVE_DB_TTL_MS = 6 * 60 * 60 * 1000;
+/** Прогрев считает пару свежей, если её резолвили позже этого срока. */
+const PREWARM_FRESH_MS = 20 * 60 * 60 * 1000;
 /** Бюджет ожидания ленивой гидрации сезонов в request path. */
 const HYDRATE_AWAIT_BUDGET_MS = 2_500;
 
@@ -69,6 +70,9 @@ export async function catalogRoutes(
   deps: { db: Db; config: Config },
 ): Promise<void> {
   const { db, config } = deps;
+  /** TTL кэша в БД: раздача живёт днями, а холодный резолв стоит 1–10 с.
+   * Раньше 6 ч — при малом трафике кэш вымирал к каждому вечеру. */
+  const RESOLVE_DB_TTL_MS = config.resolveSourceTtlMs;
 
   // Кэш zero-storage резолва: item/media → ссылки. L1 — память процесса,
   // L2 — таблица media_sources в БД (переживает рестарт/деплой).
@@ -335,14 +339,13 @@ export async function catalogRoutes(
   });
 
   /** Ссылки на видео/аудио/субтитры для media (их /items/media-links). */
-  // Только для участников клуба: холодный резолв ходит в rutor/AniLibria и
-  // добавляет торренты в TorrServer, а ответ содержит ссылки на поток. Раньше
-  // любой аноним мог гонять это по всем id подряд (до 60 резолвов в минуту).
+  // Открыто и гостям: смотреть можно без входа. От перебора защищают
+  // per-IP лимит, подпись /gst-ссылок (nginx secure_link) и то, что
+  // резолвятся только существующие пары (item, media) из каталога.
   app.get(
     "/items/:id/media-links",
     {
-      preHandler: app.authenticate,
-      config: { rateLimit: { max: 60, timeWindow: "1 minute" } },
+      config: { rateLimit: { max: 40, timeWindow: "1 minute" } },
     },
     async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
@@ -511,12 +514,19 @@ export async function catalogRoutes(
   app.get(
     "/items/:id/media-tracks",
     {
-      preHandler: app.authenticate,
       config: { rateLimit: { max: 30, timeWindow: "1 minute" } },
     },
     async (request) => {
       const { id } = parseOrThrow(idParamsSchema, request.params);
       const { mid } = parseOrThrow(mediaLinksQuerySchema, request.query ?? {});
+      const tracks = await probeTracks(id, mid);
+      const { audios } = signStreamLinks({ files: [], audios: tracks.audios }, config.gstLinkSecret);
+      return { ...tracks, audios };
+    },
+  );
+
+  /** Аудио-дорожки пары (item, media): L1 → БД → gst-проба прогретого релиза. */
+  async function probeTracks(id: number, mid: number): Promise<MediaTracks> {
       // Пара (item, media) обязана существовать: иначе warmFor ниже запускал
       // полный внешний резолв для произвольной комбинации id.
       const [owned] = await db
@@ -560,14 +570,77 @@ export async function catalogRoutes(
 
       trackProbes.set(key, task);
       try {
-        const tracks = await task;
-        const { audios } = signStreamLinks({ files: [], audios: tracks.audios }, config.gstLinkSecret);
-        return { ...tracks, audios };
+        return await task;
       } finally {
         trackProbes.delete(key);
       }
-    },
-  );
+  }
+
+  /* ---------- Фоновый прогрев ----------
+   * Клик «Смотреть» не должен ждать rutor + TorrServer (холодный резолв
+   * p50 ≈ 1 с, p90 ≈ 3 с, хвост до 10 с — по логам прода). Раз в
+   * PREWARM_INTERVAL прогреваем то, что вероятнее всего откроют: следующие
+   * серии у смотрящих, подписки/избранное, ленты главной и топ каталога.
+   * Последовательно и с паузой — rutor и DHT не любят залпов. */
+  if (config.prewarm) {
+    let stopped = false;
+    let running = false;
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    const cycle = async () => {
+      if (running || stopped) return;
+      running = true;
+      const started = Date.now();
+      let warmed = 0;
+      let failed = 0;
+      try {
+        const rails = await Promise.all(
+          (["fresh", "hot", "popular"] as const).map((k) =>
+            shortcutItems(db, k, { limit: 24 }).catch(() => ({ items: [] }) as unknown as ItemPage),
+          ),
+        );
+        const extraItemIds = rails.flatMap((p) => p.items.map((i) => i.id));
+        const targets = await prewarmCandidates(db, {
+          limit: config.prewarmBatch,
+          topLimit: config.prewarmTop,
+          extraItemIds,
+          freshMs: PREWARM_FRESH_MS,
+        });
+        for (const t of targets) {
+          if (stopped) break;
+          try {
+            const links = await resolveMediaLinks(t.itemId, t.mediaId ?? 0);
+            if (links.files.length > 0) {
+              warmed++;
+              // Дорожки — только для самого ценного: gst-проба тянет голову
+              // файла (заодно кладёт её в кэш TorrServer), это дорого.
+              if (t.priority <= 1) {
+                await probeTracks(t.itemId, links.mediaId).catch(() => null);
+              }
+            } else failed++;
+          } catch {
+            failed++;
+          }
+          await sleep(config.prewarmPauseMs);
+        }
+        console.log(
+          `prewarm: targets=${targets.length} warmed=${warmed} empty=${failed} in ${Math.round((Date.now() - started) / 1000)}s`,
+        );
+      } catch (err) {
+        console.warn("prewarm: cycle failed:", String(err).slice(0, 200));
+      } finally {
+        running = false;
+      }
+    };
+    const first = setTimeout(() => void cycle(), 60_000);
+    const timer = setInterval(() => void cycle(), config.prewarmIntervalMs);
+    timer.unref?.();
+    first.unref?.();
+    app.addHook("onClose", async () => {
+      stopped = true;
+      clearTimeout(first);
+      clearInterval(timer);
+    });
+  }
 
   app.get("/items/:id/similar", async (request) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);

@@ -1,5 +1,5 @@
 /**
- * Доступ к потокам: media-links/media-tracks только для участников,
+ * Доступ к потокам: media-links/media-tracks открыты и гостям,
  * ссылки на /gst подписываются для nginx secure_link.
  */
 import type { MediaFile } from "@zal/api-client";
@@ -27,17 +27,25 @@ const FILE: MediaFile = {
   },
 };
 
-describe("media-links/media-tracks: только для участников", () => {
-  it("аноним получает 401 и ничего не резолвит", async () => {
+describe("media-links/media-tracks: открыты гостям", () => {
+  it("гость получает ссылки из кэша резолва без входа", async () => {
     const { app, db } = await createTestApp();
     const ids = await makeFixtures(db);
-    for (const route of ["media-links", "media-tracks"]) {
-      const res = await app.inject({
-        method: "GET",
-        url: `/v1/items/${ids.movie}/${route}?mid=${ids.movieMedia}`,
-      });
-      expect(res.statusCode).toBe(401);
-    }
+    await saveSource(db, {
+      itemId: ids.movie,
+      mediaId: ids.movieMedia,
+      files: [FILE],
+      audios: [],
+      intro: null,
+      warm: null,
+    });
+    const res = await app.inject({
+      method: "GET",
+      url: `/v1/items/${ids.movie}/media-links?mid=${ids.movieMedia}`,
+    });
+    expect(res.statusCode).toBe(200);
+    const links = mediaLinksSchema.parse(res.json());
+    expect(links.files).toHaveLength(1);
   });
 
   it("media-tracks с чужой парой (item, media) — 404 до любого резолва", async () => {

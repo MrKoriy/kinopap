@@ -35,7 +35,7 @@ const db = createDb(pool);
 // долгоживущем процессе без рестарта media_sources разрасталась бесконечно).
 const PURGE_TOKENS_INTERVAL_MS = 60 * 60 * 1000;
 const PURGE_SOURCES_INTERVAL_MS = 60 * 60 * 1000;
-const RESOLVE_SOURCE_TTL_MS = 6 * 60 * 60 * 1000;
+const RESOLVE_SOURCE_TTL_MS = config.resolveSourceTtlMs;
 
 async function purgeOnce() {
   try {

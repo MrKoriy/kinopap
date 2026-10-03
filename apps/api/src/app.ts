@@ -86,6 +86,23 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     }
   });
 
+  // Публичные GET без токена — кэшируемы браузером и nginx-микрокэшем: ленты,
+  // карточки и справочники одинаковы для всех гостей. С токеном — как было
+  // (персональные поля в ответе не должны оседать в общих кэшах).
+  const PUBLIC_CACHEABLE =
+    /^\/v1\/(?:items(?:\/(?:fresh|hot|popular|summary|\d+(?:\/similar)?))?|genres|countries|types)(?:\?|$)/;
+  app.addHook("onSend", async (request, reply) => {
+    if (
+      request.method === "GET" &&
+      reply.statusCode === 200 &&
+      !request.headers.authorization &&
+      !reply.getHeader("cache-control") &&
+      PUBLIC_CACHEABLE.test(request.url)
+    ) {
+      reply.header("cache-control", "public, max-age=30, stale-while-revalidate=600");
+    }
+  });
+
   app.addHook("onSend", async (_request, reply) => {
     // Базовые security-заголовки: API отдаёт JSON, но docs-роут рисует
     // HTML — nosniff и frameguard нужны и там.

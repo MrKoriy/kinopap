@@ -1,0 +1,9 @@
+[Unit]
+Description=kinopap: обрезка дискового кэша TorrServer
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/opt/kinopap/.env
+ExecStart=/usr/bin/python3 /opt/kinopap/bin/ts-cache-prune.py
+Nice=10
+IOSchedulingClass=idle

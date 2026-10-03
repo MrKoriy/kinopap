@@ -171,10 +171,11 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
   // Тихий прогрев стримов, пока пользователь читает карточку: резолвер
   // положит релиз в TorrServer и кэш API — переход «Смотреть» откроется
   // мгновенно, пиры к моменту play уже подключены.
+  // Гостям тоже: смотреть можно без входа.
   React.useEffect(() => {
-    if (!isAuthed || !api) return;
+    if (!api) return;
     void api.getMediaLinks(item.id, playMediaId).catch(() => {});
-  }, [api, isAuthed, item.id, playMediaId]);
+  }, [api, item.id, playMediaId]);
 
   const poster = item.posters.big ?? item.posters.medium;
   const rating = item.rating > 0 ? item.rating : item.imdb.rating;

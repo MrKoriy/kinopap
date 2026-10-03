@@ -1,0 +1,10 @@
+[Unit]
+Description=kinopap: обрезка кэша TorrServer каждые 15 минут
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

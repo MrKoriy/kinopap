@@ -31,6 +31,14 @@ const envSchema = z.object({
     .string()
     .optional()
     .refine((v) => !v || v.length >= 32, "GST_LINK_SECRET: минимум 32 символа"),
+  /** Сколько часов кэш резолва (media_sources) считается рабочим. */
+  RESOLVE_SOURCE_TTL_HOURS: z.coerce.number().positive().default(48),
+  /** Фоновый прогрев популярного (PREWARM=1 в проде, в тестах выключен). */
+  PREWARM: z.stringbool().default(false),
+  PREWARM_INTERVAL_MIN: z.coerce.number().positive().default(30),
+  PREWARM_BATCH: z.coerce.number().int().positive().default(120),
+  PREWARM_TOP: z.coerce.number().int().nonnegative().default(150),
+  PREWARM_PAUSE_MS: z.coerce.number().int().nonnegative().default(1500),
 });
 
 export interface Config {
@@ -46,6 +54,12 @@ export interface Config {
   cookieSecure: boolean;
   trustProxy: boolean;
   gstLinkSecret?: string;
+  resolveSourceTtlMs: number;
+  prewarm: boolean;
+  prewarmIntervalMs: number;
+  prewarmBatch: number;
+  prewarmTop: number;
+  prewarmPauseMs: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -63,5 +77,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cookieSecure: e.COOKIE_SECURE,
     trustProxy: e.TRUST_PROXY,
     gstLinkSecret: e.GST_LINK_SECRET || undefined,
+    resolveSourceTtlMs: e.RESOLVE_SOURCE_TTL_HOURS * 60 * 60 * 1000,
+    prewarm: e.PREWARM,
+    prewarmIntervalMs: e.PREWARM_INTERVAL_MIN * 60 * 1000,
+    prewarmBatch: e.PREWARM_BATCH,
+    prewarmTop: e.PREWARM_TOP,
+    prewarmPauseMs: e.PREWARM_PAUSE_MS,
   };
 }

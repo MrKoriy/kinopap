@@ -121,6 +121,7 @@ rsync -az --delete \
 # отставал от репозитория на несколько правок, а заметить это было нечем:
 # локальный файл выглядел рабочим, а на сервере работал старый.
 rsync -az bin/backup.sh bin/fill-catalog.sh bin/restart-apps.sh \
+  bin/nginx-tune.py bin/torrserver-tune.sh bin/ts-cache-prune.py \
   "$SERVER:$APP_DIR/bin/"
 rsync -az bin/systemd/ "$SERVER:$APP_DIR/bin/systemd/"
 
@@ -286,6 +287,13 @@ PY
   # подпись выдаёт API участникам клуба (apps/api/src/lib/stream-links.ts),
   # nginx проверяет её модулем secure_link. Голый /gst/ — 403.
   # Блок управляемый (маркеры BEGIN/END): при смене секрета пересоздаётся.
+  # Секрета подписи нет — создаём: без него /gst/ открыт наружу, и любой
+  # может заставить сервер качать и раздавать произвольный торрент.
+  if ! grep -q '^GST_LINK_SECRET=.\{32,\}' .env 2>/dev/null; then
+    sed -i '/^GST_LINK_SECRET=/d' .env
+    echo "GST_LINK_SECRET=\$(openssl rand -hex 32)" >> .env
+    echo "  + GST_LINK_SECRET (сгенерирован)"
+  fi
   GST_SECRET=\$(grep -m1 '^GST_LINK_SECRET=' .env 2>/dev/null | cut -d= -f2- || true)
   if [ -n "\$GST_SECRET" ]; then
     GST_LINK_SECRET="\$GST_SECRET" python3 - "\$NGINX_SITE" <<'PY'
@@ -346,7 +354,19 @@ if m:
 PY
     fi
   fi
-  nginx -t && systemctl reload nginx
+  # Перф-блок (gzip, микрокэш API, кэш постеров вне релизов, HTTP/2) и
+  # закрытый /torrents. Не прошёл nginx -t — возвращаем прежний vhost.
+  cp "\$NGINX_SITE" /tmp/kinopap-vhost.prev
+  python3 $APP_DIR/bin/nginx-tune.py "\$NGINX_SITE"
+  if nginx -t 2>/tmp/kinopap-nginx-t.log; then
+    systemctl reload nginx
+  else
+    cat /tmp/kinopap-nginx-t.log >&2
+    echo "  ВНИМАНИЕ: nginx -t не прошёл — откатываю vhost" >&2
+    cat /tmp/kinopap-vhost.prev > "\$NGINX_SITE"
+    rm -f /etc/nginx/conf.d/kinopap-cache.conf
+    nginx -t && systemctl reload nginx
+  fi
 fi
 mkdir -p "$APP_DIR/media"
 
@@ -356,9 +376,12 @@ mkdir -p "$APP_DIR/media"
 if [ -d "$APP_DIR/bin/systemd" ]; then
   install -m 644 "$APP_DIR/bin/systemd/kinopap-backup.service" /etc/systemd/system/
   install -m 644 "$APP_DIR/bin/systemd/kinopap-backup.timer" /etc/systemd/system/
+  install -m 644 "$APP_DIR/bin/systemd/kinopap-ts-prune.service" /etc/systemd/system/
+  install -m 644 "$APP_DIR/bin/systemd/kinopap-ts-prune.timer" /etc/systemd/system/
   chmod +x "$APP_DIR/bin/backup.sh" "$APP_DIR/bin/fill-catalog.sh" "$APP_DIR/bin/restart-apps.sh"
   systemctl daemon-reload
   systemctl enable --now kinopap-backup.timer >/dev/null 2>&1 || true
+  systemctl enable --now kinopap-ts-prune.timer >/dev/null 2>&1 || true
 fi
 
 # --- кэш media_sources: выкидываем ссылки с зашитым хостом ---
@@ -538,6 +561,9 @@ set -a; . ./.env; set +a
 cd packages/db
 npx tsx src/seed-catalog.ts 2>&1 | tail -3
 REMOTE
+
+echo "==> 4b: TorrServer — дисковый кэш и быстрый старт"
+ssh "$SERVER" "$APP_DIR/bin/torrserver-tune.sh" || echo "  ВНИМАНИЕ: TorrServer не настроен (не отвечает?)" >&2
 
 echo "==> 5/6: смоук"
 ssh "$SERVER" bash -s <<REMOTE

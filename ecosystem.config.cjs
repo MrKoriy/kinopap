@@ -63,6 +63,9 @@ module.exports = {
         // false: без прокси заголовок подделывается и обходит лимиты).
         // Перекрывается через .env, если топология изменится.
         TRUST_PROXY: process.env.TRUST_PROXY ?? "true",
+        // Фоновый прогрев популярного: клик «Смотреть» не ждёт rutor/TorrServer.
+        PREWARM: process.env.PREWARM ?? "1",
+        RESOLVE_SOURCE_TTL_HOURS: process.env.RESOLVE_SOURCE_TTL_HOURS ?? "48",
       },
     },
     {
