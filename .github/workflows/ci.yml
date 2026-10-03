@@ -34,13 +34,16 @@ jobs:
       - name: Typecheck
         run: pnpm typecheck
 
-      - name: Unit tests (PGlite, без Docker)
-        run: pnpm test
-
-      - name: ffmpeg для e2e-харнесса
+      # ffmpeg нужен уже юнит-тестам ingest/worker (тестовые медиа генерируются
+      # ffmpeg'ом), а не только e2e: раньше он ставился после unit-тестов,
+      # и на раннере без ffmpeg CI падал на ingest.
+      - name: ffmpeg (unit-тесты ingest и e2e-харнесс)
         run: |
           which ffmpeg || (sudo apt-get update && sudo apt-get install -y ffmpeg)
           ffmpeg -version | head -1
+
+      - name: Unit tests (PGlite, без Docker)
+        run: pnpm test
 
       - name: Playwright browsers
         run: pnpm --filter @zal/web exec playwright install --with-deps chromium
