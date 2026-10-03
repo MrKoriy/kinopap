@@ -81,6 +81,8 @@ export const catalogRawQuerySchema = z.object({
   letter: z.string().trim().min(1).max(1).optional(),
   actor: z.string().trim().min(1).max(200).optional(),
   director: z.string().trim().min(1).max(200).optional(),
+  /** Рейтинг от N (0–10): свой рейтинг, иначе IMDb, иначе Кинопоиск. */
+  rating: z.coerce.number().min(0).max(10).optional(),
   sort: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   cursor: z.string().optional(),
@@ -98,6 +100,7 @@ export interface CatalogFilters {
   letter?: string;
   actor?: string;
   director?: string;
+  ratingMin?: number;
   sort: SortSpec;
   limit: number;
   cursor?: string | null;
@@ -116,6 +119,7 @@ export function parseCatalogQuery(raw: unknown): CatalogFilters {
     letter: q.letter,
     actor: q.actor,
     director: q.director,
+    ratingMin: q.rating && q.rating > 0 ? q.rating : undefined,
     sort: parseSort(q.sort),
     limit: q.limit,
     cursor: q.cursor ?? null,

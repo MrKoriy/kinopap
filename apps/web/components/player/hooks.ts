@@ -2,6 +2,7 @@
 
 import type { ApiClient, MediaLinks, SpriteMetaDto } from "@zal/api-client";
 import * as React from "react";
+import { saveGuestProgress } from "@/lib/guest-progress";
 import {
   type BufferedSegment,
   bufferedSegments,
@@ -118,12 +119,14 @@ export function useBufferedRanges(
  */
 export function useProgressReporting({
   videoRef,
+  itemId,
   mediaId,
   api,
   enabled,
   playing,
 }: {
   videoRef: React.RefObject<HTMLVideoElement | null>;
+  itemId: number;
   mediaId: number;
   api: ApiClient;
   /** Есть вход в аккаунт: гостю сохранять нечего. */
@@ -132,14 +135,19 @@ export function useProgressReporting({
 }): () => void {
   const reportProgress = React.useCallback(() => {
     const video = videoRef.current;
-    if (!video || !enabled || !video.duration) return;
+    if (!video?.duration) return;
+    if (!enabled) {
+      // Гость: прогресс в localStorage («Продолжить смотреть» без входа).
+      saveGuestProgress(itemId, mediaId, video.currentTime, video.duration);
+      return;
+    }
     void api
       .saveProgress(mediaId, {
         positionSeconds: video.currentTime,
         durationSeconds: video.duration,
       })
       .catch(() => {});
-  }, [api, enabled, mediaId, videoRef]);
+  }, [api, enabled, itemId, mediaId, videoRef]);
 
   React.useEffect(() => {
     if (!playing) return;

@@ -4,7 +4,7 @@ import type { ItemSummary } from "@zal/api-client";
 import { tokens } from "@zal/ui";
 import { Link, useRouter } from "expo-router";
 /**
- * Главная: горизонтальные ленты fresh/hot/popular из общего API,
+ * Главная: Топ-10, свежее, ленты по типам и высокий рейтинг из общего API,
  * входы в поиск и подписки, состояние авторизации.
  */
 import * as React from "react";
@@ -22,13 +22,26 @@ import { ItemCard } from "../components/item-card";
 import { useTvFocus } from "../components/tv-focus";
 import { useAuth } from "../lib/auth";
 
-type ShortcutKind = "fresh" | "hot" | "popular";
+type SectionKey = "hot" | "fresh" | "movie" | "serial" | "anime" | "top";
 
-const SECTIONS: { kind: ShortcutKind; title: string }[] = [
-  { kind: "fresh", title: "Новинки" },
-  { kind: "hot", title: "Сейчас смотрят" },
-  { kind: "popular", title: "Популярное" },
+/** Ленты главной — как на вебе: Топ-10, свежее, по типам, высокий рейтинг. */
+const SECTIONS: { key: SectionKey; title: string; ranked?: boolean }[] = [
+  { key: "hot", title: "Топ-10 сегодня", ranked: true },
+  { key: "fresh", title: "Свежее" },
+  { key: "movie", title: "Фильмы" },
+  { key: "serial", title: "Сериалы" },
+  { key: "anime", title: "Аниме" },
+  { key: "top", title: "Высокий рейтинг" },
 ];
+
+const EMPTY_SECTIONS: Record<SectionKey, ItemSummary[]> = {
+  hot: [],
+  fresh: [],
+  movie: [],
+  serial: [],
+  anime: [],
+  top: [],
+};
 
 export default function HomeScreen() {
   const { user, ready, api, logout } = useAuth();
@@ -41,9 +54,7 @@ export default function HomeScreen() {
     const initial = process.env.EXPO_PUBLIC_INITIAL_ROUTE;
     if (initial) router.replace(initial as never);
   }, [router]);
-  const [sections, setSections] = React.useState<
-    Record<ShortcutKind, ItemSummary[]>
-  >({ fresh: [], hot: [], popular: [] });
+  const [sections, setSections] = React.useState<Record<SectionKey, ItemSummary[]>>(EMPTY_SECTIONS);
   const [loading, setLoading] = React.useState(true);
   // Сетевой сбой отдельным флагом: без него пустые ленты выглядели бы как
   // «просто ничего нового», а не как «не загрузилось».
@@ -62,13 +73,22 @@ export default function HomeScreen() {
   // pull-to-refresh — один и тот же путь данных.
   const loadSections = React.useCallback(async () => {
     try {
-      const pages = await Promise.all(
-        SECTIONS.map((s) => api.getShortcut(s.kind, { limit: 10 })),
-      );
+      const byViews = { field: "views" as const, dir: "desc" as const };
+      const [hot, fresh, movie, serial, anime, top] = await Promise.all([
+        api.getShortcut("hot", { limit: 10 }),
+        api.getShortcut("fresh", { limit: 12 }),
+        api.listItems({ type: "movie", sort: byViews, limit: 12 }),
+        api.listItems({ type: "serial", sort: byViews, limit: 12 }),
+        api.listItems({ type: "anime", sort: byViews, limit: 12 }),
+        api.getShortcut("popular", { limit: 12 }),
+      ]);
       setSections({
-        fresh: pages[0]!.items,
-        hot: pages[1]!.items,
-        popular: pages[2]!.items,
+        hot: hot.items,
+        fresh: fresh.items,
+        movie: movie.items,
+        serial: serial.items,
+        anime: anime.items,
+        top: top.items,
       });
       setFailed(false);
     } catch {
@@ -169,23 +189,26 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {SECTIONS.map((section) => (
-        <View key={section.kind} style={styles.section}>
-          <Text style={styles.sectionTitle}>{section.title}</Text>
-          <FlatList
-            horizontal
-            data={sections[section.kind]}
-            keyExtractor={(item) => String(item.id)}
-            renderItem={({ item, index }) => (
-              <ItemCard
-                item={item}
-                preferredFocus={section.kind === "fresh" && index === 0}
-              />
-            )}
-            showsHorizontalScrollIndicator={false}
-          />
-        </View>
-      ))}
+      {SECTIONS.map((section) =>
+        sections[section.key].length === 0 ? null : (
+          <View key={section.key} style={styles.section}>
+            <Text style={styles.sectionTitle}>{section.title}</Text>
+            <FlatList
+              horizontal
+              data={sections[section.key]}
+              keyExtractor={(item) => String(item.id)}
+              renderItem={({ item, index }) => (
+                <ItemCard
+                  item={item}
+                  rank={section.ranked ? index + 1 : undefined}
+                  preferredFocus={section.key === "hot" && index === 0}
+                />
+              )}
+              showsHorizontalScrollIndicator={false}
+            />
+          </View>
+        ),
+      )}
     </ScrollView>
   );
 }

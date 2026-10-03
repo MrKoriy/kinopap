@@ -74,27 +74,66 @@ export function UnmuteOverlay({ onUnmute }: { onUnmute: () => void }) {
   );
 }
 
-/** Предложение перейти к следующей серии на последних секундах. */
+/** Следующая серия на последних секундах: отсчёт и автопереход (отменяемый). */
+export const NEXT_EPISODE_COUNTDOWN = 10;
+
 export function NextEpisodeOverlay({
   next,
   onPlay,
+  autoAdvance = true,
 }: {
   next: PlayerEpisode;
   onPlay: () => void;
+  autoAdvance?: boolean;
 }) {
+  const [left, setLeft] = React.useState(NEXT_EPISODE_COUNTDOWN);
+  const [cancelled, setCancelled] = React.useState(!autoAdvance);
+  const onPlayRef = React.useRef(onPlay);
+  onPlayRef.current = onPlay;
+
+  React.useEffect(() => {
+    if (cancelled) return;
+    if (left <= 0) {
+      onPlayRef.current();
+      return;
+    }
+    const t = window.setTimeout(() => setLeft((n) => n - 1), 1000);
+    return () => window.clearTimeout(t);
+  }, [left, cancelled]);
+
   return (
     <div
-      className="absolute bottom-28 left-6 rounded-[var(--radius-card)] border border-border bg-black/80 p-4"
+      className="absolute bottom-28 right-6 z-20 w-72 rounded-[var(--radius-card)] border border-border bg-black/85 p-4 backdrop-blur"
       data-testid="next-episode"
     >
-      <p className="mb-2 text-sm text-muted">Следующая серия</p>
-      <button
-        type="button"
-        className="rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
-        onClick={onPlay}
-      >
-        {next.label}
-      </button>
+      <p className="mb-1 text-xs uppercase tracking-wide text-muted">Следующая серия</p>
+      <p className="mb-3 truncate text-sm font-semibold text-white">{next.label}</p>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          className="relative flex-1 overflow-hidden rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white hover:bg-accent-hover"
+          onClick={onPlay}
+          data-testid="next-episode-play"
+        >
+          {!cancelled && (
+            <span
+              className="absolute inset-y-0 left-0 bg-white/20 transition-[width] duration-1000 ease-linear"
+              style={{ width: `${((NEXT_EPISODE_COUNTDOWN - left) / NEXT_EPISODE_COUNTDOWN) * 100}%` }}
+            />
+          )}
+          <span className="relative">{cancelled ? "Смотреть" : `Смотреть через ${left}`}</span>
+        </button>
+        {!cancelled && (
+          <button
+            type="button"
+            className="rounded-full px-3 py-2 text-sm text-muted hover:text-white"
+            onClick={() => setCancelled(true)}
+            data-testid="next-episode-cancel"
+          >
+            Отмена
+          </button>
+        )}
+      </div>
     </div>
   );
 }

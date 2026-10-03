@@ -1,0 +1,7 @@
+[Unit]
+Description=Мониторинг «Зала»: веб, API, TorrServer, Postgres, диск, бэкап
+
+[Service]
+Type=oneshot
+ExecStart=/opt/kinopap/bin/healthcheck.sh
+Nice=5

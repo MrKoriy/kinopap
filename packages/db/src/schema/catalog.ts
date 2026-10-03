@@ -66,6 +66,11 @@ export const items = pgTable(
     seasonLayout: varchar("season_layout", { length: 64 }),
     /** Когда последний раз брали локализованное название из /translations TMDb. */
     titleLocalizedAt: timestamp("title_localized_at", { withTimezone: true }),
+    /** Резолв первой серии/фильма не нашёл ни одной раздачи (подряд) — прячем из лент. */
+    noSourceCount: integer("no_source_count").notNull().default(0),
+    noSourceAt: timestamp("no_source_at", { withTimezone: true }),
+    /** Когда релиз AniLibria сверяли с поиском TMDb (повтор через 30 дней). */
+    tmdbMatchedAt: timestamp("tmdb_matched_at", { withTimezone: true }),
     tmdbType: varchar("tmdb_type", { length: 8 }),
     tmdbRating: doublePrecision("tmdb_rating"),
     tmdbVotes: integer("tmdb_votes"),
