@@ -4,7 +4,7 @@
  */
 
 import type { AudioDubType, ItemType, Quality } from "@zal/api-client";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   audioTracks,
@@ -20,7 +20,12 @@ import {
   seasons,
   subtitles,
 } from "../schema/index";
-import { appendEpisodeToLastSeason, findEpisodeByOrig, itemSeasonLayout } from "./seasons";
+import {
+  appendEpisodeToLastSeason,
+  findEpisodeByAbsolute,
+  findEpisodeByOrig,
+  itemSeasonLayout,
+} from "./seasons";
 
 export interface PublishItemDraft {
   type: ItemType;
@@ -274,7 +279,13 @@ export async function publishIngest(
     if (input.media.episode && !reuseEpisode) {
       const ep = input.media.episode;
       const txDb = tx as unknown as Db;
-      const byOrig = await findEpisodeByOrig(txDb, itemId, ep.seasonNumber, ep.episodeNumber);
+      // Релиз AniLibria, влитый в TMDb-тайтл: серия k — это k-я по сквозному
+      // номеру, а не S1Ek (у TMDb сезонов может быть несколько).
+      const byAbsolute = input.media.sourceKey?.startsWith("anilibria:")
+        ? await findEpisodeByAbsolute(txDb, itemId, ep.episodeNumber)
+        : null;
+      const byOrig =
+        byAbsolute ?? (await findEpisodeByOrig(txDb, itemId, ep.seasonNumber, ep.episodeNumber));
       if (byOrig != null) {
         episodeId = byOrig;
       } else if ((await itemSeasonLayout(txDb, itemId))?.startsWith("tmdb-group:")) {
@@ -336,6 +347,22 @@ export async function publishIngest(
           and(eq(media.itemId, itemId), eq(media.sourceKey, input.media.sourceKey)),
         )
         .limit(1);
+      // Нет media с этим ключом, но у серии есть плейсхолдер без источника
+      // (гидрация TMDb) — усыновляем его: одна media на серию, прогресс цел.
+      if (!existing[0] && episodeId != null) {
+        const [placeholder] = await tx
+          .select({ id: media.id })
+          .from(media)
+          .where(and(eq(media.episodeId, episodeId), isNull(media.sourceKey)))
+          .limit(1);
+        if (placeholder) {
+          await tx
+            .update(media)
+            .set({ sourceKey: input.media.sourceKey })
+            .where(eq(media.id, placeholder.id));
+          existing.push(placeholder);
+        }
+      }
       if (existing[0]) {
         mediaId = existing[0].id;
         await tx

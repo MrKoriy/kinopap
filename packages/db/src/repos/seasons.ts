@@ -224,3 +224,17 @@ export async function itemSeasonLayout(db: Db, itemId: number): Promise<string |
     .limit(1);
   return row?.layout ?? null;
 }
+
+/** Серия по сквозному номеру (заполнен у перестроенных и склеенных тайтлов). */
+export async function findEpisodeByAbsolute(
+  db: Db,
+  itemId: number,
+  absolute: number,
+): Promise<number | null> {
+  const res = await db.execute<{ id: number }>(sql`
+    select e.id from episodes e join seasons s on s.id = e.season_id
+    where s.item_id = ${itemId} and e.absolute_number = ${absolute}
+    limit 1
+  `);
+  return res.rows[0] ? Number(res.rows[0].id) : null;
+}

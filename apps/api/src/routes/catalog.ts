@@ -112,13 +112,15 @@ export async function catalogRoutes(
   async function episodeContext(
     targetDb: Db,
     mediaId: number,
-  ): Promise<{ seasonNumber: number | null; episodeNumber: number | null }> {
+  ): Promise<{ seasonNumber: number | null; episodeNumber: number | null; sourceKey: string | null; absoluteNumber: number | null }> {
     const rows = await targetDb
       // Координаты источника: после перестройки сезонов «Сезон 12, серия 5»
       // у нас — это s01e245 у TMDb/AniLibria, и искать поток надо по ним.
       .select({
         season: sql<number | null>`coalesce(${episodes.origSeason}, ${seasons.number})`,
         episode: sql<number | null>`coalesce(${episodes.origNumber}, ${episodes.number})`,
+        sourceKey: media.sourceKey,
+        absolute: episodes.absoluteNumber,
       })
       .from(media)
       .leftJoin(episodes, eq(episodes.id, media.episodeId))
@@ -128,6 +130,8 @@ export async function catalogRoutes(
     return {
       seasonNumber: rows[0]?.season ?? null,
       episodeNumber: rows[0]?.episode ?? null,
+      sourceKey: rows[0]?.sourceKey ?? null,
+      absoluteNumber: rows[0]?.absolute ?? null,
     };
   }
 
@@ -457,7 +461,19 @@ export async function catalogRoutes(
       .from(items)
       .where(eq(items.id, id))
       .limit(1);
-    const { seasonNumber, episodeNumber } = await episodeContext(db, mediaId);
+    const ctx = await episodeContext(db, mediaId);
+    // Источник решает media, а не тайтл: в TMDb-сериал влит релиз AniLibria —
+    // его серии («anilibria:<release>:<ordinal>») играют HLS AniLibria, а
+    // серии вне релиза (другие сезоны) идут торрентами, без подмены на
+    // «серию k» релиза.
+    const ani = /^anilibria:(\d+):(\d+)$/.exec(ctx.sourceKey ?? "");
+    const isAniItem = ext?.source === "anilibria";
+    const externalSource = ani ? "anilibria" : isAniItem && ctx.sourceKey == null && ctx.seasonNumber != null ? null : (ext?.source ?? null);
+    const externalId = ani ? ani[1]! : externalSource ? (ext?.id ?? null) : null;
+    const type = ani ? ("anime" as const) : isAniItem && externalSource == null ? ("serial" as const) : item.type;
+    // Фильм-релиз AniLibria без серий — без S/E (иначе rutor искал бы «s01e01»).
+    const seasonNumber = ani && ctx.seasonNumber != null ? 1 : ctx.seasonNumber;
+    const episodeNumber = ani && ctx.episodeNumber != null ? Number(ani[2]) : ctx.episodeNumber;
     const startedAt = Date.now();
     const resolved = await streamResolver.resolve({
       itemId: id,
@@ -465,11 +481,12 @@ export async function catalogRoutes(
       title: item.title,
       originalTitle: item.originalTitle,
       year: item.year,
-      type: item.type,
+      type,
       seasonNumber: seasonNumber ?? undefined,
       episodeNumber: episodeNumber ?? undefined,
-      externalSource: ext?.source ?? null,
-      externalId: ext?.id ?? null,
+      absoluteNumber: ctx.absoluteNumber,
+      externalSource,
+      externalId,
       warm,
     });
     if (resolved.files.length === 0) return null;

@@ -3,23 +3,30 @@ import { ContinueWatching } from "@/components/continue-watching";
 import { HeroCarousel } from "@/components/hero-carousel";
 import { ItemRail } from "@/components/item-rail";
 import { HeroSkeleton, RailSkeleton } from "@/components/skeletons";
-import { fetchShortcut, type ShortcutKind } from "@/lib/api";
+import { type CatalogParams, fetchItems, fetchShortcut, type ShortcutKind } from "@/lib/api";
 
 export const revalidate = 30;
 
 /** Лента, деградировавшая в честную ошибку, а не в «пусто». */
 async function RailOrError({
   kind,
+  params,
   title,
   href,
+  ranked = false,
+  limit = 12,
 }: {
-  kind: ShortcutKind;
+  kind?: ShortcutKind;
+  /** Вместо shortcut — выборка каталога (тип + сортировка). */
+  params?: CatalogParams;
   title: string;
   href: string;
+  ranked?: boolean;
+  limit?: number;
 }) {
   try {
-    const page = await fetchShortcut(kind, 12);
-    return <ItemRail title={title} items={page.items} href={href} />;
+    const page = kind ? await fetchShortcut(kind, limit) : await fetchItems({ ...params, limit });
+    return <ItemRail title={title} items={page.items} href={href} ranked={ranked} />;
   } catch {
     return (
       <section>
@@ -46,7 +53,7 @@ async function Hero() {
   }
 }
 
-/** Главная: hero-карусель + ленты fresh/hot/popular. */
+/** Главная: hero-карусель, «Продолжить», Топ-10, свежее и ленты по типам. */
 export default function HomePage() {
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
@@ -55,13 +62,22 @@ export default function HomePage() {
       </Suspense>
       <ContinueWatching />
       <Suspense fallback={<RailSkeleton />}>
+        <RailOrError kind="hot" title="Топ-10 сегодня" href="/catalog?sort=views-" ranked limit={10} />
+      </Suspense>
+      <Suspense fallback={<RailSkeleton />}>
         <RailOrError kind="fresh" title="Свежее" href="/catalog?sort=updated-" />
       </Suspense>
       <Suspense fallback={<RailSkeleton />}>
-        <RailOrError kind="hot" title="В тренде" href="/catalog?sort=views-" />
+        <RailOrError params={{ type: "movie", sort: "views-" }} title="Фильмы" href="/catalog?type=movie&sort=views-" />
       </Suspense>
       <Suspense fallback={<RailSkeleton />}>
-        <RailOrError kind="popular" title="Популярное" href="/catalog?sort=rating-" />
+        <RailOrError params={{ type: "serial", sort: "views-" }} title="Сериалы" href="/catalog?type=serial&sort=views-" />
+      </Suspense>
+      <Suspense fallback={<RailSkeleton />}>
+        <RailOrError params={{ type: "anime", sort: "views-" }} title="Аниме" href="/catalog?type=anime&sort=views-" />
+      </Suspense>
+      <Suspense fallback={<RailSkeleton />}>
+        <RailOrError kind="popular" title="Высокий рейтинг" href="/catalog?sort=rating-" />
       </Suspense>
     </main>
   );

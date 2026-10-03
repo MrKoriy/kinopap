@@ -2,10 +2,12 @@
  * Zero-storage Stream Resolver.
  * Resolves media links on the fly from torrents (TorrServer + Rutor) and anime CDNs.
  */
+
 import type { AudioTrack, MediaFile, MediaLinks, WarmRelease } from "@zal/api-client";
 import { AnilibriaConnector } from "./connectors/anilibria";
 import { RutorConnector, type RutorRelease } from "./connectors/rutor";
 import { TorrServerConnector } from "./connectors/torrserver";
+import { pickEpisodeFile } from "./lib/episode-file";
 
 /**
  * Прогрев релиза в TorrServer. Ответ на резолв не ждёт его дольше
@@ -149,6 +151,8 @@ export interface ResolveQuery {
   type?: string;
   seasonNumber?: number;
   episodeNumber?: number;
+  /** Сквозной номер серии — для аниме-паков с нумерацией через все сезоны. */
+  absoluteNumber?: number | null;
   /**
    * Внешний источник тайтла: для аниме (externalSource="anilibria") резолвер
    * идёт напрямую в getRelease(externalId) — точный матч релиза вместо
@@ -625,17 +629,16 @@ export class StreamResolver {
       if (queryForWarm?.seasonNumber != null && queryForWarm?.episodeNumber != null) {
         const wantedS = queryForWarm.seasonNumber;
         const wantedE = queryForWarm.episodeNumber;
-        const candidates = (torrent?.file_stats ?? []).filter((f) => {
-          const m = f.path.match(/s0*(\d+)e0*(\d+)/i);
-          if (!m) return false;
-          return Number(m[1]) === wantedS && Number(m[2]) === wantedE;
-        });
-        if (candidates.length) {
-          best = candidates.reduce((a, b) => (b.length > a.length ? b : a));
-        } else {
-          // Нет файла с нужной серией — не подменяем чужой.
-          return null;
-        }
+        // S01E05, 1x05, «05. Название», «Bleach - 245»: см. lib/episode-file.
+        const picked = pickEpisodeFile(
+          torrent?.file_stats ?? [],
+          wantedS,
+          wantedE,
+          queryForWarm.absoluteNumber,
+        );
+        // Нет однозначного файла с нужной серией — не подменяем чужой.
+        if (!picked) return null;
+        best = picked;
       } else {
         best = torrent ? this.torrServer.findBestVideoFile(torrent.file_stats) : null;
       }
