@@ -166,6 +166,12 @@ export async function fetchSearch(
   );
 }
 
+/** Подсказки поиска в шапке: 8 тайтлов из локального каталога. */
+export async function fetchSuggest(q: string, init?: RequestInit): Promise<ItemPage> {
+  if (q.trim().length < 2) return EMPTY_PAGE;
+  return itemPageSchema.parse(await getJsonWithInit(`/v1/items/suggest${qs({ q: q.trim(), limit: 8 })}`, 0, 8_000, init));
+}
+
 export async function fetchSimilar(id: number): Promise<ItemPage> {
   return softOnBuildPhase(
     async () => {

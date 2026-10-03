@@ -183,6 +183,20 @@ export async function catalogRoutes(
     return { items: await getItemsByIds(db, q.ids) };
   });
 
+  // Подсказки в шапке (поиск по мере ввода): только локальный каталог, без
+  // on-the-fly discovery (иначе каждое нажатие клавиши ходило бы в rutor),
+  // свой лимит — 8 результатов, щедрый rate limit под debounce-запросы.
+  app.get(
+    "/items/suggest",
+    { config: { rateLimit: { max: 120, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const q = parseOrThrow(searchRawQuerySchema, request.query ?? {});
+      const result = await searchItems(db, { q: q.q, type: q.type, field: "title", limit: Math.min(q.limit, 8) });
+      reply.header("cache-control", "public, max-age=60");
+      return result;
+    },
+  );
+
   app.get(
     "/items/search",
     { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },

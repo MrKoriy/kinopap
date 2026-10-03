@@ -82,7 +82,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       "GET, POST, PUT, PATCH, DELETE, OPTIONS",
     );
     if (request.method === "OPTIONS") {
-      reply.code(204).send();
+      return reply.code(204).send();
     }
   });
 
