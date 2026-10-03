@@ -10,6 +10,7 @@ import { absorbAnilibriaItem, absorbAnilibriaSeason, type Db, findAnimeSeasonPai
 import { sql } from "drizzle-orm";
 import type { Config } from "../config";
 import { matchAnilibriaViaTmdb } from "./anime-tmdb-match";
+import { fillCountries } from "./countries-fill";
 import { localizeForeignTitles } from "./localize-titles";
 import { LONG_SEASON, regroupLongSeasons } from "./season-layout";
 import { hydrateSerialSeasons } from "./tmdb";
@@ -102,6 +103,8 @@ export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: n
     (await mergeAnimeDuplicates(db, config, { limit: 30 })) + (await mergeAnimeSeasons(db, { limit: 30 }));
   const localized = await localizeForeignTitles(db, config, { limit: 50 }).catch(() => 0);
   const viaTmdb = await matchAnilibriaViaTmdb(db, config, { limit: 40 }).catch(() => ({ merged: 0, enriched: 0 }));
+  // новые тайтлы из discover приходят без стран — добираем деталями TMDb
+  await fillCountries(db, config, { limit: 200 }).catch(() => 0);
   return { hydrated, regrouped, merged: merged + viaTmdb.merged, localized, enriched: viaTmdb.enriched };
 }
 
