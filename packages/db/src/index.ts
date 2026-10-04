@@ -14,5 +14,6 @@ export * from "./repos/redirects";
 export * from "./repos/seasons";
 export * from "./repos/social";
 export * from "./repos/sources";
+export * from "./repos/stream-sources";
 export * from "./schema/index";
 export * from "./seed";

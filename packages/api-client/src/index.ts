@@ -7,3 +7,4 @@ export * from "./ingest";
 export * from "./profile";
 export * from "./refresh";
 export * from "./social";
+export * from "./stream";

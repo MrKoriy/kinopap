@@ -83,6 +83,8 @@ export const catalogRawQuerySchema = z.object({
   director: z.string().trim().min(1).max(200).optional(),
   /** Рейтинг от N (0–10): свой рейтинг, иначе IMDb, иначе Кинопоиск. */
   rating: z.coerce.number().min(0).max(10).optional(),
+  /** «Можно смотреть»: только тайтлы с проверенной раздачей (playable=1). */
+  playable: z.enum(["1", "true", "0", "false"]).optional(),
   sort: z.string().optional(),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   cursor: z.string().optional(),
@@ -101,6 +103,8 @@ export interface CatalogFilters {
   actor?: string;
   director?: string;
   ratingMin?: number;
+  /** true — только тайтлы, у которых stream-precheck нашёл рабочую раздачу. */
+  playableOnly?: boolean;
   sort: SortSpec;
   limit: number;
   cursor?: string | null;
@@ -120,6 +124,7 @@ export function parseCatalogQuery(raw: unknown): CatalogFilters {
     actor: q.actor,
     director: q.director,
     ratingMin: q.rating && q.rating > 0 ? q.rating : undefined,
+    playableOnly: q.playable === "1" || q.playable === "true" ? true : undefined,
     sort: parseSort(q.sort),
     limit: q.limit,
     cursor: q.cursor ?? null,

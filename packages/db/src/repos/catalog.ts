@@ -90,6 +90,7 @@ const itemColumns = {
   titleLocalizedAt: items.titleLocalizedAt,
   noSourceCount: items.noSourceCount,
   noSourceAt: items.noSourceAt,
+  playable: items.playable,
   tmdbMatchedAt: items.tmdbMatchedAt,
   seasonLayout: items.seasonLayout,
   createdAt: items.createdAt,
@@ -237,6 +238,8 @@ function buildFilters(f: CatalogFilters): SQL[] {
     sql`not (${items.noSourceCount} >= 2 and ${items.noSourceAt} > now() - interval '7 days')`,
   );
   if (f.type) conds.push(eq(items.type, f.type));
+  // «Можно смотреть»: проверенная раздача есть (items.playable от stream-precheck).
+  if (f.playableOnly) conds.push(sql`${items.playable} is true`);
   if (f.title) conds.push(sql`${items.title} ilike ${`${f.title}%`}`);
   if (f.yearFrom != null) conds.push(sql`${items.year} >= ${f.yearFrom}`);
   if (f.yearTo != null) conds.push(sql`${items.year} <= ${f.yearTo}`);

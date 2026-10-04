@@ -80,6 +80,12 @@ import {
   votePutSchema,
   voteResponseSchema,
 } from "./social";
+import {
+  prefetchResponseSchema,
+  type StreamReportRequest,
+  streamReportRequestSchema,
+  streamReportResponseSchema,
+} from "./stream";
 
 export class ApiError extends Error {
   constructor(
@@ -424,6 +430,28 @@ export function createApiClient(opts: ApiClientOptions) {
         query: { mid: mediaId },
         auth: true,
         timeoutMs: 45_000,
+      }),
+    /**
+     * «Не играет / не та серия»: раздача помечается bad для этой серии,
+     * следующий getMediaLinks отдаст другую. Гостям тоже можно.
+     */
+    reportStream: (mediaId: number, input: StreamReportRequest) =>
+      request(`/v1/media/${mediaId}/report`, streamReportResponseSchema, {
+        method: "POST",
+        body: streamReportRequestSchema.parse(input),
+        auth: true,
+        retryOn401: false,
+      }),
+    /**
+     * Префетч при наведении на карточку: сервер фоном находит источник,
+     * клик «Смотреть» потом берёт готовое. Ответ мгновенный.
+     */
+    prefetchItem: (itemId: number, mediaId?: number) =>
+      request(`/v1/items/${itemId}/prefetch`, prefetchResponseSchema, {
+        method: "POST",
+        body: mediaId ? { mid: mediaId } : {},
+        retryOn401: false,
+        timeoutMs: 5_000,
       }),
     getSimilar: (id: number) =>
       request(`/v1/items/${id}/similar`, itemPageSchema),

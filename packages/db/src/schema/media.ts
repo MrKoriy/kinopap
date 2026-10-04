@@ -14,7 +14,7 @@ import {
   varchar,
 } from "drizzle-orm/pg-core";
 import { episodes, items } from "./catalog";
-import { audioDubType, mediaQuality } from "./enums";
+import { audioDubType, mediaQuality, streamSourceStatus } from "./enums";
 
 /** Метаданные спрайта для скраббинга плеера. */
 export interface SpriteMeta {
@@ -147,5 +147,56 @@ export const mediaSources = pgTable(
   (t) => [
     primaryKey({ columns: [t.itemId, t.mediaId] }),
     index("media_sources_resolved_at_idx").on(t.resolvedAt),
+  ],
+);
+
+/**
+ * Заранее найденные и проверенные раздачи по паре (item, media).
+ *
+ * В отличие от media_sources (снимок собранных ссылок одного резолва) здесь
+ * — по строке на релиз: фоновый stream-precheck находит раздачи до клика,
+ * проверяет их в TorrServer и запоминает индекс файла серии. Клик «Смотреть»
+ * берёт good-записи отсюда и в rutor не ходит. Жалоба зрителя переводит
+ * релиз в bad — для этой пары он больше не выдаётся.
+ */
+export const streamSources = pgTable(
+  "stream_sources",
+  {
+    id: serial("id").primaryKey(),
+    itemId: integer("item_id")
+      .notNull()
+      .references(() => items.id, { onDelete: "cascade" }),
+    mediaId: integer("media_id")
+      .notNull()
+      .references(() => media.id, { onDelete: "cascade" }),
+    /** Серия, если media — эпизод (для отчётов и выборок по сериалам). */
+    episodeId: integer("episode_id").references(() => episodes.id, { onDelete: "set null" }),
+    /** btih в нижнем регистре (hex-40 или base32-32). */
+    infohash: varchar("infohash", { length: 40 }).notNull(),
+    magnet: text("magnet").notNull(),
+    title: text("title").notNull(),
+    /** Индекс файла серии/фильма в раздаче; null — метаданные ещё не проверяли. */
+    fileIndex: integer("file_index"),
+    /** Подпись качества из релиза («1080p», «4K») и размер. */
+    quality: varchar("quality", { length: 32 }),
+    sizeBytes: bigint("size_bytes", { mode: "number" }),
+    /** Озвучки из названия релиза («Дубляж», «LostFilm»…). */
+    voices: jsonb("voices").$type<string[]>().notNull().default([]),
+    seeds: integer("seeds").notNull().default(0),
+    peers: integer("peers").notNull().default(0),
+    status: streamSourceStatus("status").notNull().default("good"),
+    /** Подряд неудачных проверок; сбрасывается при успехе. */
+    failCount: integer("fail_count").notNull().default(0),
+    /** Жалоб зрителей за всё время (статистика, не порог). */
+    reportCount: integer("report_count").notNull().default(0),
+    /** Последняя проверка в TorrServer; null — найдена, но не проверялась. */
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("stream_sources_media_hash_uq").on(t.mediaId, t.infohash),
+    index("stream_sources_item_status_idx").on(t.itemId, t.status),
+    index("stream_sources_checked_at_idx").on(t.checkedAt),
   ],
 );

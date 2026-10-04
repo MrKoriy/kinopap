@@ -17,6 +17,7 @@ import { createPortal } from "react-dom";
 import { PosterImage } from "@/components/poster-image";
 import { TrailerButton } from "@/components/trailer-button";
 import { displayRating, formatDurationHuman } from "@/lib/format";
+import { useStreamPrefetch } from "@/lib/stream-prefetch";
 
 const OPEN_DELAY_MS = 500;
 const CLOSE_DELAY_MS = 120;
@@ -108,6 +109,9 @@ export function ItemHoverPreview({
   onTrailerOpen: (open: boolean) => void;
 }) {
   const [shown, setShown] = React.useState(false);
+  // Курсор/фокус на «Смотреть» — клик почти наверняка: префетч без дебаунса
+  // (дубль с карточкой отсечёт общий шлюз).
+  const prefetch = useStreamPrefetch(item.id);
   React.useEffect(() => {
     const id = window.requestAnimationFrame(() => setShown(true));
     return () => window.cancelAnimationFrame(id);
@@ -168,6 +172,8 @@ export function ItemHoverPreview({
             href={`/item/${item.id}`}
             className="inline-flex flex-1 items-center justify-center gap-1.5 rounded-full bg-accent px-4 py-2 text-sm font-semibold text-white transition hover:bg-accent-hover"
             data-testid="hover-preview-watch"
+            onMouseEnter={prefetch.now}
+            onFocus={prefetch.now}
           >
             <Play className="h-4 w-4 fill-current" /> Смотреть
           </Link>

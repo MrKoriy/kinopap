@@ -8,6 +8,7 @@ import type { ItemDetail, MediaLinks } from "@zal/api-client";
  * Теперь страница рисуется сразу, источники ищутся под спиннером.
  */
 import * as React from "react";
+import { LoadingStages } from "@/components/player/loading-stages";
 import { Player } from "@/components/player/player";
 import { useAuth } from "@/lib/auth";
 import {
@@ -35,6 +36,8 @@ export function WatchClient({
   const [failed, setFailed] = React.useState(false);
   const [elapsed, setElapsed] = React.useState(0);
   const [playbackStarted, setPlaybackStarted] = React.useState(false);
+  // Растёт после жалобы на раздачу: плеер пересоздаётся с новым набором.
+  const [reportEpoch, setReportEpoch] = React.useState(0);
   // Прогрев следующей серии — один раз на пару (itemId, mediaId).
   const prefetchedNext = React.useRef<string | null>(null);
 
@@ -58,7 +61,7 @@ export function WatchClient({
       ? "Прогреваем торрент и собираем манифест…"
       : elapsed >= 3
         ? "Оцениваем релизы и размечаем источники…"
-        : "Ищем источники трансляции…";
+        : "Проверяем готовые раздачи…";
 
   const abortRef = React.useRef<AbortController | null>(null);
   const load = React.useCallback(() => {
@@ -158,7 +161,7 @@ export function WatchClient({
         className="flex aspect-video w-full flex-col items-center justify-center gap-3 rounded-[var(--radius-card)] bg-black text-white"
         data-testid="watch-links-loading"
       >
-        <div className="h-9 w-9 animate-spin rounded-full border-2 border-white/20 border-t-white" />
+        <LoadingStages stage="search" />
         <p className="text-sm font-medium text-white/90">{stage}</p>
         <p className="text-xs text-white/50">
           {timedOut
@@ -196,12 +199,20 @@ export function WatchClient({
       {/* key по media: при переходе на следующую серию плеер пересоздаётся,
           а не переиспользует состояние автоплея/резюме прошлой серии. */}
       <Player
-        key={`${item.id}:${mediaId}`}
+        key={`${item.id}:${mediaId}:${reportEpoch}`}
         links={links}
         title={item.title}
         episodeGroups={episodeGroups}
         currentMediaId={mediaId}
         onPlaybackStart={() => setPlaybackStarted(true)}
+        onSourceReported={() => {
+          // Раздача забанена для этой серии — сервер уже сбросил кэши пары,
+          // свежий запрос отдаст другую. Этапы загрузки покажутся заново.
+          setReportEpoch((n) => n + 1);
+          setLinks(null);
+          setElapsed(0);
+          load();
+        }}
       />
 
       {/* Панель быстрого запуска во внешнем плеере */}
