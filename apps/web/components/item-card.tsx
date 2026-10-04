@@ -8,7 +8,7 @@ import Link from "next/link";
 import * as React from "react";
 import { FavoriteButton } from "@/components/favorite-button";
 import { ItemHoverPreview, useHoverPreview } from "@/components/item-hover-preview";
-import { PosterImage } from "@/components/poster-image";
+import { ItemPoster } from "@/components/item-poster";
 import { Badge } from "@/components/ui/badge";
 import { displayRating, formatDurationHuman } from "@/lib/format";
 
@@ -57,8 +57,9 @@ export function ItemCard({
       >
         <div className="relative aspect-[2/3] w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-2 ring-1 ring-white/5 transition group-hover:ring-white/20">
           {poster ? (
-            <PosterImage
-              src={poster}
+            <ItemPoster
+              item={item}
+              fallbackSrc={poster}
               alt={item.title}
               className="h-full w-full object-cover transition duration-500 group-hover:scale-105"
               sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 16vw"

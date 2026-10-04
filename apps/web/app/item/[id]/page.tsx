@@ -1,4 +1,3 @@
-import type { ItemType } from "@zal/api-client";
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import { Suspense } from "react";
@@ -6,6 +5,7 @@ import { ItemDetailView } from "@/components/item-detail";
 import { ItemRail } from "@/components/item-rail";
 import { RailSkeleton } from "@/components/skeletons";
 import { fetchItem, fetchSimilar } from "@/lib/api";
+import { isSeriesLike, itemJsonLd, ogImages, serializeJsonLd } from "@/lib/seo";
 
 export const revalidate = 30;
 
@@ -16,14 +16,6 @@ function truncatePlot(plot: string, max = 200): string {
   const lastSpace = cut.lastIndexOf(" ");
   return `${(lastSpace > 0 ? cut.slice(0, lastSpace) : cut).trimEnd()}…`;
 }
-
-/** Сериальные типы → video.tv.show, остальные → video.movie. */
-const SERIAL_TYPES: ReadonlySet<ItemType> = new Set([
-  "serial",
-  "docuserial",
-  "tvshow",
-  "anime",
-]);
 
 /** Метаданные тайтла: тот же fetchItem (ISR-кэш общий со страницей). */
 export async function generateMetadata({
@@ -39,22 +31,24 @@ export async function generateMetadata({
   const description = item.plot
     ? truncatePlot(item.plot)
     : "Страница тайтла в kino.pap.";
-  const poster = item.posters.big ?? item.posters.medium;
+  // Бэкдроп 16:9 — соцсети режут превью именно так; постер — фолбэк.
+  const images = ogImages(item);
 
   return {
     title,
     description,
+    alternates: { canonical: `/item/${item.id}` },
     openGraph: {
       title,
       description,
-      type: SERIAL_TYPES.has(item.type) ? "video.tv_show" : "video.movie",
-      images: poster ? [{ url: poster }] : undefined,
+      type: isSeriesLike(item) ? "video.tv_show" : "video.movie",
+      images,
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      images: poster ? [{ url: poster }] : undefined,
+      images: images?.map((i) => i.url),
     },
   };
 }
@@ -73,6 +67,11 @@ export default async function ItemPage({
 
   return (
     <main className="mx-auto max-w-7xl px-4 py-8">
+      <script
+        type="application/ld+json"
+        // biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD по рецепту Next — «<» экранирован в serializeJsonLd.
+        dangerouslySetInnerHTML={{ __html: serializeJsonLd(itemJsonLd(item)) }}
+      />
       <ItemDetailView item={item} />
       <div className="mt-12">
         <Suspense fallback={<RailSkeleton />}>

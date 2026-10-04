@@ -35,8 +35,14 @@ import {
   seasons,
   subtitles,
 } from "../schema/index";
+import { getFranchise } from "./franchises";
+import { getItemCredits } from "./people";
 
-type ItemRow = typeof items.$inferSelect;
+/** Служебные метки фоновых задач в выдачу не идут — их нет и в itemColumns. */
+type ItemRow = Omit<
+  typeof items.$inferSelect,
+  "anilistId" | "creditsCheckedAt" | "anilistCheckedAt" | "imagesCheckedAt"
+>;
 
 const SERIAL_LIKE: readonly ItemType[] = ["serial", "docuserial", "tvshow"];
 
@@ -87,6 +93,12 @@ const itemColumns = {
   trailerId: items.trailerId,
   trailerUrl: items.trailerUrl,
   trailerCheckedAt: items.trailerCheckedAt,
+  backdropUrl: items.backdropUrl,
+  posterHash: items.posterHash,
+  backdropHash: items.backdropHash,
+  posterBlurhash: items.posterBlurhash,
+  dominantColor: items.dominantColor,
+  franchiseId: items.franchiseId,
   titleLocalizedAt: items.titleLocalizedAt,
   noSourceCount: items.noSourceCount,
   noSourceAt: items.noSourceAt,
@@ -97,6 +109,18 @@ const itemColumns = {
 };
 
 /* ---------- Сборка ItemSummary ---------- */
+
+/**
+ * Каталог своих нарезок по контент-хешу: /img/ab/<hash> — внутри
+ * `<ширина>.avif` и `<ширина>.webp` (см. воркер images.ts). Двухсимвольный
+ * префикс — чтобы в одной папке не лежали десятки тысяч каталогов.
+ */
+export function imageDir(hash: string): string {
+  return `/img/${hash.slice(0, 2)}/${hash}`;
+}
+
+/** Актёров в карточке списка: весь топ-20 нужен только странице тайтла. */
+const SUMMARY_CAST = 6;
 
 interface ItemRefs {
   genres: { id: number; title: string }[];
@@ -129,14 +153,15 @@ async function attachRefs(db: Db, ids: number[]): Promise<Map<number, ItemRefs>>
       .select({ itemId: itemPeople.itemId, name: people.name, role: itemPeople.role })
       .from(itemPeople)
       .innerJoin(people, eq(itemPeople.personId, people.id))
-      .where(inArray(itemPeople.itemId, ids)),
+      .where(inArray(itemPeople.itemId, ids))
+      .orderBy(itemPeople.ord, people.id),
   ]);
   for (const g of genreRows) refs.get(g.itemId)?.genres.push({ id: g.id, title: g.title });
   for (const c of countryRows) refs.get(c.itemId)?.countries.push({ id: c.id, title: c.title });
   for (const p of peopleRows) {
     const ref = refs.get(p.itemId);
     if (!ref) continue;
-    if (p.role === "actor") ref.cast.push(p.name);
+    if (p.role === "actor" && ref.cast.length < SUMMARY_CAST) ref.cast.push(p.name);
     if (p.role === "director") ref.director.push(p.name);
   }
   return refs;
@@ -181,6 +206,16 @@ function mapItem(row: ItemRow, refs: ItemRefs): ItemSummary {
       big: row.posterBig,
     },
     trailer: { id: row.trailerId, url: row.trailerUrl },
+    backdrop: row.backdropUrl ?? null,
+    images:
+      row.posterHash || row.backdropHash
+        ? {
+            poster: row.posterHash ? imageDir(row.posterHash) : null,
+            backdrop: row.backdropHash ? imageDir(row.backdropHash) : null,
+            blurhash: row.posterBlurhash ?? null,
+            color: row.dominantColor ?? null,
+          }
+        : null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
@@ -422,7 +457,7 @@ export async function getItem(db: Db, id: number): Promise<ItemDetail | null> {
   // из предыдущей выборки), для фильмов media известен заранее. Один
   // промис на ветку — сериалам media не нужен, фильмам — сезоны.
   const serialLike = SERIAL_LIKE.includes(row.type) || row.type === "anime";
-  const [refs, seasonRows, eps, movieMediaRows] = await Promise.all([
+  const [refs, allSeasonRows, eps, movieMediaRows, credits, franchise] = await Promise.all([
     attachRefs(db, [id]),
     serialLike
       ? db.select().from(seasons).where(eq(seasons.itemId, id)).orderBy(seasons.number)
@@ -451,8 +486,28 @@ export async function getItem(db: Db, id: number): Promise<ItemDetail | null> {
     serialLike
       ? null
       : db.select().from(media).where(eq(media.itemId, id)).orderBy(media.partNumber),
+    getItemCredits(db, id),
+    row.franchiseId ? getFranchise(db, row.franchiseId) : Promise.resolve(null),
   ]);
-  const base = mapItem(row, refs.get(id)!);
+  const base = { ...mapItem(row, refs.get(id)!), credits, franchise };
+  // Спецвыпуски (TMDb «Сезон 0») — отдельной вкладкой: в общем списке они
+  // стояли бы первыми и «Смотреть» открывал бы спешл вместо S01E01.
+  const seasonRows = allSeasonRows.filter((s) => s.number > 0);
+  const specialsRow = allSeasonRows.find((s) => s.number === 0);
+  const mapEpisodes = (seasonId: number) =>
+    eps
+      .filter((e) => e.seasonId === seasonId)
+      .map((e) => ({
+        id: e.id,
+        number: e.number,
+        title: e.title,
+        thumbnailUrl: e.thumbnailUrl,
+        runtime: e.runtime,
+        mediaId: e.mediaId,
+      }));
+  const specials = specialsRow
+    ? { id: specialsRow.id, number: 0, title: specialsRow.title, episodes: mapEpisodes(specialsRow.id) }
+    : null;
 
   // Аниме без сезонов — это фильм: навигация по media-частям, не по сериям.
   if (serialLike && (seasonRows.length > 0 || SERIAL_LIKE.includes(row.type))) {
@@ -460,7 +515,8 @@ export async function getItem(db: Db, id: number): Promise<ItemDetail | null> {
     // (гидрация TMDb и AniLibria пишут реальные минуты). Раньше здесь
     // оставалось то, что записал сид/ингест, — у сид-тайтлов это был фолбэк
     // 7200, и весь топ каталога показывал «2:00:00».
-    const epRuntimes = eps.map((e) => e.runtime).filter((r) => r > 0);
+    const mainEps = specialsRow ? eps.filter((e) => e.seasonId !== specialsRow.id) : eps;
+    const epRuntimes = mainEps.map((e) => e.runtime).filter((r) => r > 0);
     return {
       ...base,
       duration:
@@ -474,17 +530,9 @@ export async function getItem(db: Db, id: number): Promise<ItemDetail | null> {
         id: s.id,
         number: s.number,
         title: s.title,
-        episodes: eps
-          .filter((e) => e.seasonId === s.id)
-          .map((e) => ({
-            id: e.id,
-            number: e.number,
-            title: e.title,
-            thumbnailUrl: e.thumbnailUrl,
-            runtime: e.runtime,
-            mediaId: e.mediaId,
-          })),
+        episodes: mapEpisodes(s.id),
       })),
+      specials: specials && specials.episodes.length > 0 ? specials : null,
       media: null,
     };
   }

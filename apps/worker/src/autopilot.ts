@@ -3,7 +3,8 @@
  *
  * - каждые 6 ч — свежие релизы (текущий и прошлый год) и новые серии AniLibria;
  * - раз в сутки — широкий проход (жанры × страны, подборки) и дедуп;
- * - раз в сутки — догон трейлеров (дочерним процессом, со своим темпом).
+ * - раз в сутки — ночные задачи (дочерними процессами, по очереди, со своим
+ *   темпом): трейлеры, титры, франшизы, картинки, quality-audit, заставки.
  *
  * Расписание — BullMQ job schedulers в той же очереди `catalog`: джобы
  * переживают рестарт воркера, не дублируются (upsert по id) и идут строго
@@ -47,6 +48,42 @@ export function autopilotSchedules(now = new Date()): AutopilotSchedule[] {
   ];
 }
 
+export interface NightlyTask {
+  script: string;
+  args: string[];
+}
+
+/**
+ * Суточный цикл фоновых задач (по порядку): трейлеры, титры, франшизы
+ * AniList, картинки, аудит качества, детекция заставок. Отключение одной —
+ * env NIGHTLY_SKIP=credits,intros (по имени скрипта без расширения).
+ */
+export function nightlyTasks(env: NodeJS.ProcessEnv = process.env): NightlyTask[] {
+  const skip = new Set((env.NIGHTLY_SKIP ?? "").split(",").map((s) => s.trim()).filter(Boolean));
+  const all: NightlyTask[] = [
+    { script: "backfill-trailers.ts", args: ["--limit=2000"] },
+    { script: "backfill-credits.ts", args: ["--limit=4000"] },
+    { script: "franchises.ts", args: ["--limit=300"] },
+    { script: "images.ts", args: ["--limit=3000"] },
+    { script: "quality-audit.ts", args: [] },
+    { script: "intros.ts", args: ["--limit=40"] },
+  ];
+  return all.filter((t) => !skip.has(t.script.replace(/\.ts$/, "").replace(/^backfill-/, "")) && !skip.has(t.script.replace(/\.ts$/, "")));
+}
+
+/** Скрипт воркера дочерним процессом тем же tsx-загрузчиком (execArgv), без npx. */
+function runScript(script: string, args: string[]): Promise<number | null> {
+  return new Promise((resolve) => {
+    const path = fileURLToPath(new URL(`./${script}`, import.meta.url));
+    const child = spawn(process.execPath, [...process.execArgv, path, ...args], {
+      stdio: ["ignore", "inherit", "inherit"],
+      env: process.env,
+    });
+    child.on("exit", (code) => resolve(code));
+    child.on("error", () => resolve(null));
+  });
+}
+
 export async function startAutopilot(
   connection: ConnectionOptions,
   opts: { trailers?: boolean; trailersEveryMs?: number } = {},
@@ -64,26 +101,23 @@ export async function startAutopilot(
   let timer: ReturnType<typeof setInterval> | undefined;
   if (opts.trailers !== false) {
     let running = false;
-    const runTrailers = () => {
+    // Ночные задачи — дочерними процессами строго по очереди: у каждой свой
+    // темп к внешним API, а вместе они не душат БД и TMDb.
+    const runNightly = async () => {
       if (running) return;
       running = true;
-      const script = fileURLToPath(new URL("./backfill-trailers.ts", import.meta.url));
-      // Тот же tsx-загрузчик, что у самого воркера (execArgv), — без npx.
-      const child = spawn(process.execPath, [...process.execArgv, script, "--limit=2000"], {
-        stdio: ["ignore", "inherit", "inherit"],
-        env: process.env,
-      });
-      child.on("exit", (code) => {
+      try {
+        for (const task of nightlyTasks()) {
+          const code = await runScript(task.script, task.args);
+          console.log(`autopilot: ${task.script} exited with ${code}`);
+        }
+      } finally {
         running = false;
-        console.log(`autopilot: trailers backfill exited with ${code}`);
-      });
-      child.on("error", () => {
-        running = false;
-      });
+      }
     };
     // Первый прогон через 10 минут после старта — не в момент деплоя.
-    setTimeout(runTrailers, 10 * 60 * 1000).unref();
-    timer = setInterval(runTrailers, opts.trailersEveryMs ?? 24 * HOUR);
+    setTimeout(() => void runNightly(), 10 * 60 * 1000).unref();
+    timer = setInterval(() => void runNightly(), opts.trailersEveryMs ?? 24 * HOUR);
     timer.unref();
   }
 

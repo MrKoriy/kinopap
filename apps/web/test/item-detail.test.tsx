@@ -263,3 +263,50 @@ describe("ItemDetailView — подпись главной кнопки у фи�
   });
 });
 
+
+describe("ItemDetailView — спецвыпуски, актёры, франшиза", () => {
+  const rich: ItemDetail = {
+    ...itemDetail,
+    specials: {
+      id: 99,
+      number: 0,
+      title: null,
+      episodes: [{ id: 900, number: 1, title: "Новогодний выпуск", thumbnailUrl: null, runtime: 0, mediaId: 990 }],
+    },
+    credits: {
+      cast: [{ id: 1, name: "Александр Кайдановский", photoUrl: null, role: "actor", character: "Сталкер" }],
+      crew: [{ id: 2, name: "Андрей Тарковский", photoUrl: null, role: "director", character: null }],
+    },
+    franchise: {
+      id: 5,
+      title: "Сталкер",
+      entries: [
+        { anilistId: 1, title: "Сталкер", format: "TV", year: 1979, episodes: 3, itemId: 1 },
+        { anilistId: 2, title: "Сталкер: Фильм", format: "MOVIE", year: 1980, episodes: 1, itemId: 7 },
+      ],
+    },
+  };
+
+  it("вкладка «Спецвыпуски» последней, не первой", async () => {
+    render(<ItemDetailView item={rich} />);
+    const specials = screen.getByTestId("specials-tab");
+    expect(specials.textContent).toContain("Спецвыпуски");
+    expect(screen.getAllByTestId("season-tab")).toHaveLength(2);
+    // «Смотреть» по-прежнему ведёт на S01E01, а не на спешл.
+    expect(screen.getByTestId("watch-button").getAttribute("href")).toBe("/watch/1/500");
+    specials.click();
+    await waitFor(() => expect(screen.getByText("Новогодний выпуск")).toBeDefined());
+  });
+
+  it("блоки «Актёры и команда» и «Франшиза»", () => {
+    render(<ItemDetailView item={rich} />);
+    const credits = screen.getByTestId("credits");
+    expect(credits.textContent).toContain("Сталкер");
+    expect(credits.textContent).toContain("Режиссёр");
+    const entries = screen.getAllByTestId("franchise-entry");
+    expect(entries).toHaveLength(2);
+    // текущий тайтл — без ссылки, соседний — ссылка на карточку
+    expect(entries[0]!.querySelector("a")).toBeNull();
+    expect(entries[1]!.querySelector("a")?.getAttribute("href")).toBe("/item/7");
+  });
+});

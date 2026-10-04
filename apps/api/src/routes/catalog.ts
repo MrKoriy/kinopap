@@ -39,6 +39,7 @@ import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
+import { ensureItemCredits } from "../lib/credits";
 import { notFound, parseOrThrow } from "../lib/http";
 import { idParamsSchema } from "../lib/params";
 import { regroupLongSeasons } from "../lib/season-layout";
@@ -144,7 +145,9 @@ export async function catalogRoutes(
   }, entry: ResolveCacheEntry): void {
     links.files = entry.files;
     links.audios = entry.audios;
-    links.intro = entry.intro;
+    // Интро релиза (AniLibria) точнее; без него остаётся найденное
+    // детектором по звуку (media.intro_*), а не затирается null из кэша.
+    links.intro = entry.intro ?? links.intro;
   }
 
   /** Типы контента: movie/serial/concert/docu/tvshow/3d/4k. */
@@ -367,6 +370,11 @@ export async function catalogRoutes(
         clearTimeout(timer);
       }
       if (fast) item = (await getItem(db, id)) ?? item;
+    }
+    // Титров ещё нет — тянем фоном (одна проверка credits_checked_at в БД);
+    // ISR-страница подхватит их на следующем revalidate.
+    if (item.tmdb.id && !item.credits?.cast.length && !item.credits?.crew.length) {
+      void ensureItemCredits(db, config, item.id);
     }
     return item;
   });

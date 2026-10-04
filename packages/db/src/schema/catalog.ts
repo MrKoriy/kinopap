@@ -4,6 +4,7 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   primaryKey,
   serial,
@@ -89,6 +90,24 @@ export const items = pgTable(
      * Пусто — трейлер ещё не искали. Ретрай «нет трейлера» — раз в 90 дней:
      * ролики появляются после релиза, вечная пометка была бы ложью. */
     trailerCheckedAt: timestamp("trailer_checked_at", { withTimezone: true }),
+    /** Бэкдроп TMDb (w1280) — OG-картинка и фон шапки тайтла. */
+    backdropUrl: text("backdrop_url"),
+    /** Когда тянули /credits TMDb (актёры и команда). Пусто — ещё не тянули. */
+    creditsCheckedAt: timestamp("credits_checked_at", { withTimezone: true }),
+    /** AniList: id тайтла и когда искали франшизу (повтор — раз в 30 дней). */
+    anilistId: integer("anilist_id"),
+    anilistCheckedAt: timestamp("anilist_checked_at", { withTimezone: true }),
+    franchiseId: integer("franchise_id"),
+    /**
+     * Свои нарезки картинок (MEDIA_ROOT/img/<hash>/…): контент-хеш исходника.
+     * Пусто — файлов нет, веб идёт старым путём через next/image.
+     */
+    posterHash: varchar("poster_hash", { length: 40 }),
+    backdropHash: varchar("backdrop_hash", { length: 40 }),
+    posterBlurhash: varchar("poster_blurhash", { length: 64 }),
+    /** Доминантный цвет постера «#rrggbb» — фон плейсхолдера и шапки. */
+    dominantColor: varchar("dominant_color", { length: 7 }),
+    imagesCheckedAt: timestamp("images_checked_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
@@ -119,6 +138,7 @@ export const items = pgTable(
     // Поиск по триграммам (pg_trgm) — включается в миграции.
     index("items_title_trgm").using("gin", sql`title gin_trgm_ops`),
     index("items_original_title_trgm").using("gin", sql`original_title gin_trgm_ops`),
+    index("items_franchise_idx").on(t.franchiseId),
   ],
 );
 
@@ -197,10 +217,13 @@ export const people = pgTable(
     name: varchar("name", { length: 255 }).notNull(),
     nameEn: varchar("name_en", { length: 255 }),
     photoUrl: text("photo_url"),
+    /** id персоны в TMDb — дедуп людей между тайтлами. */
+    tmdbId: integer("tmdb_id"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
-  (_t) => [
+  (t) => [
     index("people_name_trgm").using("gin", sql`name gin_trgm_ops`),
+    uniqueIndex("people_tmdb_uq").on(t.tmdbId).where(sql`tmdb_id IS NOT NULL`),
   ],
 );
 
@@ -215,6 +238,8 @@ export const itemPeople = pgTable(
       .references(() => people.id, { onDelete: "cascade" }),
     role: personRole("role").notNull(),
     characterName: varchar("character_name", { length: 255 }),
+    /** Порядок в титрах TMDb: топ актёров — первые по ord. */
+    ord: integer("ord").notNull().default(0),
   },
   (t) => [
     primaryKey({ columns: [t.itemId, t.personId, t.role] }),
@@ -252,4 +277,85 @@ export const itemExternalAliases = pgTable(
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.source, t.externalId] })],
+);
+
+/**
+ * Франшиза аниме по связям AniList (PREQUEL/SEQUEL/SIDE_STORY…): сезоны,
+ * фильмы, OVA и спешлы одной вселенной. Ключ — минимальный AniList-id
+ * компоненты связности: тот же граф из любой точки даёт ту же франшизу.
+ */
+export const franchises = pgTable("franchises", {
+  id: serial("id").primaryKey(),
+  anilistRootId: integer("anilist_root_id").notNull().unique(),
+  title: varchar("title", { length: 255 }).notNull(),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/** Части франшизы в порядке выхода; item_id — наша карточка, если нашлась. */
+export const franchiseEntries = pgTable(
+  "franchise_entries",
+  {
+    franchiseId: integer("franchise_id")
+      .notNull()
+      .references(() => franchises.id, { onDelete: "cascade" }),
+    anilistId: integer("anilist_id").notNull(),
+    title: varchar("title", { length: 255 }).notNull(),
+    /** Формат AniList: TV, TV_SHORT, MOVIE, OVA, ONA, SPECIAL. */
+    format: varchar("format", { length: 16 }),
+    year: integer("year"),
+    episodes: integer("episodes"),
+    sortOrder: integer("sort_order").notNull().default(0),
+    itemId: integer("item_id").references(() => items.id, { onDelete: "set null" }),
+  },
+  (t) => [
+    primaryKey({ columns: [t.franchiseId, t.anilistId] }),
+    index("franchise_entries_item_idx").on(t.itemId),
+  ],
+);
+
+/** Ручная раскладка сезонов: группа = сезон, серии — координаты источника [S, E]. */
+export interface SeasonOverrideLayout {
+  groups: Array<{ title: string | null; eps: Array<[number, number]> }>;
+}
+
+/**
+ * Ручные раскладки для редких сложных тайтлов. quality-audit применяет
+ * новые/изменённые (applied_at пуст или старше updated_at) через
+ * applySeasonLayout — серии переносятся, id и прогресс сохраняются.
+ */
+export const seasonOverrides = pgTable("season_overrides", {
+  itemId: integer("item_id")
+    .primaryKey()
+    .references(() => items.id, { onDelete: "cascade" }),
+  layout: jsonb("layout").$type<SeasonOverrideLayout>().notNull(),
+  note: text("note"),
+  appliedAt: timestamp("applied_at", { withTimezone: true }),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Аномалии каталога из ночного quality-audit: одна строка на (тайтл, вид).
+ * status: open — висит, fixed — автофикс, resolved — больше не воспроизводится,
+ * ignored — человек решил «так и задумано» (аудит её не переоткрывает).
+ */
+export const qualityAnomalies = pgTable(
+  "quality_anomalies",
+  {
+    id: serial("id").primaryKey(),
+    itemId: integer("item_id")
+      .notNull()
+      .references(() => items.id, { onDelete: "cascade" }),
+    kind: varchar("kind", { length: 32 }).notNull(),
+    details: jsonb("details").$type<Record<string, unknown>>(),
+    status: varchar("status", { length: 16 }).notNull().default("open"),
+    detectedAt: timestamp("detected_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+  },
+  (t) => [
+    uniqueIndex("quality_anomalies_item_kind_uq").on(t.itemId, t.kind),
+    index("quality_anomalies_status_idx").on(t.status, t.kind),
+  ],
 );

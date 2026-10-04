@@ -47,6 +47,10 @@ export const media = pgTable(
     spriteMeta: jsonb("sprite_meta").$type<SpriteMeta | null>(),
     introStartSeconds: integer("intro_start_seconds"),
     introEndSeconds: integer("intro_end_seconds"),
+    /** Откуда интро: anilibria (из релиза) или audio (детекция по звуку соседних серий). */
+    introSource: varchar("intro_source", { length: 16 }),
+    /** Когда серию прогоняли детектором заставок (и ничего/что-то нашли). */
+    introCheckedAt: timestamp("intro_checked_at", { withTimezone: true }),
     /** Хэш источника: повторный ingest того же ref обновляет запись, не дублируя. */
     sourceKey: varchar("source_key", { length: 64 }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

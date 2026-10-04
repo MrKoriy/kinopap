@@ -55,7 +55,34 @@ jobs:
 
       - name: Web e2e (chromium, реальный ffmpeg-ингест)
         # github-репортер выводит упавшие тесты аннотациями прямо в PR.
-        run: pnpm --filter @zal/web exec playwright test --project=chromium --reporter=github,line
+        run: pnpm --filter @zal/web exec playwright test --project=chromium --grep-invert @visual --reporter=github,line
+
+      # Визуальные регрессии отдельным шагом: падение вёрстки не путается
+      # с падением плеера. Нет эталона — он снимается здесь же (на раннере,
+      # где и сравнивается) и уходит артефактом visual-snapshots для коммита.
+      - name: Web visual regression (chromium)
+        id: visual
+        run: |
+          # Эталонов нет — снимаем (тест не падает); есть — строгое сравнение.
+          if ls apps/web/e2e/visual.spec.ts-snapshots/*.png >/dev/null 2>&1; then update=none; else update=all; fi
+          pnpm --filter @zal/web exec playwright test e2e/visual.spec.ts --project=chromium --update-snapshots=$update --reporter=github,line
+
+      - name: Новые эталоны снапшотов
+        if: always() && steps.visual.outcome != 'skipped'
+        run: |
+          new=$(git status --porcelain --untracked-files=all apps/web/e2e/visual.spec.ts-snapshots | wc -l)
+          echo "new_snapshots=$new" >> "$GITHUB_ENV"
+          if [ "$new" -gt 0 ]; then
+            echo "::warning title=visual::Сняты новые эталоны ($new): скачайте артефакт visual-snapshots и закоммитьте в apps/web/e2e/visual.spec.ts-snapshots/"
+          fi
+
+      - name: Артефакт эталонов снапшотов
+        if: always() && env.new_snapshots != '0' && env.new_snapshots != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-snapshots
+          path: apps/web/e2e/visual.spec.ts-snapshots
+          retention-days: 14
 
       # Хвост лога e2e-харнесса (API+ингест) — аннотацией: без него падение
       # на старте webServer видно только как «exit code 1».

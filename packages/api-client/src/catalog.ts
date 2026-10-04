@@ -6,6 +6,7 @@ import {
   genreTypeSchema,
   type ItemType,
   itemTypeSchema,
+  personRoleSchema,
 } from "./common";
 
 /* ---------- Сортировка ---------- */
@@ -232,6 +233,22 @@ export const itemSummarySchema = z.object({
     id: z.string().nullable(),
     url: z.string().nullable(),
   }),
+  /** Бэкдроп TMDb (w1280): OG-картинка и фон шапки. */
+  backdrop: z.string().nullable().optional(),
+  /**
+   * Свои нарезки картинок (воркер, MEDIA_ROOT/img): базовый URL каталога
+   * с файлами `<w>.avif|webp` и blurhash/цвет для плейсхолдера.
+   * null — файлов нет, клиент идёт старым путём (posters.*).
+   */
+  images: z
+    .object({
+      poster: z.string().nullable(),
+      backdrop: z.string().nullable(),
+      blurhash: z.string().nullable(),
+      color: z.string().nullable(),
+    })
+    .nullable()
+    .optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -263,9 +280,44 @@ export type Episode = z.infer<typeof episodeSchema>;
 export type Season = z.infer<typeof seasonSchema>;
 export type MediaPart = z.infer<typeof mediaPartSchema>;
 
+/** Человек в титрах тайтла: актёр с ролью или член команды. */
+export const personCreditSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  photoUrl: z.string().nullable(),
+  role: personRoleSchema,
+  character: z.string().nullable(),
+});
+export type PersonCredit = z.infer<typeof personCreditSchema>;
+
+/** Часть франшизы (AniList): сезон, фильм, OVA… itemId — наша карточка. */
+export const franchiseEntrySchema = z.object({
+  anilistId: z.number().int(),
+  title: z.string(),
+  format: z.string().nullable(),
+  year: z.number().int().nullable(),
+  episodes: z.number().int().nullable(),
+  itemId: z.number().int().nullable(),
+});
+export const franchiseSchema = z.object({
+  id: z.number().int(),
+  title: z.string(),
+  entries: z.array(franchiseEntrySchema),
+});
+export type FranchiseEntry = z.infer<typeof franchiseEntrySchema>;
+export type Franchise = z.infer<typeof franchiseSchema>;
+
 export const itemDetailSchema = itemSummarySchema.extend({
+  /** Обычные сезоны (1..N). Спецвыпуски TMDb (сезон 0) — отдельно в specials. */
   seasons: z.array(seasonSchema).nullable(),
   media: z.array(mediaPartSchema).nullable(),
+  /** Спецвыпуски (TMDb «Сезон 0»): отдельная вкладка, вне «следующей серии». */
+  specials: seasonSchema.nullable().optional(),
+  /** Топ актёров (~20) и команда (режиссёр, сценарист, композитор). */
+  credits: z
+    .object({ cast: z.array(personCreditSchema), crew: z.array(personCreditSchema) })
+    .optional(),
+  franchise: franchiseSchema.nullable().optional(),
 });
 export type ItemDetail = z.infer<typeof itemDetailSchema>;
 
