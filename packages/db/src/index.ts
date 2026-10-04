@@ -10,6 +10,7 @@ export * from "./repos/franchises";
 export * from "./repos/images";
 export * from "./repos/ingest";
 export * from "./repos/intros";
+export * from "./repos/ops";
 export * from "./repos/people";
 export * from "./repos/profile";
 export * from "./repos/progress";

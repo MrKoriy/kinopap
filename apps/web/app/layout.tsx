@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Header } from "@/components/header";
+import { WebVitals } from "@/components/web-vitals";
 import { AuthProvider } from "@/lib/auth";
 import "@/lib/env";
 import { SITE_URL } from "@/lib/site";
@@ -32,6 +33,7 @@ export default function RootLayout({
   return (
     <html lang="ru">
       <body>
+        <WebVitals />
         <AuthProvider>
           <Header />
           {children}

@@ -26,6 +26,8 @@ export interface CatalogDraft {
   posterSmall: string | null;
   posterMedium: string | null;
   posterBig: string | null;
+  /** Бэкдроп TMDb (w1280) — discover его отдаёт, раньше выбрасывался. */
+  backdrop?: string | null;
   genreIds: number[];
 }
 
@@ -78,6 +80,7 @@ export async function insertCatalogBatch(
         tmdbId: items.tmdbId,
         tmdbType: items.tmdbType,
         posterMedium: items.posterMedium,
+        backdropUrl: items.backdropUrl,
       })
       .from(items)
       .where(
@@ -123,25 +126,27 @@ export async function insertCatalogBatch(
       const row = known.get(`${d.tmdbType}:${d.tmdbId}`);
       if (!row) continue;
       result.skipped++;
-      if (!row.posterMedium && d.posterMedium) repair.push({ id: row.id, d });
+      if ((!row.posterMedium && d.posterMedium) || (!row.backdropUrl && d.backdrop)) repair.push({ id: row.id, d });
     }
     if (repair.length > 0) {
       const tuples = sql.join(
         repair.map(
-          (r) => sql`(${r.id}::int, ${r.d.posterSmall}::text, ${r.d.posterMedium}::text, ${r.d.posterBig}::text, ${r.d.plot}::text, ${r.d.originalTitle}::text, ${r.d.rating}::double precision)`,
+          (r) => sql`(${r.id}::int, ${r.d.posterSmall}::text, ${r.d.posterMedium}::text, ${r.d.posterBig}::text, ${r.d.plot}::text, ${r.d.originalTitle}::text, ${r.d.rating}::double precision, ${r.d.backdrop ?? null}::text)`,
         ),
         sql`, `,
       );
       await tx.execute(sql`
         update ${items} as i set
-          poster_small = v.poster_small,
-          poster_medium = v.poster_medium,
-          poster_big = v.poster_big,
-          plot = v.plot,
-          original_title = v.original_title,
+          poster_small = coalesce(i.poster_small, v.poster_small),
+          poster_medium = coalesce(i.poster_medium, v.poster_medium),
+          poster_big = coalesce(i.poster_big, v.poster_big),
+          plot = coalesce(i.plot, v.plot),
+          original_title = coalesce(i.original_title, v.original_title),
+          backdrop_url = coalesce(i.backdrop_url, v.backdrop_url),
+          images_checked_at = case when i.backdrop_url is null and v.backdrop_url is not null then null else i.images_checked_at end,
           rating = case when v.rating > 0 then v.rating else i.rating end,
           updated_at = now()
-        from (values ${tuples}) as v(id, poster_small, poster_medium, poster_big, plot, original_title, rating)
+        from (values ${tuples}) as v(id, poster_small, poster_medium, poster_big, plot, original_title, rating, backdrop_url)
         where i.id = v.id
       `);
       result.repaired += repair.length;
@@ -170,6 +175,7 @@ export async function insertCatalogBatch(
             posterSmall: d.posterSmall,
             posterMedium: d.posterMedium,
             posterBig: d.posterBig,
+            backdropUrl: d.backdrop ?? null,
             tmdbId: d.tmdbId,
             tmdbType: d.tmdbType,
           })),

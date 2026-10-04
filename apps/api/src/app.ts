@@ -19,6 +19,7 @@ import { catalogRoutes } from "./routes/catalog";
 import { discoveryRoutes } from "./routes/discovery";
 import { docsRoutes } from "./routes/docs";
 import { ingestRoutes } from "./routes/ingest";
+import { metricsRoutes } from "./routes/metrics";
 import { profileRoutes } from "./routes/profile";
 import { progressRoutes } from "./routes/progress";
 import { socialRoutes } from "./routes/social";
@@ -132,6 +133,23 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     }
   });
 
+  // Server-Timing: сколько запрос провёл в API (видно в DevTools и в RUM
+  // через Resource Timing). Маршрут может добавить свои метрики раньше
+  // (media-links: resolve;desc="live") — дописываем, а не затираем.
+  const startedAt = new WeakMap<object, bigint>();
+  app.addHook("onRequest", async (request) => {
+    startedAt.set(request.raw, process.hrtime.bigint());
+  });
+  app.addHook("onSend", async (request, reply) => {
+    const t0 = startedAt.get(request.raw);
+    if (t0 === undefined) return;
+    const dur = Number(process.hrtime.bigint() - t0) / 1e6;
+    const prev = reply.getHeader("server-timing");
+    const own = `app;dur=${dur.toFixed(1)}`;
+    reply.header("server-timing", prev ? `${String(prev)}, ${own}` : own);
+    reply.header("timing-allow-origin", "*");
+  });
+
   app.addHook("onSend", async (_request, reply) => {
     // Базовые security-заголовки: API отдаёт JSON, но docs-роут рисует
     // HTML — nosniff и frameguard нужны и там.
@@ -231,6 +249,9 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       await progressRoutes(scope, { db: opts.db, config: opts.config });
       await profileRoutes(scope, { db: opts.db, config: opts.config });
       await socialRoutes(scope, { db: opts.db, config: opts.config });
+      // Свой под-плагин: парсер text/plain (sendBeacon) не должен влиять на
+      // остальные маршруты.
+      await scope.register(async (m) => metricsRoutes(m, { db: opts.db, config: opts.config }));
     },
     { prefix: "/v1" },
   );

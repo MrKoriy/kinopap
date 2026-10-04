@@ -63,6 +63,9 @@ const MATRIX_DECADES: Array<[number, number]> = [
   [2020, 2029],
 ];
 
+/** Порог голосов для лент новинок: у премьеры недели их единицы. */
+const FEED_MIN_VOTES = 3;
+
 /** Страны, чьи каталоги заметно отличаются от англоязычного «верха». */
 const DEFAULT_COUNTRIES = ["KR", "JP", "IN", "CN", "FR", "DE", "ES", "IT", "BR", "MX"];
 
@@ -94,6 +97,13 @@ export interface FillSpec {
   collections?: string[];
   /** top_rated + trending + популярное. */
   lists?: boolean;
+  /**
+   * Ленты TMDb «что выходит сейчас»: trending (день), now_playing, upcoming,
+   * on_the_air, airing_today — Catalog Daemon (tmdb-feeds) раз в 3 ч.
+   */
+  feeds?: boolean;
+  /** Страниц на ленту (20 тайтлов на страницу). */
+  feedPages?: number;
   /** Discover по странам происхождения. */
   countries?: string[];
   /** Страниц на страну. */
@@ -153,6 +163,7 @@ function mapEntry(raw: Record<string, unknown>, type: "movie" | "serial", minVot
   const tmdbId = typeof raw.id === "number" ? raw.id : null;
   const title = String(raw.title ?? raw.name ?? "").trim();
   const posterPath = raw.poster_path ? String(raw.poster_path) : null;
+  const backdropPath = raw.backdrop_path ? String(raw.backdrop_path) : null;
   const votes = typeof raw.vote_count === "number" ? raw.vote_count : 0;
   if (!tmdbId || !title || !posterPath || votes < minVotes) return null;
 
@@ -182,6 +193,7 @@ function mapEntry(raw: Record<string, unknown>, type: "movie" | "serial", minVot
     posterSmall: `${TMDB_IMAGE_BASE_URL}/w185${posterPath}`,
     posterMedium: `${TMDB_IMAGE_BASE_URL}/w500${posterPath}`,
     posterBig: `${TMDB_IMAGE_BASE_URL}/original${posterPath}`,
+    backdrop: backdropPath ? `${TMDB_IMAGE_BASE_URL}/w1280${backdropPath}` : null,
     genreIds: Array.isArray(raw.genre_ids)
       ? raw.genre_ids.filter((g): g is number => typeof g === "number")
       : [],
@@ -324,6 +336,28 @@ export async function fillCatalog(opts: FillOptions): Promise<FillSummary> {
       report("collect");
     }
     sources.push("lists");
+  }
+
+  // Ленты «что выходит сейчас»: новинки с малым числом голосов — порог ниже,
+  // чем у discover, но без постера тайтл всё равно не берём (mapEntry).
+  if (spec.feeds) {
+    for (let p = 1; p <= (spec.feedPages ?? 3); p++) {
+      for (const [path, isTv] of [
+        [`/trending/movie/day?page=${p}`, false],
+        [`/trending/tv/day?page=${p}`, true],
+        [`/movie/now_playing?region=RU&page=${p}`, false],
+        [`/movie/upcoming?page=${p}`, false],
+        [`/tv/on_the_air?page=${p}`, true],
+        [`/tv/airing_today?page=${p}`, true],
+      ] as const) {
+        const data = await tmdb.get<{ results?: Array<Record<string, unknown>> }>(path);
+        for (const raw of data?.results ?? []) {
+          push(mapEntry(raw, isTv ? "serial" : "movie", FEED_MIN_VOTES));
+        }
+      }
+      report("collect");
+    }
+    sources.push("feeds");
   }
 
   // Страны: Корея, Япония, Индия и т.д. — заметно другой каталог.

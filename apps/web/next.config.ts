@@ -13,6 +13,9 @@ const nextConfig: NextConfig = {
   // трассировки — монорепо: воркспейс-пакеты лежат выше apps/web.
   output: "standalone",
   outputFileTracingRoot: path.join(process.cwd(), "../.."),
+  // Сжимает nginx (brotli, а без модуля — gzip): gzip Next поверх него
+  // только мешал бы — nginx не пережимает уже сжатый ответ в brotli.
+  compress: false,
   transpilePackages: ["@zal/api-client", "@zal/ui", "@zal/shared"],
   experimental: {
     optimizePackageImports: ["lucide-react", "motion"],
@@ -30,7 +33,7 @@ const nextConfig: NextConfig = {
     // AVIF на ~20–30% легче WebP; оба кэшируются и отдаются по Accept.
     formats: ["image/avif", "image/webp"],
     // Постеры TMDb по пути неизменяемы: месяц в кэше оптимизатора вместо
-    // дефолтных 4 часов (кэш живёт в общей папке, переживает деплой).
+    // дефолтных 4 часов (кэш в /opt/kinopap/shared/next-cache, переживает деплой).
     minimumCacheTTL: 60 * 60 * 24 * 30,
     // Реально используемые ширины: меньше вариантов — выше доля попаданий.
     deviceSizes: [640, 828, 1080, 1280, 1920],

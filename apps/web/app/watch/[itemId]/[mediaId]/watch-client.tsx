@@ -17,6 +17,7 @@ import {
   nextEpisode,
   type PlayerEpisodeGroup,
 } from "@/lib/player-logic";
+import { reportRum, resolveSourceOf } from "@/lib/rum";
 
 export function WatchClient({
   item,
@@ -63,12 +64,30 @@ export function WatchClient({
         ? "Оцениваем релизы и размечаем источники…"
         : "Проверяем готовые раздачи…";
 
+  // TTFF: от запроса ссылок до первого кадра — один замер на пару (item, media).
+  const ttffStart = React.useRef<number | null>(null);
+  const ttffSent = React.useRef<string | null>(null);
+  const onPlaybackStart = React.useCallback(() => {
+    setPlaybackStarted(true);
+    const key = `${item.id}:${mediaId}`;
+    if (ttffStart.current == null || ttffSent.current === key) return;
+    ttffSent.current = key;
+    const src = resolveSourceOf(item.id, mediaId);
+    reportRum({
+      name: "TTFF",
+      value: Math.round(performance.now() - ttffStart.current),
+      itemId: item.id,
+      meta: { cold: src === "live", src, type: item.type },
+    });
+  }, [item.id, item.type, mediaId]);
+
   const abortRef = React.useRef<AbortController | null>(null);
   const load = React.useCallback(() => {
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
     setFailed(false);
+    ttffStart.current = performance.now();
     api
       .getMediaLinks(item.id, mediaId)
       .then((res) => {
@@ -204,7 +223,7 @@ export function WatchClient({
         title={item.title}
         episodeGroups={episodeGroups}
         currentMediaId={mediaId}
-        onPlaybackStart={() => setPlaybackStarted(true)}
+        onPlaybackStart={onPlaybackStart}
         onSourceReported={() => {
           // Раздача забанена для этой серии — сервер уже сбросил кэши пары,
           // свежий запрос отдаст другую. Этапы загрузки покажутся заново.

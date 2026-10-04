@@ -19,4 +19,5 @@ export * from "./pipeline";
 export * from "./storage";
 export * from "./stream-resolver";
 export * from "./tmdb-client";
+export * from "./tmdb-sync";
 export * from "./types";

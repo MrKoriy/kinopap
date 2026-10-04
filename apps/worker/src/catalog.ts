@@ -38,6 +38,8 @@ export const catalogFillSpecSchema = z.object({
   genrePages: z.number().int().min(1).max(5).optional(),
   collections: z.array(z.string().min(1).max(120)).max(150).optional(),
   lists: z.boolean().optional(),
+  feeds: z.boolean().optional(),
+  feedPages: z.number().int().min(1).max(5).optional(),
   countries: z.array(z.string().length(2)).max(30).optional(),
   countryPages: z.number().int().min(1).max(5).optional(),
   anime: z.boolean().optional(),

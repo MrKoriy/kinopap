@@ -41,7 +41,7 @@ import { getItemCredits } from "./people";
 /** Служебные метки фоновых задач в выдачу не идут — их нет и в itemColumns. */
 type ItemRow = Omit<
   typeof items.$inferSelect,
-  "anilistId" | "creditsCheckedAt" | "anilistCheckedAt" | "imagesCheckedAt"
+  "anilistId" | "creditsCheckedAt" | "anilistCheckedAt" | "imagesCheckedAt" | "tmdbRefreshedAt" | "tmdbChangedAt"
 >;
 
 const SERIAL_LIKE: readonly ItemType[] = ["serial", "docuserial", "tvshow"];

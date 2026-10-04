@@ -1,8 +1,9 @@
 import { createDb, createPool, reconcileStaleIngestJobs } from "@zal/db";
 import { fillCatalog, stopActiveChildren } from "@zal/ingest";
 import { Redis } from "ioredis";
-import { startAutopilot } from "./autopilot";
+import { runScript, startAutopilot } from "./autopilot";
 import { createCatalogWorker } from "./catalog";
+import { startCatalogDaemon } from "./daemon";
 import { makeWorkerDeps } from "./deps";
 import { startRevalidator } from "./lib/revalidate";
 import { startStreamJobs } from "./stream-jobs";
@@ -96,6 +97,28 @@ if (process.env.AUTOPILOT !== "0" && tmdbApiKey) {
   });
 }
 
+// Catalog Daemon: TMDb /changes и ленты новинок, свежие серии AniLibria,
+// дыры метаданных и картинки новых тайтлов — по расписанию (src/daemon.ts).
+let stopDaemon: (() => Promise<void>) | null = null;
+if (process.env.CATALOG_DAEMON !== "0" && tmdbApiKey) {
+  const daemonConnection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  daemonConnection.on("error", (err) => {
+    console.warn("worker: daemon redis error (non-fatal):", String(err).slice(0, 300));
+  });
+  startCatalogDaemon(daemonConnection, {
+    db,
+    tmdbApiKey,
+    anilibriaBaseUrl: process.env.ANILIBRIA_URL,
+    runScript,
+  })
+    .then((stop) => {
+      stopDaemon = stop;
+    })
+    .catch((err) => {
+      console.warn("worker: catalog daemon failed to start (non-fatal):", String(err).slice(0, 300));
+    });
+}
+
 // Точечный сброс ISR веба: изменившиеся тайтлы → revalidateTag. Включается
 // секретом, общим с вебом (REVALIDATE_SECRET в /opt/kinopap/.env).
 let stopRevalidator: (() => void) | undefined;
@@ -179,7 +202,7 @@ async function shutdown(signal: string): Promise<void> {
   // Сначала останавливаем дочерние ffmpeg/ffprobe — иначе close() ждёт
   // завершения активной джобы часами.
   await stopActiveChildren(5_000);
-  await Promise.allSettled([worker.close(), catalogWorker.close(), stopStreamJobs?.()]);
+  await Promise.allSettled([worker.close(), catalogWorker.close(), stopStreamJobs?.(), stopDaemon?.()]);
   await Promise.allSettled([connection.quit(), catalogConnection.quit()]);
   clearTimeout(exitTimer);
   process.exit(0);

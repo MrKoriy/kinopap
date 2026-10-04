@@ -3,10 +3,20 @@
  *
  * Автопилот воркера заливает новые сериалы без серий (discover TMDb не отдаёт
  * состав) — раньше серии появлялись только когда первый зритель открывал
- * карточку и ждал. Теперь раз в час берём пачку самых популярных сериалов без
- * серий, гидрируем и сразу раскладываем длинные сезоны.
+ * карточку и ждал. Теперь раз в 30 минут берём пачку самых популярных сериалов
+ * без серий и сериалов с новыми сериями у TMDb (пометка Catalog Daemon),
+ * гидрируем и сразу раскладываем длинные сезоны. Итог — в sync_state.
  */
-import { absorbAnilibriaItem, absorbAnilibriaSeason, type Db, findAnimeSeasonPairs, findAnimeSourcePairs } from "@zal/db";
+import {
+  absorbAnilibriaItem,
+  absorbAnilibriaSeason,
+  clearSerialBehindTmdb,
+  type Db,
+  findAnimeSeasonPairs,
+  findAnimeSourcePairs,
+  listSerialsBehindTmdb,
+  recordSyncRun,
+} from "@zal/db";
 import { sql } from "drizzle-orm";
 import type { Config } from "../config";
 import { matchAnilibriaViaTmdb } from "./anime-tmdb-match";
@@ -72,7 +82,17 @@ export async function mergeAnimeSeasons(
   return merged;
 }
 
-export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: number; regrouped: number; merged: number; localized: number; enriched: number }> {
+export interface GapFillStats {
+  hydrated: number;
+  /** Сериалы, у которых TMDb сообщил о новых сериях (Catalog Daemon). */
+  caughtUp: number;
+  regrouped: number;
+  merged: number;
+  localized: number;
+  enriched: number;
+}
+
+export async function gapFillOnce(db: Db, config: Config): Promise<GapFillStats> {
   const res = await db.execute<{ id: number; tmdb_id: number }>(sql`
     select i.id, i.tmdb_id from items i
     where i.type = 'serial' and i.tmdb_id is not null
@@ -85,6 +105,14 @@ export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: n
     if (await hydrateSerialSeasons(db, config, Number(r.id), Number(r.tmdb_id)).catch(() => false)) {
       hydrated++;
     }
+  }
+  // Новые серии онгоингов и недогруженные сезоны: tmdb-changes воркера
+  // помечает сериал (tmdb_changed_at), гидрация дописывает недостающее
+  // (onConflictDoNothing по номерам — существующие серии не трогает).
+  let caughtUp = 0;
+  for (const r of await listSerialsBehindTmdb(db, config.gapFillBatch).catch(() => [])) {
+    if (await hydrateSerialSeasons(db, config, r.id, r.tmdbId).catch(() => false)) caughtUp++;
+    await clearSerialBehindTmdb(db, r.id).catch(() => undefined);
   }
   const long = await db.execute<{ item_id: number }>(sql`
     select s.item_id from seasons s join items i on i.id = s.item_id
@@ -105,7 +133,7 @@ export async function gapFillOnce(db: Db, config: Config): Promise<{ hydrated: n
   const viaTmdb = await matchAnilibriaViaTmdb(db, config, { limit: 40 }).catch(() => ({ merged: 0, enriched: 0 }));
   // новые тайтлы из discover приходят без стран — добираем деталями TMDb
   await fillCountries(db, config, { limit: 200 }).catch(() => 0);
-  return { hydrated, regrouped, merged: merged + viaTmdb.merged, localized, enriched: viaTmdb.enriched };
+  return { hydrated, caughtUp, regrouped, merged: merged + viaTmdb.merged, localized, enriched: viaTmdb.enriched };
 }
 
 export function startGapFiller(db: Db, config: Config): () => void {
@@ -113,21 +141,26 @@ export function startGapFiller(db: Db, config: Config): () => void {
   const tick = async () => {
     if (running) return;
     running = true;
+    const started = Date.now();
     try {
       const out = await gapFillOnce(db, config);
-      if (out.hydrated || out.regrouped || out.merged || out.localized || out.enriched) {
+      await recordSyncRun(db, "gap-filler", { ok: true, stats: { ...out, ms: Date.now() - started } }).catch(() => undefined);
+      if (out.hydrated || out.caughtUp || out.regrouped || out.merged || out.localized || out.enriched) {
         console.log(
-          `gap-fill: hydrated=${out.hydrated} regrouped=${out.regrouped} merged=${out.merged} localized=${out.localized} enriched=${out.enriched}`,
+          `gap-fill: hydrated=${out.hydrated} caughtUp=${out.caughtUp} regrouped=${out.regrouped} merged=${out.merged} localized=${out.localized} enriched=${out.enriched}`,
         );
       }
     } catch (err) {
       console.warn("gap-fill: failed:", String(err).slice(0, 200));
+      await recordSyncRun(db, "gap-filler", { ok: false, error: String(err) }).catch(() => undefined);
     } finally {
       running = false;
     }
   };
   const first = setTimeout(() => void tick(), 5 * 60 * 1000);
-  const timer = setInterval(() => void tick(), HOUR);
+  // Раз в 30 мин: в паре с tmdb-changes воркера (тоже 30 мин) новая серия
+  // онгоинга появляется в карточке в пределах часа.
+  const timer = setInterval(() => void tick(), HOUR / 2);
   first.unref();
   timer.unref();
   return () => {

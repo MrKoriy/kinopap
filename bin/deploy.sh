@@ -369,6 +369,14 @@ PY
   fi
   # Перф-блок (gzip, микрокэш API, кэш постеров вне релизов, HTTP/2) и
   # закрытый /torrents. Не прошёл nginx -t — возвращаем прежний vhost.
+  # brotli: модуль из universe (ngx_brotli под системный nginx 1.24). Пакет сам
+  # кладёт load_module в modules-enabled; nginx-tune.py включает brotli в
+  # vhost, только если модуль на месте. Не поставился — живём на gzip.
+  if ! ls /etc/nginx/modules-enabled/ 2>/dev/null | grep -q brotli; then
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -q libnginx-mod-http-brotli-filter >/tmp/kinopap-brotli.log 2>&1 \
+      && echo "  nginx: модуль brotli установлен" \
+      || echo "  ВНИМАНИЕ: libnginx-mod-http-brotli-filter не поставился (см. /tmp/kinopap-brotli.log)" >&2
+  fi
   cp "\$NGINX_SITE" /tmp/kinopap-vhost.prev
   python3 $APP_DIR/bin/nginx-tune.py "\$NGINX_SITE"
   if nginx -t 2>/tmp/kinopap-nginx-t.log; then
@@ -465,6 +473,16 @@ if ! ZAL_DEPLOY=1 pnpm db:setup > /tmp/kinopap-db-setup.log 2>&1; then
 fi
 tail -2 /tmp/kinopap-db-setup.log
 
+# Общий кэш Next между релизами: раньше .next/cache жил внутри releases/<ts>
+# и обнулялся каждым деплоем — сборка шла с нуля, fetch-кэш ISR и
+# оптимизированные картинки next/image грелись заново. Кэш сборки — в
+# apps/web/.next/cache, рантайма standalone — в .next/standalone/apps/web/
+# .next/cache: обе ссылки ведут в $APP_DIR/shared/next-cache.
+NEXT_CACHE=$APP_DIR/shared/next-cache
+mkdir -p "\$NEXT_CACHE" apps/web/.next
+rm -rf apps/web/.next/cache
+ln -sfn "\$NEXT_CACHE" apps/web/.next/cache
+
 # NEXT_PUBLIC_API_URL инлайнится в бандл при билде. Пустое значение — намеренно:
 # адрес API берётся из origin окна, поэтому один и тот же бандл работает и по
 # http://<ip>, и по https://<имя>.
@@ -486,6 +504,10 @@ fi
   || fail "после сборки нет apps/api/dist/server.js или apps/worker/dist/index.js"
 [ -f apps/web/.next/standalone/apps/web/server.js ] \
   || fail "нет standalone-сервера web (.next/standalone/apps/web/server.js)"
+mkdir -p apps/web/.next/standalone/apps/web/.next
+rm -rf apps/web/.next/standalone/apps/web/.next/cache
+ln -sfn "\$NEXT_CACHE" apps/web/.next/standalone/apps/web/.next/cache
+echo "  next-cache: общий (\$(du -sh "\$NEXT_CACHE" 2>/dev/null | cut -f1))"
 echo "  api/worker/web: собраны"
 REMOTE
 

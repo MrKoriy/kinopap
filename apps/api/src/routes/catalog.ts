@@ -385,15 +385,28 @@ export async function catalogRoutes(
     {
       config: { rateLimit: { max: 40, timeWindow: "1 minute" } },
     },
-    async (request) => {
+    async (request, reply) => {
     const { id } = parseOrThrow(idParamsSchema, request.params);
     const { mid } = parseOrThrow(mediaLinksQuerySchema, request.query ?? {});
-    const links = await resolveMediaLinks(id, mid);
+    const info: ResolveInfo = { src: "local" };
+    const started = Date.now();
+    const links = await resolveMediaLinks(id, mid, info);
+    // Откуда взялись ссылки — для RUM: TTFF плеера помечается «холодным»,
+    // если резолв шёл вживую (rutor/AniLibria/TorrServer), а не из кэшей.
+    reply.header("server-timing", `resolve;desc="${info.src}";dur=${Date.now() - started}`);
     return signStreamLinks(links, config.gstLinkSecret);
     },
   );
 
-  async function resolveMediaLinks(id: number, mid: number) {
+  /**
+   * Откуда ссылки: local — свои файлы/HLS в БД, memory — кэш процесса,
+   * db — сохранённый резолв (stream_links), live — живой резолв.
+   */
+  interface ResolveInfo {
+    src: "local" | "memory" | "db" | "live";
+  }
+
+  async function resolveMediaLinks(id: number, mid: number, info: ResolveInfo = { src: "local" }) {
     let links = await mediaLinks(db, id, mid, config.mediaBaseUrl);
     if (!links) {
       // Чужая пара (item, media) — 404. Заглушку создаём только если у item
@@ -427,6 +440,7 @@ export async function catalogRoutes(
       const cacheKey = `${id}:${links.mediaId}`;
       const cached = resolveCache.get(cacheKey);
       if (cached && Date.now() - cached.at < RESOLVE_CACHE_TTL_MS) {
+        info.src = "memory";
         applyCached(links, cached);
         return links;
       }
@@ -437,6 +451,7 @@ export async function catalogRoutes(
       if (stored && isSourceFresh(stored, RESOLVE_DB_TTL_MS)) {
         const entry = makeEntry(stored.files, stored.audios, stored.intro, stored.warm);
         cacheResolveEntry(cacheKey, entry);
+        info.src = "db";
         applyCached(links, entry);
         return links;
       }
@@ -444,6 +459,7 @@ export async function catalogRoutes(
       // In-flight дедуп: холодный резолв ходит в rutor/AniLibria/TorrServer
       // секундами — N параллельных запросов на одну пару гоняли N полных
       // резолвов (шторм по внешним сервисам, гонка за кэш).
+      info.src = "live";
       let task = linkResolves.get(cacheKey);
       if (!task) {
         task = resolveZeroStorage(id, links.mediaId, stored?.warm ?? null);
