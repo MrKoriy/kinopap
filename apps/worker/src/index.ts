@@ -4,6 +4,7 @@ import { Redis } from "ioredis";
 import { startAutopilot } from "./autopilot";
 import { createCatalogWorker } from "./catalog";
 import { makeWorkerDeps } from "./deps";
+import { startRevalidator } from "./lib/revalidate";
 import { createTranscoderWorker } from "./worker";
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -94,6 +95,24 @@ if (process.env.AUTOPILOT !== "0" && tmdbApiKey) {
   });
 }
 
+// Точечный сброс ISR веба: изменившиеся тайтлы → revalidateTag. Включается
+// секретом, общим с вебом (REVALIDATE_SECRET в /opt/kinopap/.env).
+let stopRevalidator: (() => void) | undefined;
+if (process.env.REVALIDATE_SECRET) {
+  const revalidateConnection = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
+  revalidateConnection.on("error", (err) => {
+    console.warn("worker: revalidate redis error (non-fatal):", String(err).slice(0, 300));
+  });
+  stopRevalidator = startRevalidator({
+    db,
+    redis: revalidateConnection,
+    webUrl: process.env.WEB_INTERNAL_URL ?? "http://127.0.0.1:7000",
+    secret: process.env.REVALIDATE_SECRET,
+    everyMs: Number(process.env.REVALIDATE_EVERY_S ?? 120) * 1000,
+  });
+  console.log("worker: revalidate loop ready");
+}
+
 // BullMQ-воркеры и Redis-коннекты эмитят 'error' (сбой jobs, реконнект).
 // Без слушателя an unhandled 'error' роняет процесс — падение Redis
 // не должно убивать воркера, оно должно попадать в лог и ретраиться.
@@ -134,6 +153,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`worker: ${signal}, closing`);
   clearInterval(gcTimer);
   clearInterval(reconcileTimer);
+  stopRevalidator?.();
   // Потолок ожидания: зависший encode держал worker.close() бесконечно,
   // PM2 завершал процесс принудительно, ffmpeg оставался сиротой.
   const exitTimer = setTimeout(() => process.exit(1), 10_000);

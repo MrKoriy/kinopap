@@ -25,6 +25,26 @@ if (!DATABASE_URL) {
 // /opt/kinopap/{bin,data} и переживают любой деплой.
 const RELEASE_DIR = "/opt/kinopap/current";
 
+// Прод запускает собранный JS (`pnpm build` → apps/*/dist, Next standalone),
+// а не `tsx` на лету: холодный старт быстрее, памяти меньше, и API можно
+// поднять в PM2 cluster. Если сборки в релизе нет (откат на релиз до этой
+// схемы), приложение стартует по-старому через tsx / next start.
+const fs = require("node:fs");
+const path = require("node:path");
+const built = (rel) => fs.existsSync(path.join(RELEASE_DIR, rel));
+const API_ENTRY = "apps/api/dist/server.js";
+const WORKER_ENTRY = "apps/worker/dist/index.js";
+const WEB_ENTRY = "apps/web/.next/standalone/apps/web/server.js";
+const apiBuilt = built(API_ENTRY);
+const workerBuilt = built(WORKER_ENTRY);
+const webBuilt = built(WEB_ENTRY);
+
+// Инстансы API. Кэш выдачи rutor и счётчики rate limit — в Redis, фоновые
+// циклы (прогрев, догон дыр, гигиена) крутит только инстанс 0
+// (NODE_APP_INSTANCE), поэтому копии не дерутся. API_INSTANCES=1 — один процесс.
+const API_INSTANCES = Math.max(1, Number(process.env.API_INSTANCES ?? "2") || 1);
+const apiCluster = apiBuilt && API_INSTANCES > 1;
+
 module.exports = {
   apps: [
     {
@@ -37,8 +57,10 @@ module.exports = {
     {
       name: "kinopap-api",
       cwd: RELEASE_DIR,
-      script: "pnpm",
-      args: "--filter @zal/api exec tsx src/server.ts",
+      ...(apiBuilt
+        ? { script: API_ENTRY, interpreter: "node", node_args: "--enable-source-maps" }
+        : { script: "pnpm", args: "--filter @zal/api exec tsx src/server.ts" }),
+      ...(apiCluster ? { exec_mode: "cluster", instances: API_INSTANCES } : {}),
       autorestart: true,
       max_restarts: 10,
       env: {
@@ -73,8 +95,9 @@ module.exports = {
     {
       name: "kinopap-worker",
       cwd: RELEASE_DIR,
-      script: "pnpm",
-      args: "--filter @zal/worker exec tsx src/index.ts",
+      ...(workerBuilt
+        ? { script: WORKER_ENTRY, interpreter: "node", node_args: "--enable-source-maps" }
+        : { script: "pnpm", args: "--filter @zal/worker exec tsx src/index.ts" }),
       autorestart: true,
       max_restarts: 10,
       env: {
@@ -85,6 +108,9 @@ module.exports = {
         MEDIA_BASE_URL: process.env.MEDIA_BASE_URL,
         LOCAL_SOURCE_ROOT: process.env.LOCAL_SOURCE_ROOT,
         TMDB_API_KEY: process.env.TMDB_API_KEY,
+        // Точечный сброс ISR веба (lib/revalidate.ts): без секрета выключен.
+        REVALIDATE_SECRET: process.env.REVALIDATE_SECRET,
+        WEB_INTERNAL_URL: process.env.WEB_INTERNAL_URL ?? "http://127.0.0.1:7000",
         // Автопилот каталога: свежие релизы/аниме каждые 6 ч, широкий проход и трейлеры — раз в сутки.
         AUTOPILOT: process.env.AUTOPILOT ?? "1",
       },
@@ -92,13 +118,21 @@ module.exports = {
     {
       name: "kinopap-web",
       cwd: RELEASE_DIR,
-      script: "pnpm",
-      args: "--filter @zal/web start -p 7000",
+      // Standalone-сервер Next: только трассированные зависимости, без pnpm и
+      // next CLI в цепочке процессов. Статику рядом кладёт postbuild-скрипт.
+      ...(webBuilt
+        ? { script: WEB_ENTRY, interpreter: "node" }
+        : { script: "pnpm", args: "--filter @zal/web start -p 7000" }),
       autorestart: true,
       max_restarts: 10,
       env: {
         NODE_ENV: "production",
         PORT: "7000",
+        // standalone server.js слушает HOSTNAME:PORT (next start — 0.0.0.0).
+        HOSTNAME: "0.0.0.0",
+        // Секрет POST /api/revalidate: воркер сбрасывает ISR-теги тайтлов.
+        REVALIDATE_SECRET: process.env.REVALIDATE_SECRET,
+        NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
         NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL,
         INTERNAL_API_URL:
           process.env.INTERNAL_API_URL ?? "http://127.0.0.1:7001",

@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { drizzle as drizzleNodePg } from "drizzle-orm/node-postgres";
@@ -28,8 +30,30 @@ export function createPool(databaseUrl: string): Pool {
   return pool;
 }
 
-/** Каталог миграций drizzle-kit (лежит рядом с src). */
-export const migrationsDir = fileURLToPath(new URL("../drizzle", import.meta.url));
+/**
+ * Каталог миграций drizzle-kit (лежит рядом с src).
+ *
+ * Из исходников (tsx, тесты) это `packages/db/drizzle`. В прод-бандле
+ * API/воркера этот модуль вшит в `apps/<app>/dist/*.js`, и относительный
+ * путь указал бы в никуда — тогда поднимаемся вверх до корня монорепо.
+ * ZAL_MIGRATIONS_DIR перекрывает поиск явно.
+ */
+function resolveMigrationsDir(): string {
+  const fromEnv = process.env.ZAL_MIGRATIONS_DIR;
+  if (fromEnv) return fromEnv;
+  const besideSrc = fileURLToPath(new URL("../drizzle", import.meta.url));
+  if (existsSync(join(besideSrc, "meta", "_journal.json"))) return besideSrc;
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    const candidate = join(dir, "packages", "db", "drizzle");
+    if (existsSync(join(candidate, "meta", "_journal.json"))) return candidate;
+    const parent = dirname(dir);
+    if (parent === dir) return besideSrc;
+    dir = parent;
+  }
+}
+
+export const migrationsDir = resolveMigrationsDir();
 
 export async function runMigrations(pool: Pool): Promise<void> {
   const db = createDb(pool);
