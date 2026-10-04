@@ -50,6 +50,20 @@ export async function findUserById(db: Db, id: number): Promise<UserRow | null> 
   return rows[0] ?? null;
 }
 
+/** Новый хэш пароля (смена пароля, сброс владельцем через CLI). */
+export async function setUserPasswordHash(
+  db: Db,
+  userId: number,
+  passwordHash: string,
+): Promise<boolean> {
+  const updated = await db
+    .update(users)
+    .set({ passwordHash, updatedAt: new Date() })
+    .where(eq(users.id, userId))
+    .returning({ id: users.id });
+  return updated.length > 0;
+}
+
 /** Компенсирующее удаление (например, при неудачном списании инвайта). */
 export async function deleteUser(db: Db, id: number): Promise<void> {
   await db.delete(users).where(eq(users.id, id));

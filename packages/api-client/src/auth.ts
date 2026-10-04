@@ -11,6 +11,11 @@ export const loginSchema = z.object({
   email: z.email().max(255),
   password: z.string().min(1).max(128),
 });
+/** Смена пароля: текущий подтверждает владельца сессии, новый — по правилам регистрации. */
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: z.string().min(8).max(128),
+});
 export const refreshSchema = z.object({
   refreshToken: z.string().min(10).max(200),
 });
@@ -18,6 +23,7 @@ export const refreshSchema = z.object({
 export type RegisterInput = z.infer<typeof registerSchema>;
 export type LoginInput = z.infer<typeof loginSchema>;
 export type RefreshInput = z.infer<typeof refreshSchema>;
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
 
 export const userSchema = z.object({
   id: z.number().int(),

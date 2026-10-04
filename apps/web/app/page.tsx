@@ -5,7 +5,8 @@ import { ItemRail } from "@/components/item-rail";
 import { HeroSkeleton, RailSkeleton } from "@/components/skeletons";
 import { type CatalogParams, fetchItems, fetchShortcut, type ShortcutKind } from "@/lib/api";
 
-export const revalidate = 30;
+// Страховочный интервал ISR; свежесть даёт точечный revalidateTag из воркера.
+export const revalidate = 300;
 
 /** Лента, деградировавшая в честную ошибку, а не в «пусто». */
 async function RailOrError({

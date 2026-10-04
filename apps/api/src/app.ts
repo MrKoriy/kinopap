@@ -1,7 +1,10 @@
+import { constants as zlibConstants } from "node:zlib";
+import compress from "@fastify/compress";
 import cookie from "@fastify/cookie";
 import rateLimit from "@fastify/rate-limit";
 import type { Db } from "@zal/db";
 import Fastify, { type FastifyInstance } from "fastify";
+import type { Redis } from "ioredis";
 import type { Config } from "./config";
 import {
   type CatalogFillQueue,
@@ -27,6 +30,9 @@ export interface BuildAppOptions {
   queue?: IngestQueue;
   /** Очередь фонового fill-каталога: BullMQ в проде, noop в тестах. */
   catalogQueue?: CatalogFillQueue;
+  /** Общий Redis (прод): счётчики rate limit и кэш выдачи rutor — одни на
+   * все инстансы PM2 cluster. Без него (тесты, dev) — память процесса. */
+  redis?: Redis | null;
   logger?: boolean;
 }
 
@@ -53,6 +59,24 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     global: true,
     max: 1000,
     timeWindow: "1 minute",
+    // В cluster лимиты в памяти делились бы на число инстансов (каждый
+    // считает своё) — с Redis счётчик общий. Redis лёг — не роняем запросы.
+    ...(opts.redis ? { redis: opts.redis, nameSpace: "zal-rl:", skipOnError: true } : {}),
+  });
+
+  // Сжатие ответов: списки серий и ленты — десятки КБ JSON, brotli режет их
+  // в 6–10 раз. Качество 4 вместо дефолтных 11: на лету 11 съедает CPU, а
+  // выигрыш по размеру против 4 — проценты. nginx сжатый ответ не трогает.
+  await app.register(compress, {
+    global: true,
+    threshold: 1024,
+    encodings: ["br", "gzip"],
+    brotliOptions: {
+      params: {
+        [zlibConstants.BROTLI_PARAM_MODE]: zlibConstants.BROTLI_MODE_TEXT,
+        [zlibConstants.BROTLI_PARAM_QUALITY]: 4,
+      },
+    },
   });
 
   // Refresh-токен веба живёт в httpOnly-cookie (XSS не крадёт сессию),
@@ -99,7 +123,12 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       !reply.getHeader("cache-control") &&
       PUBLIC_CACHEABLE.test(request.url)
     ) {
-      reply.header("cache-control", "public, max-age=30, stale-while-revalidate=600");
+      // s-maxage — для общего кэша (nginx proxy_cache): ему можно держать
+      // ответ дольше браузера, гости получают его без похода в БД.
+      reply.header(
+        "cache-control",
+        "public, max-age=30, s-maxage=60, stale-while-revalidate=600",
+      );
     }
   });
 
@@ -188,7 +217,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
   await app.register(
     async (scope) => {
       await authRoutes(scope, { db: opts.db, config: opts.config });
-      await catalogRoutes(scope, { db: opts.db, config: opts.config });
+      await catalogRoutes(scope, { db: opts.db, config: opts.config, redis: opts.redis ?? null });
       await discoveryRoutes(scope, {
         db: opts.db,
         config: opts.config,

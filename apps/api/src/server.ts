@@ -52,11 +52,17 @@ async function purgeOnce() {
     console.warn("resolve: purge failed:", String(err).slice(0, 200));
   }
 }
-await purgeOnce();
-const purgeTokensTimer = setInterval(() => void purgeOnce(), PURGE_TOKENS_INTERVAL_MS);
-const purgeSourcesTimer = setInterval(() => void purgeOnce(), PURGE_SOURCES_INTERVAL_MS);
-purgeTokensTimer.unref();
-purgeSourcesTimer.unref();
+// В PM2 cluster гигиену делает только первый инстанс: остальным незачем
+// параллельно чистить те же строки.
+let purgeTokensTimer: ReturnType<typeof setInterval> | undefined;
+let purgeSourcesTimer: ReturnType<typeof setInterval> | undefined;
+if (config.primaryInstance) {
+  await purgeOnce();
+  purgeTokensTimer = setInterval(() => void purgeOnce(), PURGE_TOKENS_INTERVAL_MS);
+  purgeSourcesTimer = setInterval(() => void purgeOnce(), PURGE_SOURCES_INTERVAL_MS);
+  purgeTokensTimer.unref();
+  purgeSourcesTimer.unref();
+}
 
 // Догон дыр каталога: сериалы без серий, длинные сезоны (GAP_FILL=1 в проде).
 if (config.gapFill) startGapFiller(db, config);
@@ -82,6 +88,10 @@ let ingestQueue: IngestQueue = noopIngestQueue;
 // должен задерживать ingest. Без Redis роут выполняет fill синхронно.
 let catalogQueue: CatalogFillQueue = noopCatalogFillQueue;
 
+/** Общий Redis-коннект API: кэш выдачи rutor и счётчики rate limit —
+ * общие для всех инстансов PM2 cluster и переживают рестарт. */
+let sharedRedis: Redis | null = null;
+
 // Ресурсы для graceful shutdown: без явного закрытия держат event loop
 // до force-exit.
 const redisClients: Redis[] = [];
@@ -99,6 +109,21 @@ if (process.env.REDIS_URL) {
     });
     await redis.connect();
     redisClients.push(redis);
+
+    // Отдельный коннект для кэша и rate limit: у очередного коннекта
+    // maxRetriesPerRequest: null (требование BullMQ), и при лежащем Redis
+    // любая команда висела бы вечно вместе с запросом пользователя. Здесь
+    // команда падает сразу (без офлайн-очереди) или через 500 мс.
+    const cacheRedis = new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: 1,
+      commandTimeout: 500,
+      enableOfflineQueue: false,
+      lazyConnect: true,
+    });
+    cacheRedis.on("error", () => {});
+    await cacheRedis.connect();
+    redisClients.push(cacheRedis);
+    sharedRedis = cacheRedis;
 
     const queue = new Queue("transcode", { connection: redis });
     const fillQueue = new Queue("catalog", { connection: redis });
@@ -188,6 +213,7 @@ const app = await buildApp({
   config,
   queue: ingestQueue,
   catalogQueue,
+  redis: sharedRedis,
   logger: true,
 });
 await app.listen({ port: config.port, host: "0.0.0.0" });

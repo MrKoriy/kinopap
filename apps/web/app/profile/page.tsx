@@ -19,6 +19,7 @@ import Link from "next/link";
 import * as React from "react";
 import { useOptionalAuth } from "@/lib/auth";
 import { formatMemberSince } from "@/lib/profile-format";
+import { PasswordForm } from "./password-form";
 import { FavoritesSection, HistorySection, ListsSection } from "./sections";
 
 /** Порядок и подписи счётчиков сводки. */
@@ -210,6 +211,8 @@ export default function ProfilePage() {
         onDelete={(listId) => void actions.deleteList(listId)}
         onRemoveItem={(listId, itemId) => void removeFromList(listId, itemId)}
       />
+
+      <PasswordForm />
     </main>
   );
 }

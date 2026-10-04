@@ -52,15 +52,26 @@ async function getJson(
   path: string,
   revalidate = 30,
   timeoutMs = 15_000,
+  tags?: string[],
 ): Promise<unknown> {
-  return getJsonWithInit(path, revalidate, timeoutMs);
+  return getJsonWithInit(path, revalidate, timeoutMs, undefined, tags);
 }
+
+/** Через сколько секунд ISR сам перечитывает данные. Долгие интервалы
+ * безопасны: воркер сбрасывает теги точечно (POST /api/revalidate), когда
+ * тайтл реально изменился, — таймер лишь страховка. */
+export const ITEM_REVALIDATE_S = 3600;
+export const LIST_REVALIDATE_S = 300;
+/** Теги кэша Next: сбрасываются воркером через revalidateTag. */
+export const CATALOG_TAG = "catalog";
+export const itemTag = (id: number) => `item:${id}`;
 
 async function getJsonWithInit(
   path: string,
   revalidate = 30,
   timeoutMs = 15_000,
   init?: RequestInit,
+  tags?: string[],
 ): Promise<unknown> {
   const signal = AbortSignal.timeout(timeoutMs);
   let res: Response;
@@ -68,7 +79,9 @@ async function getJsonWithInit(
     res = await fetch(
       `${API_BASE}${path}`,
       {
-        ...(revalidate > 0 ? { next: { revalidate } } : { cache: "no-store" as const }),
+        ...(revalidate > 0
+          ? { next: { revalidate, ...(tags?.length ? { tags } : {}) } }
+          : { cache: "no-store" as const }),
         signal,
         ...init,
         headers: { ...(init?.headers as Record<string,string> | undefined) },
@@ -120,7 +133,7 @@ async function softOnBuildPhase<T>(fn: () => Promise<T>, fallback: T): Promise<T
 /** Список каталога: 200 и пусто — пустая страница; сбой — исключение. */
 export async function fetchItems(params: CatalogParams = {}): Promise<ItemPage> {
   return softOnBuildPhase(
-    async () => itemPageSchema.parse(await getJson(`/v1/items${qs(params)}`)),
+    async () => itemPageSchema.parse(await getJson(`/v1/items${qs(params)}`, LIST_REVALIDATE_S, undefined, [CATALOG_TAG])),
     EMPTY_PAGE,
   );
 }
@@ -130,7 +143,7 @@ export async function fetchShortcut(
   limit = 12,
 ): Promise<ItemPage> {
   return softOnBuildPhase(
-    async () => itemPageSchema.parse(await getJson(`/v1/items/${kind}${qs({ limit })}`)),
+    async () => itemPageSchema.parse(await getJson(`/v1/items/${kind}${qs({ limit })}`, LIST_REVALIDATE_S, undefined, [CATALOG_TAG])),
     EMPTY_PAGE,
   );
 }
@@ -140,7 +153,7 @@ export async function fetchItem(id: number): Promise<ItemDetail | null> {
   return softOnBuildPhase(
     async () => {
       try {
-        return itemDetailSchema.parse(await getJson(`/v1/items/${id}`));
+        return itemDetailSchema.parse(await getJson(`/v1/items/${id}`, ITEM_REVALIDATE_S, undefined, [itemTag(id)]));
       } catch (err) {
         if (err instanceof ApiUnavailableError && err.status === 404) return null;
         throw err;
@@ -177,7 +190,7 @@ export async function fetchSimilar(id: number): Promise<ItemPage> {
   return softOnBuildPhase(
     async () => {
       try {
-        return itemPageSchema.parse(await getJson(`/v1/items/${id}/similar`));
+        return itemPageSchema.parse(await getJson(`/v1/items/${id}/similar`, ITEM_REVALIDATE_S, undefined, [itemTag(id), CATALOG_TAG]));
       } catch (err) {
         if (err instanceof ApiUnavailableError && err.status === 404) {
           return EMPTY_PAGE;
