@@ -188,7 +188,7 @@ const refreshCols = {
   plot: items.plot,
   runtimeAvg: items.runtimeAvg,
   externalSource: items.externalSource,
-  episodes: sql<number>`(select count(*)::int from seasons s join episodes e on e.season_id = s.id where s.item_id = ${items.id} and s.number > 0)`,
+  episodes: sql<number>`(select count(*)::int from seasons s join episodes e on e.season_id = s.id where s.item_id = "items"."id" and s.number > 0)`,
 };
 
 function toRefreshRow(r: {
