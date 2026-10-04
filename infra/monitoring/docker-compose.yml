@@ -1,0 +1,37 @@
+# Мониторинг kino.pap: Prometheus (скрейпит /metrics API) + Grafana.
+# Порты — только на 127.0.0.1: Grafana открывается через SSH-туннель
+#   ssh -L 3300:127.0.0.1:3300 kinopap  →  http://localhost:3300
+# Запуск: MONITORING=1 bash bin/deploy.sh (или docker compose up -d здесь).
+services:
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: kinopap-prometheus
+    network_mode: host
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=2GB
+      - --web.listen-address=127.0.0.1:9390
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    mem_limit: 300m
+  grafana:
+    image: grafana/grafana-oss:11.3.0
+    container_name: kinopap-grafana
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      GF_SERVER_HTTP_ADDR: 127.0.0.1
+      GF_SERVER_HTTP_PORT: "3300"
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    mem_limit: 250m
+volumes:
+  prometheus-data:
+  grafana-data:

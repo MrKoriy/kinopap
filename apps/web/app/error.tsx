@@ -2,6 +2,8 @@
 
 /** Error boundary роута: API недоступен или сломан контракт — говорим об этом. */
 import Link from "next/link";
+import * as React from "react";
+import { reportError } from "@/lib/errors";
 
 export default function ErrorPage({
   error,
@@ -11,6 +13,9 @@ export default function ErrorPage({
   reset: () => void;
 }) {
   const apiDown = error.name === "ApiUnavailableError";
+  React.useEffect(() => {
+    if (!apiDown) reportError(error);
+  }, [error, apiDown]);
   return (
     <main className="mx-auto flex max-w-7xl flex-col items-center justify-center gap-4 px-4 py-24">
       <h1 className="text-2xl font-bold text-white">

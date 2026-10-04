@@ -4,6 +4,7 @@ export * from "./episodes";
 export * from "./format";
 export * from "./playback";
 export * from "./profile-actions";
+export * from "./sentry";
 export * from "./tracks";
 export * from "./trailer";
 export * from "./vtt";

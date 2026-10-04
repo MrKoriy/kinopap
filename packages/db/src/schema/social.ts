@@ -85,6 +85,8 @@ export const subscriptions = pgTable(
       .references(() => items.id, { onDelete: "cascade" }),
     notify: boolean("notify").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    /** До какого момента о новых сериях уже сообщили (уведомления воркера). */
+    notifiedAt: timestamp("notified_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     uniqueIndex("subscriptions_profile_item_uq").on(t.profileId, t.itemId),

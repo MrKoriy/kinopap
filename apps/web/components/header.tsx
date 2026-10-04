@@ -73,6 +73,11 @@ export function Header() {
                 </span>
               )}
             </Link>
+            {(user.role === "owner" || user.role === "admin") && (
+              <Link href="/ops" className="text-sm text-muted transition hover:text-white" data-testid="ops-link">
+                Ops
+              </Link>
+            )}
             <Link
               href="/profile"
               className="text-sm text-white transition hover:text-accent"

@@ -462,6 +462,18 @@ if ! pnpm install --frozen-lockfile --prefer-offline > /tmp/kinopap-install.log 
 fi
 tail -1 /tmp/kinopap-install.log
 
+# VAPID-пара web push: создаём один раз (нужен web-push из node_modules) и
+# не перезаписываем — смена ключа отписала бы все браузеры.
+if ! grep -q '^WEBPUSH_PRIVATE_KEY=.' "$APP_DIR/.env"; then
+  VAPID=\$(cd apps/worker && node -e 'const k=require("web-push").generateVAPIDKeys();console.log(k.publicKey+" "+k.privateKey)' 2>/dev/null || true)
+  if [ -n "\$VAPID" ]; then
+    sed -i '/^WEBPUSH_PUBLIC_KEY=/d;/^WEBPUSH_PRIVATE_KEY=/d' "$APP_DIR/.env"
+    echo "WEBPUSH_PUBLIC_KEY=\${VAPID%% *}" >> "$APP_DIR/.env"
+    echo "WEBPUSH_PRIVATE_KEY=\${VAPID##* }" >> "$APP_DIR/.env"
+    echo "  + WEBPUSH_PUBLIC_KEY/WEBPUSH_PRIVATE_KEY (VAPID)"
+  fi
+fi
+
 # Миграции обязаны быть аддитивными: до переключения симлинка на этом же коде
 # продолжает работать прежний релиз, и удалённая колонка уронит живой сайт.
 # Обратной совместимости здесь не на чем стоять — её обеспечивает только
@@ -486,7 +498,7 @@ ln -sfn "\$NEXT_CACHE" apps/web/.next/cache
 # NEXT_PUBLIC_API_URL инлайнится в бандл при билде. Пустое значение — намеренно:
 # адрес API берётся из origin окна, поэтому один и тот же бандл работает и по
 # http://<ip>, и по https://<имя>.
-if ! NEXT_PUBLIC_API_URL="" INTERNAL_API_URL="$API_INTERNAL" \
+if ! NEXT_PUBLIC_API_URL="" INTERNAL_API_URL="$API_INTERNAL" NEXT_PUBLIC_RELEASE="$TS" \
      pnpm --filter @zal/web build > /tmp/kinopap-web-build.log 2>&1; then
   tail -40 /tmp/kinopap-web-build.log >&2
   fail "сборка web упала (полный лог: /tmp/kinopap-web-build.log)"

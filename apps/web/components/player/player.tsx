@@ -28,6 +28,7 @@ import {
   pickInitialFileIndex,
   resolveStreamUrl,
 } from "@/lib/player-logic";
+import { useCast } from "./cast";
 import { PlayerControls, PlayerTimeContext } from "./controls";
 import {
   useBufferedRanges,
@@ -725,6 +726,7 @@ export function Player({
   // обслуживает и http://<ip>, и https://<имя>. Внешним плеерам и буферу обмена
   // относительный путь бесполезен — там нужен полный адрес.
   const externalStreamUrl = absoluteStreamUrl(streamUrl);
+  const cast = useCast(videoRef, { url: externalStreamUrl, title, poster: links.posterUrl });
 
   // Опции для контролов — стабильные массивы под React.memo.
   const audioTrackOptions = React.useMemo(
@@ -881,6 +883,7 @@ export function Player({
             onShift={shiftSubtitles}
             onPip={togglePip}
             onFullscreen={toggleFullscreen}
+            cast={cast}
           />
         </PlayerTimeContext.Provider>
       </div>

@@ -25,6 +25,7 @@ import {
   listNewEpisodes,
   listSubscriptions,
   ParentCommentNotFoundError,
+  recommendItems,
   removeVote,
   setVote,
   softDeleteComment,
@@ -174,6 +175,15 @@ export async function socialRoutes(
     await assertItem(id);
     const profileId = await requireProfileId(db, request);
     return { vote: await removeVote(db, profileId, id) };
+  });
+
+  /* ---------- Рекомендации ---------- */
+
+  /** «Рекомендуем вам»: похожее на историю профиля (жанры, люди). */
+  app.get("/recommendations", { preHandler: app.authenticate }, async (request, reply) => {
+    const profileId = await requireProfileId(db, request);
+    reply.header("cache-control", "private, max-age=300");
+    return { items: await recommendItems(db, profileId, 20) };
   });
 
   /* ---------- Подписки ---------- */

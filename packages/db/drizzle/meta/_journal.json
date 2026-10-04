@@ -169,6 +169,13 @@
       "when": 1791113463561,
       "tag": "0023_low_strong_guy",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1791141712368,
+      "tag": "0024_eminent_mad_thinker",
+      "breakpoints": true
     }
   ]
 }

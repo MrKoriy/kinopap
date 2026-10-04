@@ -32,6 +32,14 @@ const RELEASE_DIR = "/opt/kinopap/current";
 const fs = require("node:fs");
 const path = require("node:path");
 const built = (rel) => fs.existsSync(path.join(RELEASE_DIR, rel));
+// Имя релиза (каталог, на который смотрит current) — в ошибках и Sentry.
+const RELEASE_NAME = (() => {
+  try {
+    return path.basename(fs.realpathSync(RELEASE_DIR));
+  } catch {
+    return undefined;
+  }
+})();
 const API_ENTRY = "apps/api/dist/server.js";
 const WORKER_ENTRY = "apps/worker/dist/index.js";
 const WEB_ENTRY = "apps/web/.next/standalone/apps/web/server.js";
@@ -94,6 +102,13 @@ module.exports = {
         // Догон серий сериалов и раскладка длинных сезонов — раз в час.
         GAP_FILL: process.env.GAP_FILL ?? "1",
         RESOLVE_SOURCE_TTL_HOURS: process.env.RESOLVE_SOURCE_TTL_HOURS ?? "48",
+        // Уведомления: бот (ссылка привязки) и публичный VAPID-ключ web push.
+        TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+        TELEGRAM_BOT_NAME: process.env.TELEGRAM_BOT_NAME,
+        WEBPUSH_PUBLIC_KEY: process.env.WEBPUSH_PUBLIC_KEY,
+        // Наблюдаемость: Sentry (необязательно) и имя релиза в ошибках.
+        SENTRY_DSN: process.env.SENTRY_DSN,
+        RELEASE: RELEASE_NAME,
       },
     },
     {
@@ -130,6 +145,17 @@ module.exports = {
         STREAM_PRECHECK_BATCH: process.env.STREAM_PRECHECK_BATCH,
         STREAM_PRECHECK_TOP: process.env.STREAM_PRECHECK_TOP,
         STREAM_PRECHECK_RUTOR_PER_MIN: process.env.STREAM_PRECHECK_RUTOR_PER_MIN,
+        // Уведомления о новых сериях и алерты Ops (src/notify.ts). NOTIFY=0 — выкл.
+        NOTIFY: process.env.NOTIFY ?? "1",
+        TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+        WEBPUSH_PUBLIC_KEY: process.env.WEBPUSH_PUBLIC_KEY,
+        WEBPUSH_PRIVATE_KEY: process.env.WEBPUSH_PRIVATE_KEY,
+        WEBPUSH_SUBJECT: process.env.WEBPUSH_SUBJECT,
+        NEXT_PUBLIC_SITE_URL: process.env.NEXT_PUBLIC_SITE_URL,
+        CATALOG_DAEMON: process.env.CATALOG_DAEMON,
+        DAEMON_SKIP: process.env.DAEMON_SKIP,
+        SENTRY_DSN: process.env.SENTRY_DSN,
+        RELEASE: RELEASE_NAME,
       },
     },
     {

@@ -49,6 +49,16 @@ import {
   progressResponseSchema,
 } from "./ingest";
 import {
+  notifyChannelResponseSchema,
+  notifyChannelsResponseSchema,
+  notifyConfigSchema,
+  opsSummarySchema,
+  recommendationsResponseSchema,
+  telegramLinkResponseSchema,
+  type WebPushSubscriptionInput,
+  webPushSubscriptionSchema,
+} from "./notify";
+import {
   clearHistoryResponseSchema,
   favoriteListResponseSchema,
   favoriteResponseSchema,
@@ -633,6 +643,24 @@ export function createApiClient(opts: ApiClientOptions) {
         method: "DELETE",
         auth: true,
       }),
+
+    /* рекомендации и уведомления */
+    getRecommendations: () => request("/v1/recommendations", recommendationsResponseSchema, { auth: true }),
+    getNotifyConfig: () => request("/v1/notify/config", notifyConfigSchema),
+    listNotifyChannels: () => request("/v1/notify/channels", notifyChannelsResponseSchema, { auth: true }),
+    linkTelegram: () =>
+      request("/v1/notify/telegram/link", telegramLinkResponseSchema, { method: "POST", body: {}, auth: true }),
+    addWebPush: (input: WebPushSubscriptionInput) =>
+      request("/v1/notify/webpush", notifyChannelResponseSchema, {
+        method: "POST",
+        body: webPushSubscriptionSchema.parse(input),
+        auth: true,
+      }),
+    deleteNotifyChannel: (id: number) =>
+      request(`/v1/notify/channels/${id}`, okResponseSchema, { method: "DELETE", auth: true }),
+    /** Сводка Ops (владелец/админ): RUM, задачи, ошибки. */
+    getOpsSummary: (hours = 24) =>
+      request("/v1/metrics/summary", opsSummarySchema, { query: { hours }, auth: true }),
 
     /* meta */
     listTypes: () => request("/v1/types", typesResponseSchema),

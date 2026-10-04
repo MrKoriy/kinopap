@@ -1,7 +1,11 @@
 "use client";
 
+import * as React from "react";
+import { reportError } from "@/lib/errors";
+
 /** Глобальный boundary: падение даже layout — не серый экран Next по умолчанию. */
-export default function GlobalError({ reset }: { reset: () => void }) {
+export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  React.useEffect(() => reportError(error), [error]);
   return (
     <html lang="ru">
       <body className="flex min-h-screen flex-col items-center justify-center gap-4 bg-background">
