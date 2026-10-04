@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { NextConfig } from "next";
 
 const extraImageHosts = (process.env.NEXT_PUBLIC_EXTRA_IMAGE_HOSTS ?? "")
@@ -7,6 +8,11 @@ const extraImageHosts = (process.env.NEXT_PUBLIC_EXTRA_IMAGE_HOSTS ?? "")
   .map((hostname) => ({ protocol: "https" as const, hostname }));
 
 const nextConfig: NextConfig = {
+  // Прод: `node .next/standalone/apps/web/server.js` — минимальный сервер с
+  // трассированными зависимостями вместо `next start` через pnpm. Корень
+  // трассировки — монорепо: воркспейс-пакеты лежат выше apps/web.
+  output: "standalone",
+  outputFileTracingRoot: path.join(process.cwd(), "../.."),
   transpilePackages: ["@zal/api-client", "@zal/ui", "@zal/shared"],
   experimental: {
     optimizePackageImports: ["lucide-react", "motion"],

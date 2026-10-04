@@ -11,10 +11,10 @@
  * Выключается AUTOPILOT=0.
  */
 import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import type { FillSpec } from "@zal/ingest";
 import { type ConnectionOptions, Queue } from "bullmq";
 import { CATALOG_QUEUE, type CatalogJobSpec } from "./catalog";
+import { siblingScript } from "./lib/sibling-script";
 
 const HOUR = 60 * 60 * 1000;
 
@@ -67,9 +67,9 @@ export async function startAutopilot(
     const runTrailers = () => {
       if (running) return;
       running = true;
-      const script = fileURLToPath(new URL("./backfill-trailers.ts", import.meta.url));
-      // Тот же tsx-загрузчик, что у самого воркера (execArgv), — без npx.
-      const child = spawn(process.execPath, [...process.execArgv, script, "--limit=2000"], {
+      // Из исходников — тот же tsx-загрузчик (execArgv), из бандла — dist/*.js.
+      const script = siblingScript(import.meta.url, "backfill-trailers");
+      const child = spawn(process.execPath, [...script.args, "--limit=2000"], {
         stdio: ["ignore", "inherit", "inherit"],
         env: process.env,
       });

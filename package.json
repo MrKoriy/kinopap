@@ -14,7 +14,8 @@
     "lint": "biome check --error-on-warnings .",
     "lint:fix": "biome check --write --unsafe .",
     "db:generate": "pnpm --filter @zal/db db:generate",
-    "db:setup": "pnpm --filter @zal/db db:setup"
+    "db:setup": "pnpm --filter @zal/db db:setup",
+    "db:set-password": "pnpm --filter @zal/db db:set-password"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",

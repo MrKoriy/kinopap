@@ -77,16 +77,63 @@ function detectYear(title: string): number | null {
   return match ? parseInt(match[1], 10) : null;
 }
 
+/**
+ * Внешнее KV-хранилище для кэша поиска (Redis в проде). Интерфейс узкий,
+ * чтобы ingest не зависел от ioredis: API и воркер передают свою обёртку.
+ */
+export interface SearchCache {
+  get(key: string): Promise<string | null>;
+  set(key: string, value: string, ttlSeconds: number): Promise<void>;
+}
+
+/** Сколько живёт непустая выдача rutor: раздачи не исчезают за часы,
+ * а сиды в кэше чуть отстают — для скоринга это не критично. */
+const SEARCH_HIT_TTL_S = 6 * 60 * 60;
+/** Пустая выдача живёт коротко: релиз могут залить в любой момент. */
+const SEARCH_EMPTY_TTL_S = 20 * 60;
+const SEARCH_CACHE_PREFIX = "rutor:search:v1:";
+
 export class RutorConnector {
   private readonly mirrors: string[];
+  private cache: SearchCache | null = null;
 
   constructor(mirrors: string[] = ["https://rutor.is", "https://rutor.info", "http://rutor.info"]) {
     this.mirrors = mirrors;
   }
 
+  /** Подключить общий кэш выдачи (общий для процессов, переживает рестарт). */
+  setCache(cache: SearchCache | null): void {
+    this.cache = cache;
+  }
+
   async search(query: string, category: RutorCategory = "all"): Promise<RutorRelease[]> {
+    const cache = this.cache;
+    if (!cache) return (await this.searchLive(query, category)).releases;
+
+    const key = `${SEARCH_CACHE_PREFIX}${category}:${query.toLowerCase()}`;
+    try {
+      const hit = await cache.get(key);
+      if (hit != null) return JSON.parse(hit) as RutorRelease[];
+    } catch {
+      // Кэш недоступен — идём на трекер, как без кэша.
+    }
+
+    const { releases, failed } = await this.searchLive(query, category);
+    // Сбой всех зеркал не кэшируем: следующий запрос должен попробовать снова.
+    if (!failed) {
+      const ttl = releases.length > 0 ? SEARCH_HIT_TTL_S : SEARCH_EMPTY_TTL_S;
+      void cache.set(key, JSON.stringify(releases), ttl).catch(() => {});
+    }
+    return releases;
+  }
+
+  private async searchLive(
+    query: string,
+    category: RutorCategory,
+  ): Promise<{ releases: RutorRelease[]; failed: boolean }> {
     const catId = CATEGORY_MAP[category] ?? 0;
     let lastError: unknown = null;
+    let answered = false;
 
     for (const mirror of this.mirrors) {
       const url = `${mirror}/search/0/${catId}/2/0/${encodeURIComponent(query)}`;
@@ -102,8 +149,9 @@ export class RutorConnector {
         if (!res.ok) continue;
 
         const html = await res.text();
+        answered = true;
         const parsed = this.parseHtml(html);
-        if (parsed.length > 0) return parsed;
+        if (parsed.length > 0) return { releases: parsed, failed: false };
       } catch (err) {
         lastError = err;
       }
@@ -117,7 +165,7 @@ export class RutorConnector {
         String(lastError).slice(0, 200),
       );
     }
-    return [];
+    return { releases: [], failed: !answered };
   }
 
   parseHtml(html: string): RutorRelease[] {

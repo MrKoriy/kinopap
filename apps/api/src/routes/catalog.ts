@@ -50,10 +50,12 @@ import {
 import { type StreamCandidate, StreamResolver } from "@zal/ingest";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
+import type { Redis } from "ioredis";
 import { z } from "zod";
 import type { Config } from "../config";
 import { notFound, parseOrThrow } from "../lib/http";
 import { idParamsSchema } from "../lib/params";
+import { redisSearchCache } from "../lib/redis-cache";
 import { regroupLongSeasons } from "../lib/season-layout";
 import { signStreamLinks } from "../lib/stream-links";
 import { hydrateSerialSeasons, tmdbLookup } from "../lib/tmdb";
@@ -83,7 +85,7 @@ interface ResolveCacheEntry {
 
 export async function catalogRoutes(
   app: FastifyInstance,
-  deps: { db: Db; config: Config },
+  deps: { db: Db; config: Config; redis?: Redis | null },
 ): Promise<void> {
   const { db, config } = deps;
   /** TTL кэша в БД: раздача живёт днями, а холодный резолв стоит 1–10 с.
@@ -362,6 +364,9 @@ export async function catalogRoutes(
     torrServerPublicUrl: config.torrServerPublicUrl,
     anilibriaBaseUrl: config.anilibriaUrl,
   });
+  // Выдача rutor — в Redis: общая для инстансов cluster и переживает
+  // рестарт (раньше жила только в памяти процесса и обнулялась деплоем).
+  if (deps.redis) streamResolver.rutor.setCache(redisSearchCache(deps.redis));
 
   /** Ссылки на видео/аудио/субтитры для media (их /items/media-links). */
   // Открыто и гостям: смотреть можно без входа. От перебора защищают

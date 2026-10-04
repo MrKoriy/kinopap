@@ -4,6 +4,7 @@ import { Redis } from "ioredis";
 import { startAutopilot } from "./autopilot";
 import { createCatalogWorker } from "./catalog";
 import { makeWorkerDeps } from "./deps";
+import { startRevalidator } from "./lib/revalidate";
 import { startStreamJobs } from "./stream-jobs";
 import { createTranscoderWorker } from "./worker";
 
@@ -95,6 +96,24 @@ if (process.env.AUTOPILOT !== "0" && tmdbApiKey) {
   });
 }
 
+// Точечный сброс ISR веба: изменившиеся тайтлы → revalidateTag. Включается
+// секретом, общим с вебом (REVALIDATE_SECRET в /opt/kinopap/.env).
+let stopRevalidator: (() => void) | undefined;
+if (process.env.REVALIDATE_SECRET) {
+  const revalidateConnection = new Redis(redisUrl, { maxRetriesPerRequest: 1 });
+  revalidateConnection.on("error", (err) => {
+    console.warn("worker: revalidate redis error (non-fatal):", String(err).slice(0, 300));
+  });
+  stopRevalidator = startRevalidator({
+    db,
+    redis: revalidateConnection,
+    webUrl: process.env.WEB_INTERNAL_URL ?? "http://127.0.0.1:7000",
+    secret: process.env.REVALIDATE_SECRET,
+    everyMs: Number(process.env.REVALIDATE_EVERY_S ?? 120) * 1000,
+  });
+  console.log("worker: revalidate loop ready");
+}
+
 // Старт видео без скрейпа: stream-precheck (раздачи заранее) и прогрев
 // голов файлов топ-N в TorrServer. Выключается STREAM_PRECHECK=0.
 let stopStreamJobs: (() => Promise<void>) | null = null;
@@ -152,6 +171,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`worker: ${signal}, closing`);
   clearInterval(gcTimer);
   clearInterval(reconcileTimer);
+  stopRevalidator?.();
   // Потолок ожидания: зависший encode держал worker.close() бесконечно,
   // PM2 завершал процесс принудительно, ffmpeg оставался сиротой.
   const exitTimer = setTimeout(() => process.exit(1), 10_000);

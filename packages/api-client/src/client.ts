@@ -9,6 +9,8 @@ import { z } from "zod";
 import {
   type AuthResponse,
   authResponseSchema,
+  type ChangePasswordInput,
+  changePasswordSchema,
   type LoginInput,
   loginSchema,
   logoutResponseSchema,
@@ -372,6 +374,18 @@ export function createApiClient(opts: ApiClientOptions) {
       });
     },
     me: () => request("/v1/auth/me", meResponseSchema, { auth: true }),
+    /**
+     * Смена пароля. Сервер отзывает все refresh-токены пользователя (выход
+     * на остальных устройствах) и выдаёт свежую пару для этой сессии.
+     */
+    changePassword: (input: ChangePasswordInput) => {
+      changePasswordSchema.parse(input);
+      return request("/v1/auth/password", authResponseSchema, {
+        method: "POST",
+        body: input,
+        auth: true,
+      });
+    },
 
     /* catalog */
     listItems: (filters: CatalogFilters) =>

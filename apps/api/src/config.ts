@@ -69,12 +69,19 @@ export interface Config {
   prewarmBatch: number;
   prewarmTop: number;
   prewarmPauseMs: number;
+  /** Первый инстанс PM2 cluster (или единственный процесс). Только он
+   * крутит фоновые циклы — прогрев, догон дыр, гигиену: N копий одного
+   * цикла били бы rutor и БД N раз. */
+  primaryInstance: boolean;
   streamSourceTtlMs: number;
   prefetchConcurrency: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const e = envSchema.parse(env);
+  // PM2 нумерует инстансы в NODE_APP_INSTANCE (и в cluster, и в fork);
+  // вне PM2 переменной нет — процесс единственный, он и первичный.
+  const primaryInstance = (env.NODE_APP_INSTANCE ?? "0") === "0";
   return {
     databaseUrl: e.DATABASE_URL,
     jwtSecret: e.JWT_SECRET,
@@ -89,13 +96,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     trustProxy: e.TRUST_PROXY,
     gstLinkSecret: e.GST_LINK_SECRET || undefined,
     resolveSourceTtlMs: e.RESOLVE_SOURCE_TTL_HOURS * 60 * 60 * 1000,
-    prewarm: e.PREWARM,
-    gapFill: e.GAP_FILL,
+    prewarm: e.PREWARM && primaryInstance,
+    gapFill: e.GAP_FILL && primaryInstance,
     gapFillBatch: e.GAP_FILL_BATCH,
     prewarmIntervalMs: e.PREWARM_INTERVAL_MIN * 60 * 1000,
     prewarmBatch: e.PREWARM_BATCH,
     prewarmTop: e.PREWARM_TOP,
     prewarmPauseMs: e.PREWARM_PAUSE_MS,
+    primaryInstance,
     streamSourceTtlMs: e.STREAM_SOURCE_TTL_HOURS * 60 * 60 * 1000,
     prefetchConcurrency: e.PREFETCH_CONCURRENCY,
   };

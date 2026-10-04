@@ -1,4 +1,5 @@
 import {
+  changePasswordSchema,
   loginSchema,
   refreshSchema,
   registerSchema,
@@ -17,6 +18,7 @@ import {
   registerUserWithInvite,
   revokeAllUserTokens,
   revokeRefreshToken,
+  setUserPasswordHash,
   type UserRow,
   verifyPassword,
 } from "@zal/db";
@@ -228,6 +230,37 @@ export async function authRoutes(
     if (!user) throw unauthorized();
     return { user: toUserDto(user) };
   });
+
+  /**
+   * Смена пароля (в том числе владельцем). Текущий пароль обязателен:
+   * украденный access-токен сам по себе пароль не сменит. После смены все
+   * refresh-токены отзываются — остальные устройства выйдут при следующей
+   * ротации, — а этой сессии выдаётся свежая пара.
+   */
+  app.post(
+    "/auth/password",
+    {
+      preHandler: app.authenticate,
+      config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      const body = parseOrThrow(changePasswordSchema, request.body);
+      const user = await findUserById(db, request.user.sub);
+      if (!user?.isActive) throw unauthorized();
+      const ok = await verifyPassword(body.currentPassword, user.passwordHash);
+      if (!ok) throw badRequest("wrong_password", "Current password is incorrect");
+      if (body.currentPassword === body.newPassword) {
+        throw badRequest("same_password", "New password must differ from the current one");
+      }
+      await setUserPasswordHash(db, user.id, await hashPassword(body.newPassword));
+      await revokeAllUserTokens(db, user.id);
+      const tokens = await issueTokens(app, db, user, reply, deps.config, {
+        userAgent: request.headers["user-agent"] ?? null,
+        ip: request.ip,
+      });
+      return { user: toUserDto(user), tokens };
+    },
+  );
 
   /* ---------- Инвайты (owner/admin) ---------- */
 

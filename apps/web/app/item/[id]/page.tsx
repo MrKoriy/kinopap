@@ -7,7 +7,8 @@ import { ItemRail } from "@/components/item-rail";
 import { RailSkeleton } from "@/components/skeletons";
 import { fetchItem, fetchSimilar } from "@/lib/api";
 
-export const revalidate = 30;
+// Страховочный интервал ISR; свежесть даёт точечный revalidateTag из воркера.
+export const revalidate = 3600;
 
 /** Сюжет для description: обрезаем ~200 символов по границе слова. */
 function truncatePlot(plot: string, max = 200): string {

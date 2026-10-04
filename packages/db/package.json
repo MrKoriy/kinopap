@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
-    "db:setup": "tsx src/cli.ts"
+    "db:setup": "tsx src/cli.ts",
+    "db:set-password": "tsx src/set-password.ts"
   },
   "dependencies": {
     "@zal/api-client": "workspace:*",

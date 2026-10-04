@@ -192,6 +192,13 @@ if [ -z "\$PG_PW" ]; then
   exit 1
 fi
 add_env DATABASE_URL "postgres://zal:\${PG_PW}@localhost:5433/zal"
+# Секрет точечного сброса ISR (воркер → POST /api/revalidate веба). Создаём
+# один раз и не перезаписываем: он общий для релизов, как и сам .env.
+if ! grep -q "^REVALIDATE_SECRET=.\{32,\}" .env; then
+  sed -i.bak "/^REVALIDATE_SECRET=/d" .env && rm -f .env.bak
+  echo "REVALIDATE_SECRET=\$(openssl rand -hex 32)" >> .env
+  echo "  + REVALIDATE_SECRET"
+fi
 # JWT_SECRET обязателен (>= 32 символов) — API не стартует без него.
 if ! grep -q "^JWT_SECRET=.\{32,\}" .env; then
   echo "ОШИБКА: JWT_SECRET в .env отсутствует или короче 32 символов" >&2
@@ -467,6 +474,19 @@ if ! NEXT_PUBLIC_API_URL="" INTERNAL_API_URL="$API_INTERNAL" \
   fail "сборка web упала (полный лог: /tmp/kinopap-web-build.log)"
 fi
 tail -2 /tmp/kinopap-web-build.log
+
+# API и воркер — собранный JS (tsup → apps/*/dist) вместо tsx на лету.
+# ecosystem.config.cjs запускает dist, если он есть; без сборки релиз в
+# current не попадёт — fail() уберёт его до переключения симлинка.
+if ! pnpm --filter @zal/api --filter @zal/worker build > /tmp/kinopap-node-build.log 2>&1; then
+  tail -40 /tmp/kinopap-node-build.log >&2
+  fail "сборка api/worker упала (полный лог: /tmp/kinopap-node-build.log)"
+fi
+[ -f apps/api/dist/server.js ] && [ -f apps/worker/dist/index.js ] \
+  || fail "после сборки нет apps/api/dist/server.js или apps/worker/dist/index.js"
+[ -f apps/web/.next/standalone/apps/web/server.js ] \
+  || fail "нет standalone-сервера web (.next/standalone/apps/web/server.js)"
+echo "  api/worker/web: собраны"
 REMOTE
 
 echo "==> 3/6: переключение current и последовательный перезапуск"
