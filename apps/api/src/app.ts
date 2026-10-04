@@ -13,6 +13,7 @@ import {
   noopIngestQueue,
 } from "./ingest-queue";
 import { HttpError } from "./lib/http";
+import { registerObservability } from "./lib/observability";
 import { registerAuth } from "./plugins/auth";
 import { authRoutes } from "./routes/auth";
 import { catalogRoutes } from "./routes/catalog";
@@ -20,6 +21,7 @@ import { discoveryRoutes } from "./routes/discovery";
 import { docsRoutes } from "./routes/docs";
 import { ingestRoutes } from "./routes/ingest";
 import { metricsRoutes } from "./routes/metrics";
+import { notifyRoutes } from "./routes/notify";
 import { profileRoutes } from "./routes/profile";
 import { progressRoutes } from "./routes/progress";
 import { socialRoutes } from "./routes/social";
@@ -217,6 +219,8 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
     });
   });
 
+  registerObservability(app, { db: opts.db, config: opts.config });
+
   // healthz поллится балансировщиками/PM2 — вне rate limit.
   app.get("/healthz", { config: { rateLimit: false } }, async () => ({ ok: true }));
   // readiness: проверяет БД (и Redis если есть), чтобы оркестратор не лил трафик на неготовый инстанс.
@@ -249,6 +253,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       await progressRoutes(scope, { db: opts.db, config: opts.config });
       await profileRoutes(scope, { db: opts.db, config: opts.config });
       await socialRoutes(scope, { db: opts.db, config: opts.config });
+      await notifyRoutes(scope, { db: opts.db, config: opts.config });
       // Свой под-плагин: парсер text/plain (sendBeacon) не должен влиять на
       // остальные маршруты.
       await scope.register(async (m) => metricsRoutes(m, { db: opts.db, config: opts.config }));

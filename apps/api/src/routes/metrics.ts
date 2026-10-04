@@ -3,7 +3,8 @@
  * плеера батчами через sendBeacon; владелец смотрит сводку p50/p75/p95,
  * долю холодных стартов и состояние фоновых задач (sync_state).
  */
-import { insertRumEvents, listSyncState, rumSummary } from "@zal/db";
+import { insertRumEvents, listRecentErrors, listSyncState, recordError, rumSummary } from "@zal/db";
+import { parseSentryDsn, sendSentryEvent } from "@zal/shared";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config";
@@ -26,6 +27,17 @@ const rumEventSchema = z.object({
 });
 
 export const rumBatchSchema = z.object({ events: z.array(rumEventSchema).min(1).max(20) });
+
+const clientErrorSchema = z.object({
+  message: z.string().min(1).max(2000),
+  stack: z.string().max(8000).optional(),
+  page: z.string().max(200).optional(),
+  release: z.string().max(64).optional(),
+});
+export const errorBatchSchema = z.object({ errors: z.array(clientErrorSchema).min(1).max(5) });
+
+/** Шум браузеров и расширений — не наши ошибки. */
+const IGNORED_ERRORS = /ResizeObserver loop|Script error\.?$|chrome-extension:|moz-extension:|Load failed|NetworkError|AbortError|The play\(\) request was interrupted/i;
 
 const summaryQuerySchema = z.object({ hours: z.coerce.number().int().min(1).max(24 * 30).default(24) });
 
@@ -66,8 +78,34 @@ export async function metricsRoutes(app: FastifyInstance, opts: { db: Parameters
     { preHandler: [app.authenticate, requireRole("owner", "admin")] },
     async (request) => {
       const { hours } = parseOrThrow(summaryQuerySchema, request.query ?? {});
-      const [rum, sync] = await Promise.all([rumSummary(db, hours), listSyncState(db)]);
-      return { rum, sync };
+      const [rum, sync, errors] = await Promise.all([
+        rumSummary(db, hours),
+        listSyncState(db),
+        listRecentErrors(db, hours, 50),
+      ]);
+      return { rum, sync, errors };
+    },
+  );
+
+  // Ошибки веба (window.onerror, unhandledrejection, error boundary).
+  const sentry = parseSentryDsn(opts.config.sentryDsn);
+  app.post(
+    "/errors",
+    { config: { rateLimit: { max: 20, timeWindow: "1 minute" } }, bodyLimit: 48 * 1024 },
+    async (request, reply) => {
+      const { errors } = parseOrThrow(errorBatchSchema, request.body ?? {});
+      for (const e of errors) {
+        if (IGNORED_ERRORS.test(e.message) || IGNORED_ERRORS.test(e.stack ?? "")) continue;
+        const input = { source: "web" as const, message: e.message, stack: e.stack ?? null, page: normalizePage(e.page), release: e.release ?? null };
+        await recordError(db, input);
+        void sendSentryEvent(sentry, {
+          ...input,
+          platform: "javascript",
+          tags: { source: "web" },
+          url: e.page ?? null,
+        });
+      }
+      return reply.code(204).send();
     },
   );
 }

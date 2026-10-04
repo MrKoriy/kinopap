@@ -7,6 +7,7 @@ import Link from "next/link";
  * и список подписанных тайтлов с отпиской.
  */
 import * as React from "react";
+import { NotifySettings } from "@/components/notify-settings";
 import { useOptionalAuth } from "@/lib/auth";
 import { formatDate, formatDurationHuman } from "@/lib/format";
 
@@ -65,6 +66,7 @@ export default function SubscriptionsPage() {
   return (
     <main className="mx-auto max-w-4xl px-4 py-8">
       <h1 className="mb-8 text-2xl font-bold text-white">Мои подписки</h1>
+      <NotifySettings />
 
       <section className="mb-10" data-testid="subs-feed">
         <h2 className="mb-4 text-xl font-semibold text-white">Новые серии</h2>

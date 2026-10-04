@@ -25,6 +25,7 @@ import {
   listItemsForTmdbRefresh,
   listItemsWithMetadataGaps,
   purgeRumEvents,
+  recordError,
   recordSyncRun,
 } from "@zal/db";
 import {
@@ -144,6 +145,11 @@ export async function runDaemonTask(deps: DaemonDeps, id: DaemonTaskId): Promise
     const msg = String(err).slice(0, 500);
     console.warn(`daemon: ${id} failed: ${msg}`);
     await recordSyncRun(deps.db, id, { ok: false, error: msg }).catch(() => undefined);
+    await recordError(deps.db, {
+      source: "worker",
+      message: `daemon ${id}: ${msg.slice(0, 300)}`,
+      stack: err instanceof Error ? (err.stack ?? null) : null,
+    }).catch(() => undefined);
     return null;
   }
 }

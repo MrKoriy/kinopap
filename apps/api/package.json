@@ -19,6 +19,7 @@
     "@zal/api-client": "workspace:*",
     "@zal/db": "workspace:*",
     "@zal/ingest": "workspace:*",
+    "@zal/shared": "workspace:*",
     "bullmq": "^6.3.9",
     "drizzle-orm": "^0.45.3",
     "fastify": "^5.12.5",

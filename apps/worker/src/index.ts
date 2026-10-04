@@ -1,11 +1,13 @@
-import { createDb, createPool, reconcileStaleIngestJobs } from "@zal/db";
+import { createDb, createPool, reconcileStaleIngestJobs, recordError } from "@zal/db";
 import { fillCatalog, stopActiveChildren } from "@zal/ingest";
+import { parseSentryDsn, sendSentryEvent } from "@zal/shared";
 import { Redis } from "ioredis";
 import { runScript, startAutopilot } from "./autopilot";
 import { createCatalogWorker } from "./catalog";
 import { startCatalogDaemon } from "./daemon";
 import { makeWorkerDeps } from "./deps";
 import { startRevalidator } from "./lib/revalidate";
+import { startNotify } from "./notify";
 import { startStreamJobs } from "./stream-jobs";
 import { createTranscoderWorker } from "./worker";
 
@@ -17,6 +19,19 @@ if (!databaseUrl) {
 }
 
 const db = createDb(createPool(databaseUrl));
+
+// Необработанные ошибки — в ленту Ops (и Sentry при SENTRY_DSN), а не только в лог.
+const sentry = parseSentryDsn(process.env.SENTRY_DSN);
+function reportFatal(kind: string, err: unknown): void {
+  const e = err instanceof Error ? err : new Error(String(err));
+  const input = { source: "worker" as const, message: `${kind}: ${e.name}: ${e.message}`, stack: e.stack ?? null, release: process.env.RELEASE ?? null };
+  void recordError(db, input).catch(() => undefined);
+  void sendSentryEvent(sentry, { ...input, platform: "node", tags: { source: "worker" } });
+}
+process.on("unhandledRejection", (err) => {
+  console.warn("worker: unhandled rejection:", String(err).slice(0, 300));
+  reportFatal("unhandledRejection", err);
+});
 
 // Краш воркера посреди encode раньше оставлял ingest_jobs навсегда «running».
 // SQL сужают до running-only — просто вызываем, сигнатура не меняется.
@@ -119,6 +134,32 @@ if (process.env.CATALOG_DAEMON !== "0" && tmdbApiKey) {
     });
 }
 
+// Уведомления о новых сериях (Telegram, web push) и алерты Ops. NOTIFY=0 — выкл.
+let stopNotify: (() => Promise<void>) | null = null;
+if (process.env.NOTIFY !== "0") {
+  const notifyConnection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  notifyConnection.on("error", (err) => {
+    console.warn("worker: notify redis error (non-fatal):", String(err).slice(0, 300));
+  });
+  const vapidPublic = process.env.WEBPUSH_PUBLIC_KEY;
+  const vapidPrivate = process.env.WEBPUSH_PRIVATE_KEY;
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.PUBLIC_SITE_URL || "http://localhost:3000";
+  startNotify(notifyConnection, db, {
+    telegramToken: process.env.TELEGRAM_BOT_TOKEN || undefined,
+    webpush:
+      vapidPublic && vapidPrivate
+        ? { publicKey: vapidPublic, privateKey: vapidPrivate, subject: process.env.WEBPUSH_SUBJECT || siteUrl }
+        : undefined,
+    siteUrl,
+  })
+    .then((stop) => {
+      stopNotify = stop;
+    })
+    .catch((err) => {
+      console.warn("worker: notify failed to start (non-fatal):", String(err).slice(0, 300));
+    });
+}
+
 // Точечный сброс ISR веба: изменившиеся тайтлы → revalidateTag. Включается
 // секретом, общим с вебом (REVALIDATE_SECRET в /opt/kinopap/.env).
 let stopRevalidator: (() => void) | undefined;
@@ -202,7 +243,7 @@ async function shutdown(signal: string): Promise<void> {
   // Сначала останавливаем дочерние ffmpeg/ffprobe — иначе close() ждёт
   // завершения активной джобы часами.
   await stopActiveChildren(5_000);
-  await Promise.allSettled([worker.close(), catalogWorker.close(), stopStreamJobs?.(), stopDaemon?.()]);
+  await Promise.allSettled([worker.close(), catalogWorker.close(), stopStreamJobs?.(), stopDaemon?.(), stopNotify?.()]);
   await Promise.allSettled([connection.quit(), catalogConnection.quit()]);
   clearTimeout(exitTimer);
   process.exit(0);

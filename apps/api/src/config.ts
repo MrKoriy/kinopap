@@ -46,6 +46,15 @@ const envSchema = z.object({
   STREAM_SOURCE_TTL_HOURS: z.coerce.number().positive().default(168),
   /** Потолок одновременных фоновых резолвов от префетча карточек. */
   PREFETCH_CONCURRENCY: z.coerce.number().int().nonnegative().default(3),
+  /** Telegram-бот уведомлений (токен — у воркера и API, имя — для ссылки t.me/<bot>). */
+  TELEGRAM_BOT_TOKEN: z.string().optional(),
+  TELEGRAM_BOT_NAME: z.string().optional(),
+  /** Публичный VAPID-ключ web push (приватный — только у воркера). */
+  WEBPUSH_PUBLIC_KEY: z.string().optional(),
+  /** Sentry: ошибки API и веба (через /v1/errors). Пусто — только своя лента. */
+  SENTRY_DSN: z.string().optional(),
+  /** Имя релиза (deploy.sh) — в ошибках и Sentry. */
+  RELEASE: z.string().optional(),
 });
 
 export interface Config {
@@ -75,6 +84,11 @@ export interface Config {
   primaryInstance: boolean;
   streamSourceTtlMs: number;
   prefetchConcurrency: number;
+  telegramBotName?: string;
+  telegramBotToken?: string;
+  webpushPublicKey?: string;
+  sentryDsn?: string;
+  release?: string;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -106,5 +120,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     primaryInstance,
     streamSourceTtlMs: e.STREAM_SOURCE_TTL_HOURS * 60 * 60 * 1000,
     prefetchConcurrency: e.PREFETCH_CONCURRENCY,
+    telegramBotName: e.TELEGRAM_BOT_NAME?.replace(/^@/, "") || undefined,
+    telegramBotToken: e.TELEGRAM_BOT_TOKEN || undefined,
+    webpushPublicKey: e.WEBPUSH_PUBLIC_KEY || undefined,
+    sentryDsn: e.SENTRY_DSN || undefined,
+    release: e.RELEASE || undefined,
   };
 }

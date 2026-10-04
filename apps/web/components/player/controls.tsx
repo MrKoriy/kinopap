@@ -5,6 +5,7 @@ import type { SpriteMetaDto } from "@zal/api-client";
 import * as React from "react";
 import { formatDuration } from "@/lib/format";
 import { type BufferedSegment, spriteTileScaledFor } from "@/lib/player-logic";
+import type { CastState } from "./cast";
 
 export interface TrackOption {
   index: number;
@@ -65,6 +66,8 @@ export interface PlayerControlsProps {
   onShift(deltaMs: number): void;
   onPip(): void;
   onFullscreen(): void;
+  /** Chromecast/AirPlay (useCast); нет — кнопок нет. */
+  cast?: Pick<CastState, "castAvailable" | "casting" | "deviceName" | "airplayAvailable" | "toggleCast" | "showAirplay">;
 }
 
 /**
@@ -639,6 +642,36 @@ export const PlayerControls = React.memo(function PlayerControls(props: PlayerCo
             </div>
           )}
         </Menu>
+
+        {props.cast?.castAvailable && (
+          <button
+            type="button"
+            className={`rounded-full p-2 hover:bg-white/10 ${props.cast.casting ? "text-accent" : ""}`}
+            onClick={props.cast.toggleCast}
+            aria-label={props.cast.casting ? `Остановить трансляцию на ${props.cast.deviceName ?? "телевизор"}` : "Транслировать на телевизор"}
+            title={props.cast.casting ? `Идёт на ${props.cast.deviceName ?? "телевизоре"}` : "Chromecast"}
+            data-testid="cast"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M3 17a4 4 0 0 1 4 4M3 13a8 8 0 0 1 8 8M3 9a12 12 0 0 1 12 12" strokeLinecap="round" />
+              <path d="M7 5h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-3" strokeLinecap="round" />
+            </svg>
+          </button>
+        )}
+        {props.cast?.airplayAvailable && (
+          <button
+            type="button"
+            className="rounded-full p-2 hover:bg-white/10"
+            onClick={props.cast.showAirplay}
+            aria-label="AirPlay"
+            data-testid="airplay"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M6 17H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-1" strokeLinecap="round" />
+              <path d="M12 15l5 6H7z" fill="currentColor" stroke="none" />
+            </svg>
+          </button>
+        )}
 
         <button
           type="button"

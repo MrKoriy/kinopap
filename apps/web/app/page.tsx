@@ -2,6 +2,7 @@ import { Suspense } from "react";
 import { ContinueWatching } from "@/components/continue-watching";
 import { HeroCarousel } from "@/components/hero-carousel";
 import { ItemRail } from "@/components/item-rail";
+import { Recommendations } from "@/components/recommendations";
 import { HeroSkeleton, RailSkeleton } from "@/components/skeletons";
 import { type CatalogParams, fetchItems, fetchShortcut, type ShortcutKind } from "@/lib/api";
 
@@ -66,6 +67,7 @@ export default function HomePage() {
         <Hero />
       </Suspense>
       <ContinueWatching />
+      <Recommendations />
       <Suspense fallback={<RailSkeleton />}>
         <RailOrError kind="hot" title="Топ-10 сегодня" href="/catalog?sort=views-" ranked limit={10} />
       </Suspense>
