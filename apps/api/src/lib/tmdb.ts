@@ -11,6 +11,7 @@ import { applyEnrichment, type Db, episodes, media, seasons } from "@zal/db";
 import { pickTrailer } from "@zal/ingest";
 import { and, eq } from "drizzle-orm";
 import type { Config } from "../config";
+import { ensureItemCredits } from "./credits";
 
 export interface TmdbHit {
   title: string;
@@ -179,8 +180,10 @@ async function tmdbShowSeasons(
     config,
     `/tv/${tmdbId}`,
   );
+  // Сезон 0 (спецвыпуски) тоже берём: API отдаёт его отдельной вкладкой
+  // «Спецвыпуски», а не выбрасывает.
   return (data?.seasons ?? [])
-    .filter((s) => Number(s.season_number) > 0 && Number(s.episode_count) > 0)
+    .filter((s) => Number(s.season_number) >= 0 && Number(s.episode_count) > 0)
     .map((s) => ({
       number: Number(s.season_number),
       title: typeof s.name === "string" && s.name ? s.name : null,
@@ -302,6 +305,8 @@ export async function hydrateSerialSeasons(
           trailerUrl: trailer.url,
         }).catch(() => undefined);
       }
+      // И актёров с командой — тем же заходом (у сериалов из заливки их нет).
+      await ensureItemCredits(db, config, itemId).catch(() => 0);
     } else {
       markMiss(tmdbId);
     }

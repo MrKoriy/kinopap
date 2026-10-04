@@ -13,6 +13,16 @@ const TMDB_SHOW = {
     { season_number: 0, name: "Спецвыпуски", episode_count: 2 },
     { season_number: 1, name: "Сезон 1", episode_count: 2 },
   ],
+  backdrop_path: "/bd.jpg",
+  aggregate_credits: {
+    cast: [{ id: 77, name: "Актёр", order: 0, profile_path: "/a.jpg", roles: [{ character: "Герой", episode_count: 2 }] }],
+    crew: [],
+  },
+  created_by: [{ id: 78, name: "Создатель" }],
+};
+
+const TMDB_SEASON_0 = {
+  episodes: [{ episode_number: 1, name: "Рождественский выпуск", runtime: 60 }],
 };
 
 const TMDB_SEASON_1 = {
@@ -33,6 +43,11 @@ beforeAll(async () => {
   vi.stubGlobal("fetch", async (input: Parameters<typeof fetch>[0]) => {
     const url = String(input);
     fetchCount += 1;
+    if (url.includes("/tv/4248/season/0")) {
+      return new Response(JSON.stringify(TMDB_SEASON_0), {
+        headers: { "content-type": "application/json" },
+      });
+    }
     if (url.includes("/tv/4248/season/1")) {
       return new Response(JSON.stringify(TMDB_SEASON_1), {
         headers: { "content-type": "application/json" },
@@ -77,10 +92,12 @@ describe("гидрация сезонов сериала", () => {
         number: number;
         episodes: Array<{ number: number; mediaId: number | null; title: string | null }>;
       }>;
+      specials: { episodes: Array<{ title: string | null; mediaId: number | null }> } | null;
     };
 
-    // Спецвыпуск (сезон 0) не создаём — только сезон 1 с двумя сериями.
+    // Спецвыпуски (сезон 0) — отдельно в specials, в seasons только сезон 1.
     expect(item.seasons.length).toBe(1);
+    expect(item.specials?.episodes.map((e) => e.title)).toEqual(["Рождественский выпуск"]);
     expect(item.seasons[0]!.number).toBe(1);
     const eps = item.seasons[0]!.episodes;
     expect(eps.map((e) => e.number)).toEqual([1, 2]);
@@ -96,6 +113,17 @@ describe("гидрация сезонов сериала", () => {
     expect(fetchCount).toBe(before);
 
     const seasonRows = await db.select().from(seasons).where(eq(seasons.itemId, serialId));
-    expect(seasonRows.length).toBe(1);
+    expect(seasonRows.length).toBe(2);
+  });
+
+  it("вместе с сезонами тянутся актёры, создатель и бэкдроп", async () => {
+    const res = await app.inject({ url: `/v1/items/${serialId}` });
+    const item = res.json() as {
+      backdrop: string | null;
+      credits: { cast: Array<{ name: string; character: string | null; photoUrl: string | null }>; crew: Array<{ name: string; role: string }> };
+    };
+    expect(item.credits.cast[0]).toMatchObject({ name: "Актёр", character: "Герой", photoUrl: "https://image.tmdb.org/t/p/w185/a.jpg" });
+    expect(item.credits.crew[0]).toMatchObject({ name: "Создатель", role: "director" });
+    expect(item.backdrop).toBe("https://image.tmdb.org/t/p/w1280/bd.jpg");
   });
 });

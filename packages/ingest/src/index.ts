@@ -1,4 +1,5 @@
 export * from "./anilibria-import";
+export * from "./anilist";
 export * from "./catalog-fill";
 export * from "./connectors/anilibria";
 export * from "./connectors/local-folder";
@@ -6,9 +7,11 @@ export * from "./connectors/rutor";
 export * from "./connectors/tmdb";
 export * from "./connectors/torrserver";
 export * from "./connectors/url-source";
+export * from "./credits";
 export * from "./gc";
 export * from "./lib/http";
 export * from "./media/assets";
+export * from "./media/intro-detect";
 export * from "./media/ladder";
 export * from "./media/probe";
 export * from "./media/transcode";

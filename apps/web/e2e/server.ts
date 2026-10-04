@@ -16,6 +16,7 @@ import {
   type Db,
   hashPassword,
   migrationsDir,
+  replaceItemCredits,
   schema,
 } from "@zal/db";
 import {
@@ -24,6 +25,7 @@ import {
   runIngest,
   UrlSourceConnector,
 } from "@zal/ingest";
+import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pglite";
 import { migrate } from "drizzle-orm/pglite/migrator";
 import { buildApp } from "../../api/src/app";
@@ -123,6 +125,18 @@ async function main(): Promise<void> {
   });
 
   // 3. API + раздача медиа (один процесс, один порт).
+  // Трейлер и титры — для визуальных снапшотов карточки и модалки трейлера.
+  // Фото актёров нет: внешние картинки сделали бы снапшоты сетезависимыми.
+  await db
+    .update(schema.items)
+    .set({ trailerId: "e2eTrailer01", trailerUrl: null })
+    .where(eq(schema.items.id, result.itemId));
+  await replaceItemCredits(db, result.itemId, [
+    { tmdbId: 9001, name: "Анна Тестова", photoUrl: null, role: "actor", character: "Героиня", ord: 0 },
+    { tmdbId: 9002, name: "Пётр Проверкин", photoUrl: null, role: "actor", character: "Злодей", ord: 1 },
+    { tmdbId: 9003, name: "Ирина Режиссёрова", photoUrl: null, role: "director", character: null, ord: 0 },
+  ]);
+
   const config = loadConfig({
     NODE_ENV: "test",
     DATABASE_URL: "postgresql://e2e",

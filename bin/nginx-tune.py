@@ -8,7 +8,7 @@
    раньше .next/cache жил внутри releases/<ts> и обнулялся каждым деплоем.
 2. В vhost сайта — управляемый блок BEGIN/END kinopap-perf: gzip для JSON/HLS,
    микрокэш API (только запросы без Authorization), кэш /_next/image на 30 дней,
-   immutable для /_next/static.
+   immutable для /_next/static и своих нарезок картинок /img (MEDIA_ROOT/img).
 3. /torrents (админ-API TorrServer) наружу закрыт: им пользуется только API
    через 127.0.0.1:7002. Раньше любой мог добавлять и удалять раздачи.
 4. HTTP/2 на 443: десятки постеров на странице идут по одному соединению.
@@ -75,6 +75,18 @@ BLOCK = f"""    # BEGIN kinopap-perf (managed by bin/nginx-tune.py)
         add_header Cache-Control "public, max-age=2592000, stale-while-revalidate=86400" always;
         add_header Vary Accept always;
         add_header X-Cache $upstream_cache_status always;
+    }}
+
+    # Свои нарезки постеров/бэкдропов (воркер, MEDIA_ROOT/img): имя файла —
+    # контент-хеш, поэтому год и immutable. Нет файла — 404, веб уходит на
+    # фолбэк next/image.
+    location /img/ {{
+        alias /opt/kinopap/media/img/;
+        types {{ image/avif avif; image/webp webp; }}
+        default_type application/octet-stream;
+        add_header Cache-Control "public, max-age=31536000, immutable" always;
+        add_header Access-Control-Allow-Origin "*" always;
+        access_log off;
     }}
 
     location /_next/static/ {{

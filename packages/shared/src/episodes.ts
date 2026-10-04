@@ -18,6 +18,8 @@ export interface PlayerEpisode {
 /** Группа серий: сезон сериала либо единственная группа «Части». */
 export interface PlayerEpisodeGroup {
   heading: string;
+  /** Спецвыпуски (TMDb «Сезон 0»): своя дорожка «следующей серии». */
+  special?: boolean;
   episodes: PlayerEpisode[];
 }
 
@@ -33,7 +35,7 @@ export interface PlayerEpisodeGroup {
  * не попадает в список вовсе — пустой заголовок в меню выглядит как сбой.
  */
 export function episodeGroups(
-  item: Pick<ItemDetail, "seasons" | "media">,
+  item: Pick<ItemDetail, "seasons" | "media"> & Partial<Pick<ItemDetail, "specials">>,
 ): PlayerEpisodeGroup[] {
   const groups: PlayerEpisodeGroup[] = [];
 
@@ -51,7 +53,15 @@ export function episodeGroups(
       groups.push({ heading: season.title ?? `Сезон ${season.number}`, episodes });
     }
   }
-  if (groups.length > 0) return groups;
+  // Спецвыпуски — последней группой: в меню есть, но в общий порядок
+  // «следующей серии» не входят (см. nextEpisode).
+  const specials: PlayerEpisode[] = [];
+  for (const ep of item.specials?.episodes ?? []) {
+    if (ep.mediaId == null) continue;
+    specials.push({ mediaId: ep.mediaId, label: `SP${ep.number}`, title: ep.title });
+  }
+  if (specials.length > 0) groups.push({ heading: "Спецвыпуски", special: true, episodes: specials });
+  if (groups.some((g) => !g.special)) return groups;
 
   const parts: PlayerEpisode[] = [];
   for (const part of item.media ?? []) {
@@ -62,7 +72,8 @@ export function episodeGroups(
       title: part.title,
     });
   }
-  return parts.length > 0 ? [{ heading: "Части", episodes: parts }] : [];
+  const partGroups: PlayerEpisodeGroup[] = parts.length > 0 ? [{ heading: "Части", episodes: parts }] : [];
+  return [...partGroups, ...groups];
 }
 
 /** Плоский порядок серий — он же порядок воспроизведения. */
@@ -84,7 +95,10 @@ export function nextEpisode(
   groups: readonly PlayerEpisodeGroup[],
   mediaId: number,
 ): PlayerEpisode | null {
-  const flat = flattenEpisodes(groups);
+  // Обычная серия → следующая обычная (финал сезона не уводит в спешлы),
+  // спецвыпуск → следующий спецвыпуск.
+  const inSpecial = groups.some((g) => g.special && g.episodes.some((e) => e.mediaId === mediaId));
+  const flat = flattenEpisodes(groups.filter((g) => !!g.special === inSpecial));
   const idx = flat.findIndex((e) => e.mediaId === mediaId);
   if (idx < 0 || idx + 1 >= flat.length) return null;
   return flat[idx + 1] ?? null;
