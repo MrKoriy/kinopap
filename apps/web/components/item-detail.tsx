@@ -327,7 +327,7 @@ export function ItemDetailView({ item, similar = [] }: { item: ItemDetail; simil
     setActiveChunk(pendingChunk.current);
     setHighlight(ep.id);
     window.requestAnimationFrame(() =>
-      window.setTimeout(() => document.getElementById(`ep-${ep.id}`)?.scrollIntoView({ block: "center" }), 50),
+      window.setTimeout(() => document.getElementById(`ep-${ep.id}`)?.scrollIntoView?.({ block: "center" }), 50),
     );
     return true;
   };
