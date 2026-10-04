@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
+import { OnlineHint } from "@/components/online-player";
 import { fetchItem } from "@/lib/api";
 import { episodeGroups } from "@/lib/player-logic";
 import { WatchClient } from "./watch-client";
@@ -49,6 +50,9 @@ export default async function WatchPage({
         >
           ← {item.title}
         </Link>
+        <span className="ml-4">
+          <OnlineHint itemId={item.id} />
+        </span>
       </div>
       <WatchClient item={item} mediaId={Number(mediaId)} episodeGroups={groups} />
     </main>

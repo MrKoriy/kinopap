@@ -53,6 +53,9 @@ const envSchema = z.object({
   WEBPUSH_PUBLIC_KEY: z.string().optional(),
   /** Sentry: ошибки API и веба (через /v1/errors). Пусто — только своя лента. */
   SENTRY_DSN: z.string().optional(),
+  KODIK_TOKEN: z.string().optional(),
+  KODIK_API_URL: z.string().optional(),
+  ALLOHA_TOKEN: z.string().optional(),
   /** Имя релиза (deploy.sh) — в ошибках и Sentry. */
   RELEASE: z.string().optional(),
 });
@@ -88,6 +91,10 @@ export interface Config {
   telegramBotToken?: string;
   webpushPublicKey?: string;
   sentryDsn?: string;
+  /** Онлайн-балансеры: без токена провайдер выключен. */
+  kodikToken?: string;
+  kodikApiUrl?: string;
+  allohaToken?: string;
   release?: string;
 }
 
@@ -124,6 +131,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     telegramBotToken: e.TELEGRAM_BOT_TOKEN || undefined,
     webpushPublicKey: e.WEBPUSH_PUBLIC_KEY || undefined,
     sentryDsn: e.SENTRY_DSN || undefined,
+    kodikToken: e.KODIK_TOKEN || undefined,
+    kodikApiUrl: e.KODIK_API_URL || undefined,
+    allohaToken: e.ALLOHA_TOKEN || undefined,
     release: e.RELEASE || undefined,
   };
 }

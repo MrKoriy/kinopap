@@ -52,6 +52,7 @@ import {
   notifyChannelResponseSchema,
   notifyChannelsResponseSchema,
   notifyConfigSchema,
+  onlineSourcesResponseSchema,
   opsSummarySchema,
   recommendationsResponseSchema,
   telegramLinkResponseSchema,
@@ -646,6 +647,7 @@ export function createApiClient(opts: ApiClientOptions) {
 
     /* рекомендации и уведомления */
     getRecommendations: () => request("/v1/recommendations", recommendationsResponseSchema, { auth: true }),
+    getOnlineSources: (itemId: number) => request(`/v1/items/${itemId}/online`, onlineSourcesResponseSchema),
     getNotifyConfig: () => request("/v1/notify/config", notifyConfigSchema),
     listNotifyChannels: () => request("/v1/notify/channels", notifyChannelsResponseSchema, { auth: true }),
     linkTelegram: () =>
