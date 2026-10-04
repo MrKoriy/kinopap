@@ -5,9 +5,11 @@
  * Листать такое невозможно, а «следующий сезон» не существует. У TMDb для
  * таких шоу есть эпизод-группы (TVDB Order, Season Split, Story Arcs) —
  * выбираем самую «сезонную» и раскладываем серии по ней. Нет групп —
- * данные не трогаем, длинный сезон UI режет на диапазоны «1–50, 51–100».
+ * режем на куры по паузам в датах выхода (courLayout), а если пауз нет —
+ * блоками по 26 серий с подписью «Серии 1–26». Не вышло и это — данные не
+ * трогаем, длинный сезон UI режет на диапазоны «1–50, 51–100».
  */
-import { applySeasonLayout, type Db, flatEpisodes, items, longestSeason } from "@zal/db";
+import { applySeasonLayout, type Db, flatEpisodes, items, longestSeason, type SeasonGroup } from "@zal/db";
 import { eq } from "drizzle-orm";
 import type { Config } from "../config";
 import { tmdbGet } from "./tmdb";
@@ -53,6 +55,53 @@ function ruTitle(name: string | undefined): string | null {
   if (!t || !/[а-яё]/i.test(t)) return null;
   if (/^(сезон|часть)\s*\d+$/i.test(t)) return null;
   return t.slice(0, 255);
+}
+
+/** Пауза дольше — новый кур (сезоны аниме выходят с перерывом от месяца). */
+const COUR_GAP_DAYS = 21;
+/** Кур длиннее режем на блоки по COUR_BLOCK серий. */
+const MAX_COUR = 60;
+const COUR_BLOCK = 26;
+
+/**
+ * Фолбэк без эпизод-групп: куры по паузам в датах выхода, длинные куры
+ * (Ван-Пис выходит без пауз годами) — блоками по 26. Подпись — сквозной
+ * диапазон «Серии 27–52», чтобы номер серии в имени торрента находился глазами.
+ * null — раскладка ничего не даёт (одна группа).
+ */
+export function courLayout(flat: ReadonlyArray<{ id: number; airDate: Date | null }>): SeasonGroup[] | null {
+  if (flat.length <= LONG_SEASON) return null;
+  const dated = flat.filter((e) => e.airDate != null).length;
+  const byGaps: number[][] = [[]];
+  let prev: number | null = null;
+  for (const e of flat) {
+    const t = dated >= flat.length * 0.8 && e.airDate ? e.airDate.getTime() : null;
+    if (t != null && prev != null && t - prev > COUR_GAP_DAYS * 86_400_000 && byGaps.at(-1)!.length > 0) byGaps.push([]);
+    if (t != null) prev = t;
+    byGaps.at(-1)!.push(e.id);
+  }
+  const blocks: number[][] = [];
+  for (const g of byGaps) {
+    if (g.length <= MAX_COUR) {
+      // Крошечный «кур» (рекап, одна серия после паузы) — к предыдущему.
+      if (g.length < MIN_AVG_GROUP && blocks.length > 0) blocks.at(-1)!.push(...g);
+      else blocks.push(g);
+      continue;
+    }
+    for (let i = 0; i < g.length; i += COUR_BLOCK) blocks.push(g.slice(i, i + COUR_BLOCK));
+    // Хвост меньше MIN_AVG_GROUP — в предыдущий блок.
+    if (blocks.length > 1 && blocks.at(-1)!.length < MIN_AVG_GROUP) {
+      const tail = blocks.pop()!;
+      blocks.at(-1)!.push(...tail);
+    }
+  }
+  if (blocks.length < 2) return null;
+  let start = 1;
+  return blocks.map((ids) => {
+    const title = `Серии ${start}–${start + ids.length - 1}`;
+    start += ids.length;
+    return { title, episodeIds: ids };
+  });
 }
 
 const byOrder = <T extends { order?: number }>(a: T, b: T) => (a.order ?? 0) - (b.order ?? 0);
@@ -125,6 +174,7 @@ async function findTmdbAnimeId(config: Config, names: Array<string | null>): Pro
 
 export type RegroupStatus =
   | "regrouped"
+  | "cours"
   | "already"
   | "short"
   | "no-tmdb"
@@ -133,9 +183,10 @@ export type RegroupStatus =
   | "missing";
 
 /**
- * Перестраивает сезоны тайтла, если в нём есть сезон длиннее LONG_SEASON и
- * у TMDb нашлась подходящая эпизод-группа. Идемпотентно: перестроенный
- * тайтл (season_layout задан) повторно не трогается.
+ * Перестраивает сезоны тайтла, если в нём есть сезон длиннее LONG_SEASON:
+ * по эпизод-группе TMDb, иначе по курам (courLayout). Идемпотентно:
+ * перестроенный тайтл повторно не трогается; «source» (групп у TMDb нет,
+ * помечено до появления куров) пробуем только курами — без запросов к TMDb.
  */
 export async function regroupLongSeasons(
   db: Db,
@@ -154,20 +205,28 @@ export async function regroupLongSeasons(
     .where(eq(items.id, itemId))
     .limit(1);
   if (!it) return { status: "missing" };
-  if (it.layout) return { status: "already" };
+  if (it.layout && it.layout !== "source") return { status: "already" };
   if ((await longestSeason(db, itemId)) <= LONG_SEASON) return { status: "short" };
 
-  // Раскладки нет — помечаем «как у источника», чтобы фоновый догон не
-  // переспрашивал TMDb об этом тайтле каждый час. Новые серии таких тайтлов
-  // импорт кладёт как обычно (append только для tmdb-group:*).
+  const flat = await flatEpisodes(db, itemId);
+
+  // Групп нет — пробуем куры; не вышло — помечаем «flat», чтобы фоновый
+  // догон не переспрашивал TMDb об этом тайтле каждый час. Новые серии таких
+  // тайтлов импорт кладёт как обычно (append только для перестроенных).
   const keepSource = async (status: RegroupStatus) => {
+    const cours = courLayout(flat);
+    if (cours) {
+      if (opts.dryRun) return { status: "cours" as const, seasons: cours.length, layout: "cours [dry]" };
+      const res = await applySeasonLayout(db, itemId, "cours", cours);
+      if (res.seasons > 1) return { status: "cours" as const, seasons: res.seasons, layout: "cours" };
+    }
     if (!opts.dryRun) {
-      await db.update(items).set({ seasonLayout: "source" }).where(eq(items.id, itemId));
+      await db.update(items).set({ seasonLayout: "flat" }).where(eq(items.id, itemId));
     }
     return { status };
   };
+  if (it.layout === "source") return keepSource("no-groups");
 
-  const flat = await flatEpisodes(db, itemId);
   // У AniLibria серии — сквозные ordinal'ы «1/N», у TMDb — свои S/E.
   const byOrdinal = !it.tmdbId;
   const tmdbId = it.tmdbId ?? (await findTmdbAnimeId(config, [it.originalTitle, it.title]));

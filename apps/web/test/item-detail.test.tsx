@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ItemDetail, ItemProgressDto } from "@zal/api-client";
 import type * as React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -308,5 +308,41 @@ describe("ItemDetailView — спецвыпуски, актёры, франши�
     // текущий тайтл — без ссылки, соседний — ссылка на карточку
     expect(entries[0]!.querySelector("a")).toBeNull();
     expect(entries[1]!.querySelector("a")?.getAttribute("href")).toBe("/item/7");
+  });
+});
+
+describe("ItemDetailView — длинный сезон", () => {
+  const long: ItemDetail = {
+    ...itemDetail,
+    seasons: [
+      {
+        id: 10,
+        number: 1,
+        title: "Серии 1–130",
+        episodes: Array.from({ length: 130 }, (_, i) => ({
+          id: 1000 + i,
+          number: i + 1,
+          title: `Серия ${i + 1}`,
+          thumbnailUrl: null,
+          runtime: 1400,
+          mediaId: 5000 + i,
+        })),
+      },
+    ],
+  };
+
+  it("«Серия №» открывает нужный диапазон и подсвечивает серию", async () => {
+    render(<ItemDetailView item={long} />);
+    expect(screen.getByTestId("episode-ranges")).toBeDefined();
+    expect(screen.queryByText("Серия 120")).toBeNull();
+    const form = screen.getByTestId("episode-jump");
+    fireEvent.change(form.querySelector("input")!, { target: { value: "120" } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(screen.getByText("Серия 120")).toBeDefined());
+    expect(document.getElementById("ep-1119")?.className).toContain("ring-accent");
+
+    fireEvent.change(form.querySelector("input")!, { target: { value: "999" } });
+    fireEvent.submit(form);
+    await waitFor(() => expect(screen.getByText("Нет такой серии")).toBeDefined());
   });
 });

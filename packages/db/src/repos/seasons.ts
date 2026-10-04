@@ -22,6 +22,8 @@ export interface FlatEpisode {
   /** Координаты у источника (с учётом прежних перестроек). */
   origSeason: number;
   origNumber: number;
+  /** Дата выхода (TMDb) — по паузам между ней режем куры. */
+  airDate: Date | null;
 }
 
 const intArray = (ids: number[]) =>
@@ -36,8 +38,9 @@ export async function flatEpisodes(db: Db, itemId: number): Promise<FlatEpisode[
     number: number;
     orig_season: number;
     orig_number: number;
+    air_date: string | Date | null;
   }>(sql`
-    select e.id, e.season_id, s.number as season_number, e.number,
+    select e.id, e.season_id, s.number as season_number, e.number, e.air_date,
       coalesce(e.orig_season, s.number) as orig_season,
       coalesce(e.orig_number, e.number) as orig_number
     from episodes e
@@ -45,7 +48,15 @@ export async function flatEpisodes(db: Db, itemId: number): Promise<FlatEpisode[
     where s.item_id = ${itemId} and s.number > 0
     order by coalesce(e.absolute_number, 2147483647), s.number, e.number
   `);
-  type Row = { id: number; season_id: number; season_number: number; number: number; orig_season: number; orig_number: number };
+  type Row = {
+    id: number;
+    season_id: number;
+    season_number: number;
+    number: number;
+    orig_season: number;
+    orig_number: number;
+    air_date: string | Date | null;
+  };
   return (res.rows as Row[]).map((r) => ({
     id: Number(r.id),
     seasonId: Number(r.season_id),
@@ -53,6 +64,7 @@ export async function flatEpisodes(db: Db, itemId: number): Promise<FlatEpisode[
     number: Number(r.number),
     origSeason: Number(r.orig_season),
     origNumber: Number(r.orig_number),
+    airDate: r.air_date ? new Date(r.air_date) : null,
   }));
 }
 

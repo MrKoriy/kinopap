@@ -337,9 +337,16 @@ export async function listSerialsBehindTmdb(db: Db, limit: number): Promise<Arra
   const rows = await db
     .select({ id: items.id, tmdbId: items.tmdbId })
     .from(items)
-    // Перестроенные по эпизод-группам (season_layout) не трогаем: гидрация
-    // по сезонам TMDb легла бы поверх своей раскладки.
-    .where(and(isNotNull(items.tmdbChangedAt), isNotNull(items.tmdbId), isNull(items.seasonLayout)))
+    // Перестроенные (эпизод-группы, куры, override) не трогаем: гидрация по
+    // сезонам TMDb легла бы поверх своей раскладки. «source»/«flat» — это
+    // раскладка источника, её догонять можно.
+    .where(
+      and(
+        isNotNull(items.tmdbChangedAt),
+        isNotNull(items.tmdbId),
+        or(isNull(items.seasonLayout), inArray(items.seasonLayout, ["source", "flat"])),
+      ),
+    )
     .orderBy(desc(items.views))
     .limit(limit);
   return rows.map((r) => ({ id: r.id, tmdbId: Number(r.tmdbId) }));

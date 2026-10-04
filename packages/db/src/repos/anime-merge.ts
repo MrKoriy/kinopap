@@ -338,7 +338,7 @@ export async function findAnimeSeasonPairs(db: Db, limit = 200): Promise<AnimeSe
   const tm = await db.execute<{ id: number; title: string; original_title: string | null; year: number | null }>(sql`
     select id, title, original_title, year from items
     where tmdb_id is not null and type in ('serial', 'anime')
-      and (season_layout is null or season_layout = 'source')
+      and (season_layout is null or season_layout in ('source', 'flat'))
   `);
   const byTitle = new Map<string, Array<{ id: number; year: number | null }>>();
   for (const t of tm.rows as Array<{ id: number; title: string; original_title: string | null; year: number | null }>) {

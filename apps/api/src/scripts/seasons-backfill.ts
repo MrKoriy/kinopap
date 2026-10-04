@@ -72,7 +72,7 @@ async function regroupAll() {
     from seasons s
     join items i on i.id = s.item_id
     join lateral (select count(*) as n from episodes e where e.season_id = s.id) c on true
-    where s.number > 0 and i.season_layout is null
+    where s.number > 0 and (i.season_layout is null or i.season_layout = 'source')
       ${onlyItem ? sql`and i.id = ${onlyItem}` : sql``}
     group by s.item_id, i.title
     having max(c.n) > ${LONG_SEASON}

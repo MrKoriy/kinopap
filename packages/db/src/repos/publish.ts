@@ -560,7 +560,7 @@ export async function applyEnrichment(
   });
 }
 
-/** Перестроенная раскладка (эпизод-группа TMDb или ручная): новые серии — в конец. */
+/** Перестроенная раскладка (эпизод-группа TMDb, куры или ручная): новые серии — в конец. */
 function isRegroupedLayout(layout: string | null | undefined): boolean {
-  return !!layout && (layout.startsWith("tmdb-group:") || layout === "override");
+  return !!layout && (layout.startsWith("tmdb-group:") || layout === "cours" || layout === "override");
 }

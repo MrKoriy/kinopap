@@ -133,6 +133,41 @@ function EpisodeWatchState({ entry }: { entry: ItemProgressEntry | undefined }) 
   );
 }
 
+/** Поле «Серия №» для длинных сезонов: Enter — прыжок к строке серии. */
+function EpisodeJump({ onJump }: { onJump: (n: number) => boolean }) {
+  const [value, setValue] = React.useState("");
+  const [miss, setMiss] = React.useState(false);
+  return (
+    <form
+      className="mb-3 flex items-center gap-2"
+      data-testid="episode-jump"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const n = Number.parseInt(value, 10);
+        setMiss(!(n > 0 && onJump(n)));
+      }}
+    >
+      <input
+        type="number"
+        min={1}
+        inputMode="numeric"
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setMiss(false);
+        }}
+        placeholder="Серия №"
+        aria-label="Перейти к серии по номеру"
+        className="h-8 w-28 rounded-md border border-border bg-surface-2 px-2 text-sm text-white placeholder:text-muted focus:border-accent focus:outline-none"
+      />
+      <button type="submit" className="h-8 rounded-md bg-surface-2 px-3 text-xs font-medium text-muted transition hover:text-white">
+        Найти
+      </button>
+      {miss && <span className="text-xs text-muted">Нет такой серии</span>}
+    </form>
+  );
+}
+
 export function ItemDetailView({ item, similar = [] }: { item: ItemDetail; similar?: ItemSummary[] }) {
   const auth = useOptionalAuth();
   const api = auth?.api ?? null;
@@ -243,7 +278,13 @@ export function ItemDetailView({ item, similar = [] }: { item: ItemDetail; simil
   // «1–50, 51–100…»: 1000 строк разом — секунды рендера и бесконечный скролл.
   const chunked = activeEpisodes.length > EPISODE_CHUNK + EPISODE_CHUNK / 5;
   const [activeChunk, setActiveChunk] = React.useState(0);
+  const pendingChunk = React.useRef<number | null>(null);
   React.useEffect(() => {
+    if (pendingChunk.current != null) {
+      setActiveChunk(pendingChunk.current);
+      pendingChunk.current = null;
+      return;
+    }
     const at = resumeMediaId != null ? activeEpisodes.findIndex((e) => e.mediaId === resumeMediaId) : -1;
     setActiveChunk(at > 0 ? Math.floor(at / EPISODE_CHUNK) : 0);
   }, [activeEpisodes, resumeMediaId]);
@@ -256,6 +297,40 @@ export function ItemDetailView({ item, similar = [] }: { item: ItemDetail; simil
   const visibleEpisodes = chunked
     ? activeEpisodes.slice(activeChunk * EPISODE_CHUNK, (activeChunk + 1) * EPISODE_CHUNK)
     : activeEpisodes;
+
+  // «Серия №»: сначала в открытом сезоне, затем по сквозному номеру через
+  // все сезоны (после раскладки на куры «Блич 245» живёт в «Сезоне 10»).
+  const [highlight, setHighlight] = React.useState<number | null>(null);
+  const jumpToEpisode = (n: number): boolean => {
+    let season = activeSeason;
+    let at = activeEpisodes.findIndex((e) => e.number === n);
+    if (at < 0) {
+      let left = n;
+      season = -1;
+      for (let i = 0; i < seasonTabs.length; i++) {
+        const tab = seasonTabs[i]!;
+        if (tab.number === 0) continue;
+        if (left <= tab.episodes.length) {
+          season = i;
+          at = left - 1;
+          break;
+        }
+        left -= tab.episodes.length;
+      }
+      if (season < 0) return false;
+    }
+    const ep = seasonTabs[season]?.episodes[at];
+    if (!ep) return false;
+    seasonPickedByUser.current = true;
+    setActiveSeason(season);
+    pendingChunk.current = Math.floor(at / EPISODE_CHUNK);
+    setActiveChunk(pendingChunk.current);
+    setHighlight(ep.id);
+    window.requestAnimationFrame(() =>
+      window.setTimeout(() => document.getElementById(`ep-${ep.id}`)?.scrollIntoView?.({ block: "center" }), 50),
+    );
+    return true;
+  };
 
   const backdrop = backdropFor(item);
   const tint = item.images?.color ?? null;
@@ -413,6 +488,7 @@ export function ItemDetailView({ item, similar = [] }: { item: ItemDetail; simil
                     </button>
                   ))}
                 </div>
+                {(chunked || seasonTabs.length > 4) && <EpisodeJump onJump={jumpToEpisode} />}
                 {chunked && (
                   <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1" data-testid="episode-ranges">
                     {chunks.map((label, i) => (
@@ -431,7 +507,11 @@ export function ItemDetailView({ item, similar = [] }: { item: ItemDetail; simil
                 )}
                 <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
                   {visibleEpisodes.map((ep) => (
-                    <li key={ep.id}>
+                    <li
+                      key={ep.id}
+                      id={`ep-${ep.id}`}
+                      className={highlight === ep.id ? "bg-accent/10 ring-1 ring-inset ring-accent" : undefined}
+                    >
                       <EpisodeRow
                         itemId={item.id}
                         episode={ep}
