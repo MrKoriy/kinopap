@@ -116,7 +116,7 @@ export async function gapFillOnce(db: Db, config: Config): Promise<GapFillStats>
   }
   const long = await db.execute<{ item_id: number }>(sql`
     select s.item_id from seasons s join items i on i.id = s.item_id
-    where s.number > 0 and i.season_layout is null
+    where s.number > 0 and (i.season_layout is null or i.season_layout = 'source')
       and (select count(*) from episodes e where e.season_id = s.id) > ${LONG_SEASON}
     group by s.item_id
     order by max(i.views) desc nulls last
