@@ -18,6 +18,7 @@ import { ItemActions } from "@/components/item-actions";
 import { ItemCredits, ItemFranchise } from "@/components/item-credits";
 import { ItemPoster } from "@/components/item-poster";
 import { ItemRail } from "@/components/item-rail";
+import { OnlineButton } from "@/components/online-player";
 import { PosterImage } from "@/components/poster-image";
 import { TrailerButton } from "@/components/trailer-button";
 import { Badge } from "@/components/ui/badge";
@@ -442,6 +443,8 @@ export function ItemDetailView({ item, similar = [] }: { item: ItemDetail; simil
                   Сначала
                 </Link>
               )}
+
+              <OnlineButton itemId={item.id} />
 
               <TrailerButton trailer={item.trailer} title={item.title} />
 

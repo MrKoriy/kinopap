@@ -22,6 +22,7 @@ import { docsRoutes } from "./routes/docs";
 import { ingestRoutes } from "./routes/ingest";
 import { metricsRoutes } from "./routes/metrics";
 import { notifyRoutes } from "./routes/notify";
+import { onlineRoutes } from "./routes/online";
 import { profileRoutes } from "./routes/profile";
 import { progressRoutes } from "./routes/progress";
 import { socialRoutes } from "./routes/social";
@@ -254,6 +255,7 @@ export async function buildApp(opts: BuildAppOptions): Promise<FastifyInstance> 
       await profileRoutes(scope, { db: opts.db, config: opts.config });
       await socialRoutes(scope, { db: opts.db, config: opts.config });
       await notifyRoutes(scope, { db: opts.db, config: opts.config });
+      await onlineRoutes(scope, { db: opts.db, config: opts.config, redis: opts.redis ?? null });
       // Свой под-плагин: парсер text/plain (sendBeacon) не должен влиять на
       // остальные маршруты.
       await scope.register(async (m) => metricsRoutes(m, { db: opts.db, config: opts.config }));

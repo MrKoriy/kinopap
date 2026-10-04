@@ -109,6 +109,10 @@ module.exports = {
         // Наблюдаемость: Sentry (необязательно) и имя релиза в ошибках.
         SENTRY_DSN: process.env.SENTRY_DSN,
         RELEASE: RELEASE_NAME,
+        // Онлайн-балансеры (кнопка «Онлайн»): без токена провайдер выключен.
+        KODIK_TOKEN: process.env.KODIK_TOKEN,
+        KODIK_API_URL: process.env.KODIK_API_URL,
+        ALLOHA_TOKEN: process.env.ALLOHA_TOKEN,
       },
     },
     {

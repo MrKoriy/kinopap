@@ -93,3 +93,41 @@ describe("Recommendations", () => {
     expect(screen.getByText("Рекомендуем вам")).toBeDefined();
   });
 });
+
+describe("онлайн-балансеры", () => {
+  const source = (label: string, url: string) => ({ provider: "kodik", label, url, quality: "720p", lastSeason: null, lastEpisode: null });
+
+  it("кнопка «Онлайн» появляется только при найденных источниках", async () => {
+    const { OnlineButton } = await import("@/components/online-player");
+    auth.state.api = { getOnlineSources: vi.fn().mockResolvedValue({ enabled: true, sources: [] }) };
+    const { unmount } = render(<OnlineButton itemId={5} />);
+    await waitFor(() => expect(auth.state.api).toBeTruthy());
+    expect(screen.queryByTestId("online-button")).toBeNull();
+    unmount();
+    auth.state.api = { getOnlineSources: vi.fn().mockResolvedValue({ enabled: true, sources: [source("Дубляж", "https://k.test/1")] }) };
+    render(<OnlineButton itemId={5} />);
+    expect((await screen.findByTestId("online-button")).getAttribute("href")).toBe("/watch/5/online");
+  });
+
+  it("плеер: iframe первого источника, переключение озвучки", async () => {
+    const { OnlinePlayer } = await import("@/components/online-player");
+    auth.state.api = {
+      getOnlineSources: vi.fn().mockResolvedValue({
+        enabled: true,
+        sources: [source("Дубляж", "https://k.test/1"), source("Гоблин", "https://k.test/2")],
+      }),
+    };
+    render(<OnlinePlayer itemId={5} torrentHref="/watch/5/77" />);
+    const iframe = await screen.findByTestId("online-iframe");
+    expect((iframe).getAttribute("src")).toBe("https://k.test/1");
+    screen.getAllByTestId("online-source")[1]!.click();
+    await waitFor(() => expect((screen.getByTestId("online-iframe")).getAttribute("src")).toBe("https://k.test/2"));
+  });
+
+  it("плеер: пусто — предлагает торрент; сбой клиента не роняет", async () => {
+    const { OnlinePlayer } = await import("@/components/online-player");
+    auth.state.api = {};
+    render(<OnlinePlayer itemId={5} torrentHref="/watch/5/77" />);
+    expect(await screen.findByTestId("online-empty")).toBeTruthy();
+  });
+});

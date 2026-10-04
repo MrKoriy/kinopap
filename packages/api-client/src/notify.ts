@@ -77,3 +77,21 @@ export const opsSummarySchema = z.object({
   errors: z.array(errorEventSchema).default([]),
 });
 export type OpsSummary = z.infer<typeof opsSummarySchema>;
+
+/** Источник онлайн-балансера (Kodik/Alloha): готовый плеер в iframe. */
+export const onlineSourceSchema = z.object({
+  provider: z.enum(["kodik", "alloha"]),
+  label: z.string(),
+  url: z.string(),
+  quality: z.string().nullable(),
+  lastSeason: z.number().int().nullable(),
+  lastEpisode: z.number().int().nullable(),
+});
+export type OnlineSource = z.infer<typeof onlineSourceSchema>;
+
+export const onlineSourcesResponseSchema = z.object({
+  /** false — на сервере не настроен ни один балансер. */
+  enabled: z.boolean(),
+  sources: z.array(onlineSourceSchema),
+});
+export type OnlineSourcesResponse = z.infer<typeof onlineSourcesResponseSchema>;
