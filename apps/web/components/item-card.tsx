@@ -41,6 +41,7 @@ export function ItemCard({
   const poster = !imgError ? (item.posters.medium ?? item.posters.small ?? item.posters.big) : null;
   const rating = displayRating(item);
   const typeTitle = TYPED_BADGE.has(item.type) ? ITEM_TYPE_TITLES[item.type] : null;
+  const qualityLabel = item.quality ? (item.quality >= 2160 ? "4K" : item.quality >= 1080 ? "1080p" : null) : null;
   const progressRatio =
     progress != null ? Math.min(1, Math.max(0, progress)) : null;
 
@@ -97,6 +98,24 @@ export function ItemCard({
             >
               {rating.toFixed(1)}
             </Badge>
+          )}
+
+          {(qualityLabel || item.playable) && (
+            <div className="absolute bottom-2 left-2 flex items-center gap-1.5" data-testid="item-card-badges">
+              {qualityLabel && (
+                <span className="rounded bg-black/70 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-white backdrop-blur-sm">
+                  {qualityLabel}
+                </span>
+              )}
+              {item.playable && (
+                <span
+                  className="flex h-5 items-center gap-1 rounded bg-black/70 px-1.5 text-[10px] font-medium text-emerald-300 backdrop-blur-sm"
+                  title="Источник проверен — стартует быстро"
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Доступно
+                </span>
+              )}
+            </div>
           )}
 
           {progressRatio != null && (

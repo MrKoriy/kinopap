@@ -3,24 +3,27 @@
 import type { ItemSummary } from "@zal/api-client";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import * as React from "react";
+import { BackdropCard } from "./backdrop-card";
 import { FavoritesProvider } from "./favorites-batch";
 import { ItemCard } from "./item-card";
 
 /**
  * Горизонтальная лента: snap-прокрутка, стрелки на десктопе, один
  * батч-запрос закладок на все карточки. `ranked` — «Топ-10» с большими
- * цифрами слева от постера.
+ * цифрами слева от постера, `landscape` — широкие 16:9 карточки-бэкдропы.
  */
 export function ItemRail({
   title,
   items,
   href,
   ranked = false,
+  landscape = false,
 }: {
   title: string;
   items: ItemSummary[];
   href?: string;
   ranked?: boolean;
+  landscape?: boolean;
 }) {
   const ids = React.useMemo(() => items.map((i) => i.id), [items]);
   const scroller = React.useRef<HTMLDivElement>(null);
@@ -64,7 +67,9 @@ export function ItemRail({
           className="flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-smooth pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           {items.map((item, i) =>
-            ranked ? (
+            landscape ? (
+              <BackdropCard key={item.id} item={item} className="w-72 shrink-0 snap-start sm:w-80" />
+            ) : ranked ? (
               <div key={item.id} className="flex shrink-0 snap-start items-end">
                 <span
                   aria-hidden

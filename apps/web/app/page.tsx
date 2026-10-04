@@ -15,6 +15,7 @@ async function RailOrError({
   title,
   href,
   ranked = false,
+  landscape = false,
   limit = 12,
 }: {
   kind?: ShortcutKind;
@@ -23,11 +24,12 @@ async function RailOrError({
   title: string;
   href: string;
   ranked?: boolean;
+  landscape?: boolean;
   limit?: number;
 }) {
   try {
     const page = kind ? await fetchShortcut(kind, limit) : await fetchItems({ ...params, limit });
-    return <ItemRail title={title} items={page.items} href={href} ranked={ranked} />;
+    return <ItemRail title={title} items={page.items} href={href} ranked={ranked} landscape={landscape} />;
   } catch {
     return (
       <section>
@@ -40,10 +42,12 @@ async function RailOrError({
   }
 }
 
-/** Hero-карусель: верхняя полоса свежего. */
+/** Hero-карусель: самое смотримое сегодня (с трейлером и бэкдропом — первыми). */
 async function Hero() {
   try {
-    const fresh = await fetchShortcut("fresh", 5);
+    const hot = await fetchShortcut("hot", 12);
+    const rich = (i: (typeof hot.items)[number]) => (i.backdrop || i.images?.backdrop ? 2 : 0) + (i.trailer.id ? 1 : 0);
+    const fresh = { items: [...hot.items].sort((a, b) => rich(b) - rich(a)).slice(0, 6) };
     return <HeroCarousel items={fresh.items} />;
   } catch {
     return (
@@ -66,7 +70,7 @@ export default function HomePage() {
         <RailOrError kind="hot" title="Топ-10 сегодня" href="/catalog?sort=views-" ranked limit={10} />
       </Suspense>
       <Suspense fallback={<RailSkeleton />}>
-        <RailOrError kind="fresh" title="Свежее" href="/catalog?sort=updated-" />
+        <RailOrError kind="fresh" title="Свежее" href="/catalog?sort=updated-" landscape />
       </Suspense>
       <Suspense fallback={<RailSkeleton />}>
         <RailOrError params={{ type: "movie", sort: "views-" }} title="Фильмы" href="/catalog?type=movie&sort=views-" />

@@ -14,10 +14,17 @@ describe("tokens", () => {
     const vars = cssVariables();
     expect(vars["--zal-bg"]).toBe(tokens.color.bg);
     expect(vars["--zal-accent"]).toBe(tokens.color.accent);
-    expect(Object.keys(vars)).toHaveLength(8);
+    expect(Object.keys(vars)).toHaveLength(16);
+    expect(vars["--zal-radius-card"]).toBe("12px");
   });
 
   it("has a dark theme: bg is darker than surface", () => {
     expect(tokens.color.bg < tokens.color.surface).toBe(true);
+    expect(tokens.color.surface < tokens.color.surface2).toBe(true);
+  });
+
+  it("typography scale grows monotonically", () => {
+    const sizes = Object.values(tokens.fontSize);
+    expect([...sizes].sort((a, b) => a - b)).toEqual(sizes);
   });
 });

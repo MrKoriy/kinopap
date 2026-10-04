@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * Поиск в шапке с подсказками по мере ввода: debounce 220 мс, отмена
+ * Поиск в шапке с подсказками по мере ввода: debounce 150 мс, отмена
  * устаревших запросов, стрелки/Enter/Esc. Enter без выбора — полная выдача
- * на /search (как раньше).
+ * на /search (как раньше). Хоткеи «/» и Ctrl/⌘+K — фокус в поиск; пустое
+ * поле показывает историю запросов (localStorage).
  */
 import { ITEM_TYPE_TITLES, type ItemSummary } from "@zal/api-client";
+import { Clock, X } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import * as React from "react";
@@ -13,7 +15,41 @@ import { PosterImage } from "@/components/poster-image";
 import { fetchSuggest } from "@/lib/api";
 import { displayRating } from "@/lib/format";
 
-const DEBOUNCE_MS = 220;
+const DEBOUNCE_MS = 150;
+const HISTORY_KEY = "zal:search-history";
+const HISTORY_MAX = 8;
+
+export function readSearchHistory(): string[] {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+    return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string").slice(0, HISTORY_MAX) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function pushSearchHistory(q: string): string[] {
+  const query = q.trim();
+  if (query.length < 2) return readSearchHistory();
+  const next = [query, ...readSearchHistory().filter((x) => x.toLowerCase() !== query.toLowerCase())].slice(
+    0,
+    HISTORY_MAX,
+  );
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    // приватный режим — без истории
+  }
+  return next;
+}
+
+/** Хоткей поиска не должен срабатывать, пока человек печатает в другом поле. */
+function isTypingTarget(el: EventTarget | null): boolean {
+  const node = el as HTMLElement | null;
+  if (!node) return false;
+  const tag = node.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || node.isContentEditable;
+}
 
 export function SearchBox() {
   const router = useRouter();
@@ -23,6 +59,23 @@ export function SearchBox() {
   const [active, setActive] = React.useState(-1);
   const [loading, setLoading] = React.useState(false);
   const boxRef = React.useRef<HTMLFormElement>(null);
+  const inputRef = React.useRef<HTMLInputElement>(null);
+  const [history, setHistory] = React.useState<string[]>([]);
+
+  React.useEffect(() => {
+    setHistory(readSearchHistory());
+    const onKey = (e: KeyboardEvent) => {
+      const combo = (e.key === "k" || e.key === "K" || e.key === "л" || e.key === "Л") && (e.ctrlKey || e.metaKey);
+      if (combo || (e.key === "/" && !isTypingTarget(e.target))) {
+        e.preventDefault();
+        inputRef.current?.focus();
+        inputRef.current?.select();
+        setOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   React.useEffect(() => {
     const q = query.trim();
@@ -61,10 +114,13 @@ export function SearchBox() {
 
   const go = (href: string) => {
     setOpen(false);
+    setHistory(pushSearchHistory(query));
+    inputRef.current?.blur();
     router.push(href);
   };
 
   const showDropdown = open && query.trim().length >= 2 && (items.length > 0 || !loading);
+  const showHistory = open && query.trim().length === 0 && history.length > 0;
 
   return (
     <form
@@ -80,9 +136,11 @@ export function SearchBox() {
       }}
     >
       <input
+        ref={inputRef}
         className="w-40 rounded-full border border-border bg-surface-2 px-4 py-1.5 text-sm text-white outline-none transition focus:border-accent sm:w-64"
         type="search"
-        placeholder="Поиск…"
+        placeholder="Поиск…  /"
+        aria-keyshortcuts="/ Control+K"
         value={query}
         autoComplete="off"
         onChange={(e) => {
@@ -112,6 +170,61 @@ export function SearchBox() {
         Найти
       </button>
 
+      {showHistory && (
+        <div
+          className="absolute right-0 top-full z-50 mt-2 w-[22rem] max-w-[90vw] overflow-hidden rounded-xl border border-border bg-surface shadow-popover"
+          data-testid="search-history"
+        >
+          <div className="flex items-center justify-between px-4 pb-1 pt-3 text-xs uppercase tracking-wide text-muted">
+            <span>Недавние запросы</span>
+            <button
+              type="button"
+              className="normal-case tracking-normal hover:text-white"
+              onClick={() => {
+                try {
+                  localStorage.removeItem(HISTORY_KEY);
+                } catch {}
+                setHistory([]);
+              }}
+            >
+              Очистить
+            </button>
+          </div>
+          <ul className="pb-2">
+            {history.map((h) => (
+              <li key={h} className="group flex items-center">
+                <Link
+                  href={`/search?q=${encodeURIComponent(h)}`}
+                  onClick={() => {
+                    setOpen(false);
+                    setQuery(h);
+                    setHistory(pushSearchHistory(h));
+                  }}
+                  className="flex min-w-0 flex-1 items-center gap-3 px-4 py-2 text-sm text-white/90 transition hover:bg-surface-2"
+                >
+                  <Clock className="h-4 w-4 shrink-0 text-muted" />
+                  <span className="truncate">{h}</span>
+                </Link>
+                <button
+                  type="button"
+                  aria-label={`Удалить «${h}» из истории`}
+                  className="mr-2 rounded p-1 text-muted opacity-0 transition hover:text-white group-hover:opacity-100"
+                  onClick={() => {
+                    const next = readSearchHistory().filter((x) => x !== h);
+                    try {
+                      localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+                    } catch {}
+                    setHistory(next);
+                  }}
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {showDropdown && (
         <div
           id="search-suggest"
@@ -129,7 +242,10 @@ export function SearchBox() {
                   <li key={it.id}>
                     <Link
                       href={`/item/${it.id}`}
-                      onClick={() => setOpen(false)}
+                      onClick={() => {
+                        setOpen(false);
+                        setHistory(pushSearchHistory(query));
+                      }}
                       onMouseEnter={() => setActive(i)}
                       aria-current={i === active ? "true" : undefined}
                       className={`flex items-center gap-3 px-3 py-2 transition ${i === active ? "bg-surface-2" : ""}`}

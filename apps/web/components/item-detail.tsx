@@ -1,6 +1,6 @@
 "use client";
 
-import type { Episode, ItemDetail, ItemProgressDto, ItemProgressEntry } from "@zal/api-client";
+import type { Episode, ItemDetail, ItemProgressDto, ItemProgressEntry, ItemSummary } from "@zal/api-client";
 import { pickDefaultSeason, pluralRu, primaryPlayLabel, progressByMedia } from "@zal/shared";
 import { Check, Film, Play, RotateCcw } from "lucide-react";
 import Link from "next/link";
@@ -17,12 +17,15 @@ import { FavoriteButton } from "@/components/favorite-button";
 import { ItemActions } from "@/components/item-actions";
 import { ItemCredits, ItemFranchise } from "@/components/item-credits";
 import { ItemPoster } from "@/components/item-poster";
+import { ItemRail } from "@/components/item-rail";
 import { PosterImage } from "@/components/poster-image";
 import { TrailerButton } from "@/components/trailer-button";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
+import { AnchorTabs, type TabItem } from "@/components/ui/tabs";
 import { useOptionalAuth } from "@/lib/auth";
 import { formatDurationHuman } from "@/lib/format";
+import { backdropFor } from "@/lib/images";
 
 /**
  * Тонкий адаптер: pickDefaultSeason выбирает сезон по id, а веб-карточка
@@ -130,7 +133,7 @@ function EpisodeWatchState({ entry }: { entry: ItemProgressEntry | undefined }) 
   );
 }
 
-export function ItemDetailView({ item }: { item: ItemDetail }) {
+export function ItemDetailView({ item, similar = [] }: { item: ItemDetail; similar?: ItemSummary[] }) {
   const auth = useOptionalAuth();
   const api = auth?.api ?? null;
   const isAuthed = auth?.isAuthed ?? false;
@@ -254,217 +257,277 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
     ? activeEpisodes.slice(activeChunk * EPISODE_CHUNK, (activeChunk + 1) * EPISODE_CHUNK)
     : activeEpisodes;
 
+  const backdrop = backdropFor(item);
+  const tint = item.images?.color ?? null;
+  const metaLine = [
+    item.year ? String(item.year) : null,
+    item.countries.length > 0 ? item.countries.slice(0, 2).map((c) => c.title).join(", ") : null,
+    item.duration.average ? formatDurationHuman(item.duration.average) : null,
+  ].filter((v): v is string => v != null);
+  const ratings = [
+    item.kinopoisk.rating ? { label: "КП", value: item.kinopoisk.rating } : null,
+    item.imdb.rating ? { label: "IMDb", value: item.imdb.rating } : null,
+    item.tmdb.rating ? { label: "TMDb", value: item.tmdb.rating } : null,
+  ].filter((v): v is { label: string; value: number } => v != null);
+
+  const hasEpisodes = item.seasons != null || (item.media != null && item.media.length > 1);
+  const hasCredits =
+    (item.credits != null && (item.credits.cast.length > 0 || item.credits.crew.length > 0)) ||
+    item.director.length > 0 ||
+    item.cast.length > 0;
+  const tabs: TabItem[] = [
+    ...(hasEpisodes
+      ? [{ id: "episodes", label: item.seasons ? "Серии" : "Части", count: item.seasons ? undefined : item.media?.length }]
+      : []),
+    { id: "about", label: "О фильме" },
+    ...(hasCredits ? [{ id: "cast", label: "Актёры" }] : []),
+    ...(similar.length > 0 ? [{ id: "similar", label: "Похожее" }] : []),
+    { id: "comments", label: "Отзывы" },
+  ];
+
   return (
     <div>
-      {/* Шапка — карточка с постером слева, инфо справа. Никакого full-bleed,
-          чтобы не выглядело как трейлер на всю карточку. */}
-      <div className="mb-8 flex flex-col gap-6 rounded-[var(--radius-card)] border border-border bg-surface-2 p-6 sm:flex-row sm:items-start">
-        <div className="relative mx-auto w-[200px] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-background sm:mx-0 sm:w-[220px]">
-          {poster ? (
-            <ItemPoster
-              item={item}
-              fallbackSrc={poster}
-              alt={item.title}
-              className="aspect-[2/3] w-full object-cover"
-              sizes="220px"
+      {/* Шапка: бэкдроп приглушённым фоном за карточкой постер+инфо. */}
+      <div
+        className="relative mb-6 overflow-hidden rounded-2xl border border-border bg-surface-2 shadow-card"
+        style={tint ? { backgroundColor: tint } : undefined}
+      >
+        {backdrop.src && (
+          <div aria-hidden className="absolute inset-0">
+            <PosterImage
+              src={backdrop.src}
+              alt=""
+              className={`object-cover ${backdrop.isPoster ? "scale-110 opacity-30 blur-2xl" : "opacity-45"}`}
+              sizes="(max-width: 1280px) 100vw, 1280px"
               priority
-              fill={false}
-              width={220}
-              height={330}
             />
-          ) : (
-            <div className="flex aspect-[2/3] w-full items-center justify-center bg-surface-2 text-muted">
-              <Film className="h-10 w-10 opacity-30" />
-            </div>
-          )}
-        </div>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-3xl font-bold text-white sm:text-4xl" data-testid="item-title">
-            {item.title}
-          </h1>
-          {item.originalTitle && <p className="mt-1 text-sm text-muted">{item.originalTitle}</p>}
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {rating !== null && rating > 0 && (
-              <Badge className="bg-accent text-white">★ {rating.toFixed(1)}</Badge>
-            )}
-            {item.year && <Badge>{item.year}</Badge>}
-            {item.genres.map((g) => (
-              <Badge key={g.id}>{g.title}</Badge>
-            ))}
-            {item.duration.average ? <Badge>{formatDurationHuman(item.duration.average)}</Badge> : null}
+            <div className="absolute inset-0 bg-gradient-to-r from-background via-background/85 to-background/30" />
+            <div className="absolute inset-0 bg-gradient-to-t from-background via-transparent to-transparent" />
           </div>
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <Link
-              href={`/watch/${item.id}/${ctaMediaId}`}
-              className={buttonVariants()}
-              data-testid="watch-button"
-            >
-              <Play className="mr-2 h-4 w-4 fill-current" />
-              {ctaLabel}
-            </Link>
-
-            {showStartOver && (
-              <Link
-                href={`/watch/${item.id}/${playMediaId}`}
-                className={buttonVariants({ variant: "secondary" })}
-                data-testid="watch-from-start"
-              >
-                <RotateCcw className="mr-2 h-4 w-4" />
-                Сначала
-              </Link>
+        )}
+        <div className="relative flex flex-col gap-6 p-6 sm:flex-row sm:items-end sm:p-8">
+          <div className="relative mx-auto w-[200px] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-background shadow-card sm:mx-0 sm:w-[220px]">
+            {poster ? (
+              <ItemPoster
+                item={item}
+                fallbackSrc={poster}
+                alt={item.title}
+                className="aspect-[2/3] w-full object-cover"
+                sizes="220px"
+                priority
+                fill={false}
+                width={220}
+                height={330}
+              />
+            ) : (
+              <div className="flex aspect-[2/3] w-full items-center justify-center bg-surface-2 text-muted">
+                <Film className="h-10 w-10 opacity-30" />
+              </div>
             )}
-
-            <TrailerButton trailer={item.trailer} title={item.title} />
-
-            <FavoriteButton itemId={item.id} />
-
-            <CollectionMenu itemId={item.id} />
-
-            <div className="self-center">
-              <ItemActions itemId={item.id} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <h1 className="text-3xl font-bold text-white sm:text-4xl lg:text-5xl" data-testid="item-title">
+              {item.title}
+            </h1>
+            {item.originalTitle && <p className="mt-1 text-sm text-muted">{item.originalTitle}</p>}
+            {(metaLine.length > 0 || ratings.length > 0) && (
+              <p className="mt-3 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-white/80" data-testid="item-meta-line">
+                {metaLine.map((v, i) => (
+                  <React.Fragment key={v}>
+                    {i > 0 && <span className="text-muted">•</span>}
+                    <span>{v}</span>
+                  </React.Fragment>
+                ))}
+                {ratings.map((r) => (
+                  <span key={r.label} className="ml-1 rounded bg-white/10 px-1.5 py-0.5 text-xs font-semibold tabular-nums">
+                    {r.label} {r.value.toFixed(1)}
+                  </span>
+                ))}
+              </p>
+            )}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              {rating !== null && rating > 0 && <Badge className="bg-accent text-white">★ {rating.toFixed(1)}</Badge>}
+              {item.genres.map((g) => (
+                <Badge key={g.id}>{g.title}</Badge>
+              ))}
             </div>
+            <div className="mt-5 flex flex-wrap items-center gap-3">
+              <Link href={`/watch/${item.id}/${ctaMediaId}`} className={buttonVariants()} data-testid="watch-button">
+                <Play className="mr-2 h-4 w-4 fill-current" />
+                {ctaLabel}
+              </Link>
+
+              {showStartOver && (
+                <Link
+                  href={`/watch/${item.id}/${playMediaId}`}
+                  className={buttonVariants({ variant: "secondary" })}
+                  data-testid="watch-from-start"
+                >
+                  <RotateCcw className="mr-2 h-4 w-4" />
+                  Сначала
+                </Link>
+              )}
+
+              <TrailerButton trailer={item.trailer} title={item.title} />
+
+              <FavoriteButton itemId={item.id} />
+
+              <CollectionMenu itemId={item.id} />
+
+              <div className="self-center">
+                <ItemActions itemId={item.id} />
+              </div>
+            </div>
+            {item.plot && (
+              <p className="mt-5 line-clamp-3 max-w-3xl text-sm leading-relaxed text-white/75 sm:text-base">{item.plot}</p>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Мета-сетка: тип-зависимые детали — сезоны, качество, озвучка, рейтинги */}
-      {meta.length > 0 && (
-        <dl
-          className="mb-8 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4"
-          data-testid="meta-grid"
-        >
-          {meta.map((row) => (
-            <div key={row.label}>
-              <dt className="text-xs uppercase tracking-wide text-muted">{row.label}</dt>
-              <dd className="mt-0.5 text-sm text-white">{row.value}</dd>
-            </div>
-          ))}
-        </dl>
+      {/* Табы-якоря: липнут под шапкой сайта, подсвечивают видимую секцию. */}
+      <AnchorTabs items={tabs} className="glass sticky top-16 z-30 mb-6 -mx-4 px-4" />
+
+      {/* Сезоны и эпизоды / части фильма */}
+      {hasEpisodes && (
+        <section id="episodes" className="mb-10 scroll-mt-32">
+          {item.seasons ? (
+            seasonTabs.length > 0 ? (
+              <div data-testid="seasons">
+                <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
+                  {seasonTabs.map((s, i) => (
+                    <button
+                      type="button"
+                      key={s.id}
+                      className={`shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition ${
+                        i === activeSeason ? "bg-accent text-white" : "bg-surface-2 text-muted hover:text-white"
+                      }`}
+                      onClick={() => {
+                        seasonPickedByUser.current = true;
+                        setActiveSeason(i);
+                      }}
+                      data-testid={s.number === 0 ? "specials-tab" : "season-tab"}
+                    >
+                      {s.title ?? `Сезон ${s.number}`}
+                      <span className="ml-1.5 text-xs opacity-70">{s.episodes.length}</span>
+                    </button>
+                  ))}
+                </div>
+                {chunked && (
+                  <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1" data-testid="episode-ranges">
+                    {chunks.map((label, i) => (
+                      <button
+                        type="button"
+                        key={label}
+                        className={`shrink-0 rounded-md px-3 py-1 text-xs font-medium tabular-nums transition ${
+                          i === activeChunk ? "bg-white/15 text-white" : "bg-surface-2 text-muted hover:text-white"
+                        }`}
+                        onClick={() => setActiveChunk(i)}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
+                  {visibleEpisodes.map((ep) => (
+                    <li key={ep.id}>
+                      <EpisodeRow
+                        itemId={item.id}
+                        episode={ep}
+                        entry={ep.mediaId != null ? entries.get(ep.mediaId) : undefined}
+                        resume={ep.mediaId != null && ep.mediaId === resumeMediaId}
+                        prefetch={ep.mediaId != null && ep.mediaId === firstPlayableInSeason}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted">
+                Сезоны загружаются… Обновите страницу через несколько секунд.
+              </div>
+            )
+          ) : null}
+
+          {/* Фильм из нескольких частей (аниме без сезонов — тоже) */}
+          {item.media && item.media.length > 1 && (
+            <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
+              {item.media.map((part) => (
+                <li key={part.id}>
+                  <Link
+                    href={`/watch/${item.id}/${part.id}`}
+                    className="flex items-center gap-4 px-4 py-3 transition hover:bg-surface-2"
+                  >
+                    <span className="w-8 text-center text-sm font-semibold text-accent">{part.partNumber}</span>
+                    <span className="flex-1 text-sm text-white">{part.title ?? `Часть ${part.partNumber}`}</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
       )}
 
-      {/* Описание */}
-      {item.plot && (
-        <p className="mb-8 max-w-3xl leading-relaxed text-muted" data-testid="item-plot">
-          {item.plot}
-        </p>
-      )}
+      {/* О фильме: сюжет целиком и мета-сетка */}
+      <section id="about" className="mb-10 scroll-mt-32">
+        {item.plot && (
+          <p className="mb-6 max-w-3xl leading-relaxed text-muted" data-testid="item-plot">
+            {item.plot}
+          </p>
+        )}
+        {meta.length > 0 && (
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-3 lg:grid-cols-4" data-testid="meta-grid">
+            {meta.map((row) => (
+              <div key={row.label}>
+                <dt className="text-xs uppercase tracking-wide text-muted">{row.label}</dt>
+                <dd className="mt-0.5 text-sm text-white">{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        )}
+        {/* Франшиза (аниме): сезоны, фильмы, OVA по порядку */}
+        {item.franchise && item.franchise.entries.length > 1 && (
+          <div className="mt-8">
+            <ItemFranchise franchise={item.franchise} itemId={item.id} />
+          </div>
+        )}
+      </section>
 
       {/* Актёры и команда: фото, роли; старые карточки — строкой имён */}
-      {item.credits && (item.credits.cast.length > 0 || item.credits.crew.length > 0) ? (
-        <ItemCredits credits={item.credits} />
-      ) : (
-        (item.director.length > 0 || item.cast.length > 0) && (
-          <div className="mb-8 grid gap-4 sm:grid-cols-2">
-            {item.director.length > 0 && (
-              <div>
-                <h3 className="mb-1 text-sm font-semibold text-white">Режиссёр</h3>
-                <p className="text-sm text-muted">{item.director.join(", ")}</p>
-              </div>
-            )}
-            {item.cast.length > 0 && (
-              <div>
-                <h3 className="mb-1 text-sm font-semibold text-white">В ролях</h3>
-                <p className="text-sm text-muted">{item.cast.join(", ")}</p>
-              </div>
-            )}
-          </div>
-        )
-      )}
-
-      {/* Сезоны и эпизоды */}
-      {item.seasons ? (
-        seasonTabs.length > 0 ? (
-        <div data-testid="seasons">
-          <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-            {seasonTabs.map((s, i) => (
-              <button
-                type="button"
-                key={s.id}
-                className={`shrink-0 rounded-full px-4 py-1.5 text-sm font-medium transition ${
-                  i === activeSeason
-                    ? "bg-accent text-white"
-                    : "bg-surface-2 text-muted hover:text-white"
-                }`}
-                onClick={() => {
-                  seasonPickedByUser.current = true;
-                  setActiveSeason(i);
-                }}
-                data-testid={s.number === 0 ? "specials-tab" : "season-tab"}
-              >
-                {s.title ?? `Сезон ${s.number}`}
-                <span className="ml-1.5 text-xs opacity-70">{s.episodes.length}</span>
-              </button>
-            ))}
-          </div>
-          {chunked && (
-            <div className="mb-3 flex gap-1.5 overflow-x-auto pb-1" data-testid="episode-ranges">
-              {chunks.map((label, i) => (
-                <button
-                  type="button"
-                  key={label}
-                  className={`shrink-0 rounded-md px-3 py-1 text-xs font-medium tabular-nums transition ${
-                    i === activeChunk
-                      ? "bg-white/15 text-white"
-                      : "bg-surface-2 text-muted hover:text-white"
-                  }`}
-                  onClick={() => setActiveChunk(i)}
-                >
-                  {label}
-                </button>
-              ))}
+      {hasCredits && (
+        <section id="cast" className="mb-2 scroll-mt-32">
+          {item.credits && (item.credits.cast.length > 0 || item.credits.crew.length > 0) ? (
+            <ItemCredits credits={item.credits} />
+          ) : (
+            <div className="mb-8 grid gap-4 sm:grid-cols-2">
+              {item.director.length > 0 && (
+                <div>
+                  <h3 className="mb-1 text-sm font-semibold text-white">Режиссёр</h3>
+                  <p className="text-sm text-muted">{item.director.join(", ")}</p>
+                </div>
+              )}
+              {item.cast.length > 0 && (
+                <div>
+                  <h3 className="mb-1 text-sm font-semibold text-white">В ролях</h3>
+                  <p className="text-sm text-muted">{item.cast.join(", ")}</p>
+                </div>
+              )}
             </div>
           )}
-          <ul className="divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
-            {visibleEpisodes.map((ep) => (
-              <li key={ep.id}>
-                <EpisodeRow
-                  itemId={item.id}
-                  episode={ep}
-                  entry={ep.mediaId != null ? entries.get(ep.mediaId) : undefined}
-                  resume={ep.mediaId != null && ep.mediaId === resumeMediaId}
-                  prefetch={ep.mediaId != null && ep.mediaId === firstPlayableInSeason}
-                />
-              </li>
-            ))}
-          </ul>
-        </div>
-        ) : (
-          <div className="mb-8 rounded-lg border border-dashed border-border p-6 text-center text-sm text-muted">
-            Сезоны загружаются… Обновите страницу через несколько секунд.
-          </div>
-        )
-      ) : null}
-
-      {/* Фильм из нескольких частей (аниме без сезонов — тоже) */}
-      {item.media && item.media.length > 1 && (
-        <ul className="mt-8 divide-y divide-border overflow-hidden rounded-[var(--radius-card)] border border-border">
-          {item.media.map((part) => (
-            <li key={part.id}>
-              <Link
-                href={`/watch/${item.id}/${part.id}`}
-                className="flex items-center gap-4 px-4 py-3 transition hover:bg-surface-2"
-              >
-                <span className="w-8 text-center text-sm font-semibold text-accent">
-                  {part.partNumber}
-                </span>
-                <span className="flex-1 text-sm text-white">
-                  {part.title ?? `Часть ${part.partNumber}`}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        </section>
       )}
 
-      {/* Франшиза (аниме): сезоны, фильмы, OVA по порядку */}
-      {item.franchise && item.franchise.entries.length > 1 && (
-        <div className="mt-8">
-          <ItemFranchise franchise={item.franchise} itemId={item.id} />
-        </div>
+      {similar.length > 0 && (
+        <section id="similar" className="mb-10 scroll-mt-32">
+          <ItemRail title="Похожее" items={similar} />
+        </section>
       )}
 
       {/* Комментарии */}
-      <Comments itemId={item.id} />
+      <section id="comments" className="scroll-mt-32">
+        <Comments itemId={item.id} />
+      </section>
     </div>
   );
 }

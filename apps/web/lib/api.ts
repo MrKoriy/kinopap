@@ -113,6 +113,8 @@ export type CatalogParams = {
   actor?: string;
   director?: string;
   rating?: string;
+  /** "1" — только с проверенной раздачей («можно смотреть»). */
+  playable?: string;
   sort?: string;
   limit?: number;
   cursor?: string;
