@@ -4,7 +4,7 @@
  */
 
 import type { AudioDubType, ItemType, Quality } from "@zal/api-client";
-import { and, eq, inArray, isNull } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "../db";
 import {
   audioTracks,
@@ -301,7 +301,7 @@ export async function publishIngest(
         byAbsolute ?? (await findEpisodeByOrig(txDb, itemId, ep.seasonNumber, ep.episodeNumber));
       if (byOrig != null) {
         episodeId = byOrig;
-      } else if ((await itemSeasonLayout(txDb, itemId))?.startsWith("tmdb-group:")) {
+      } else if (isRegroupedLayout(await itemSeasonLayout(txDb, itemId))) {
         episodeId = await appendEpisodeToLastSeason(txDb, itemId, {
           seasonNumber: ep.seasonNumber,
           episodeNumber: ep.episodeNumber,
@@ -509,6 +509,13 @@ export async function applyEnrichment(
         ...(e.posterSmall !== undefined ? { posterSmall: e.posterSmall } : {}),
         ...(e.posterMedium !== undefined ? { posterMedium: e.posterMedium } : {}),
         ...(e.posterBig !== undefined ? { posterBig: e.posterBig } : {}),
+        // Постер сменился — свои нарезки устарели: сбрасываем, воркер нарежет заново.
+        ...(e.posterBig !== undefined
+          ? {
+              posterHash: sql`case when ${items.posterBig} is distinct from ${e.posterBig} then null else ${items.posterHash} end`,
+              imagesCheckedAt: sql`case when ${items.posterBig} is distinct from ${e.posterBig} then null else ${items.imagesCheckedAt} end`,
+            }
+          : {}),
         ...(e.trailerId !== undefined ? { trailerId: e.trailerId } : {}),
         ...(e.trailerUrl !== undefined ? { trailerUrl: e.trailerUrl } : {}),
         updatedAt: new Date(),
@@ -551,4 +558,9 @@ export async function applyEnrichment(
       }
     }
   });
+}
+
+/** Перестроенная раскладка (эпизод-группа TMDb или ручная): новые серии — в конец. */
+function isRegroupedLayout(layout: string | null | undefined): boolean {
+  return !!layout && (layout.startsWith("tmdb-group:") || layout === "override");
 }

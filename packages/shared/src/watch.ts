@@ -36,6 +36,9 @@ export function mediaSlotLabel(item: ItemDetail, mediaId: number | null): string
   for (const part of item.media ?? []) {
     if (part.id === mediaId) return `Часть ${part.partNumber}`;
   }
+  for (const ep of item.specials?.episodes ?? []) {
+    if (ep.mediaId === mediaId) return `Спецвыпуск ${ep.number}`;
+  }
   return null;
 }
 

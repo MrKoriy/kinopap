@@ -357,3 +357,29 @@ describe("ItemDetailView", () => {
     expect(rows[0]!.textContent).toContain("Возвращение");
   });
 });
+
+describe("ItemPoster — свои нарезки и фолбэк", () => {
+  it("с images.poster — <picture> AVIF/WebP + плейсхолдер; без — старый путь", async () => {
+    const { ItemPoster } = await import("@/components/item-poster");
+    const { container, unmount } = render(
+      <div className="relative">
+        <ItemPoster
+          item={{ images: { poster: "/img/ab/abcdef", backdrop: null, blurhash: "LEHV6nWB2yk8pyo0adR*.7kCMdnj", color: "#112233" } }}
+          fallbackSrc="https://image.tmdb.org/t/p/w500/x.jpg"
+          alt="Постер"
+          sizes="200px"
+        />
+      </div>,
+    );
+    const sources = container.querySelectorAll("source");
+    expect(sources[0]?.getAttribute("srcset")).toContain("/img/ab/abcdef/160.avif 160w");
+    expect(sources[1]?.getAttribute("type")).toBe("image/webp");
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("/img/ab/abcdef/320.webp");
+    expect(container.querySelector("[data-testid=poster-placeholder]")).not.toBeNull();
+    unmount();
+
+    const fb = render(<ItemPoster item={{ images: null }} fallbackSrc="https://example.org/x.jpg" alt="П" sizes="200px" />);
+    expect(fb.container.querySelector("picture")).toBeNull();
+    expect(fb.container.querySelector("img")?.getAttribute("src")).toBe("https://example.org/x.jpg");
+  });
+});

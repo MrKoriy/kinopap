@@ -237,7 +237,9 @@ describe("ProfilePage (оптимистичные мутации)", () => {
     fireEvent.click(screen.getByTestId("favorite-remove"));
     await waitFor(() => expect(screen.queryByTestId("favorite-card")).toBeNull());
     expect(api.removeFavorite).toHaveBeenCalledWith(10);
-    await waitFor(() => expect(screen.getByTestId("favorite-card")).toBeDefined());
+    // Откат после отказа сети: под нагрузкой CI (параллельные тяжёлые тесты
+    // ingest) дефолтной секунды waitFor не хватало — флейк.
+    await waitFor(() => expect(screen.getByTestId("favorite-card")).toBeDefined(), { timeout: 5000 });
   });
 
   it("удаляет подборку сразу и возвращает при сбое", async () => {

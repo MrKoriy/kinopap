@@ -155,6 +155,13 @@
       "when": 1791103279448,
       "tag": "0021_useful_landau",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1791109053169,
+      "tag": "0022_crazy_ender_wiggin",
+      "breakpoints": true
     }
   ]
 }

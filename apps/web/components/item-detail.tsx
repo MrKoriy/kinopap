@@ -15,6 +15,8 @@ import { CollectionMenu } from "@/components/collection-menu";
 import { Comments } from "@/components/comments";
 import { FavoriteButton } from "@/components/favorite-button";
 import { ItemActions } from "@/components/item-actions";
+import { ItemCredits, ItemFranchise } from "@/components/item-credits";
+import { ItemPoster } from "@/components/item-poster";
 import { PosterImage } from "@/components/poster-image";
 import { TrailerButton } from "@/components/trailer-button";
 import { Badge } from "@/components/ui/badge";
@@ -226,7 +228,12 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
   const ctaLabel = primaryPlayLabel(item, resumeMediaId);
   const showStartOver = resumeMediaId != null && resumeMediaId !== playMediaId;
 
-  const activeEpisodes = item.seasons?.[activeSeason]?.episodes ?? [];
+  // Вкладки: обычные сезоны + «Спецвыпуски» (TMDb «Сезон 0») последней.
+  const seasonTabs = React.useMemo(
+    () => [...(item.seasons ?? []), ...(item.specials ? [{ ...item.specials, title: "Спецвыпуски" }] : [])],
+    [item.seasons, item.specials],
+  );
+  const activeEpisodes = seasonTabs[activeSeason]?.episodes ?? [];
   const firstPlayableInSeason = activeEpisodes.find((e) => e.mediaId)?.mediaId ?? null;
 
   // Длинный сезон (мыльные оперы, аниме без раскладки) режем на диапазоны
@@ -252,10 +259,11 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
       {/* Шапка — карточка с постером слева, инфо справа. Никакого full-bleed,
           чтобы не выглядело как трейлер на всю карточку. */}
       <div className="mb-8 flex flex-col gap-6 rounded-[var(--radius-card)] border border-border bg-surface-2 p-6 sm:flex-row sm:items-start">
-        <div className="mx-auto w-[200px] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-background sm:mx-0 sm:w-[220px]">
+        <div className="relative mx-auto w-[200px] shrink-0 overflow-hidden rounded-[var(--radius-card)] bg-background sm:mx-0 sm:w-[220px]">
           {poster ? (
-            <PosterImage
-              src={poster}
+            <ItemPoster
+              item={item}
+              fallbackSrc={poster}
               alt={item.title}
               className="aspect-[2/3] w-full object-cover"
               sizes="220px"
@@ -341,30 +349,34 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
         </p>
       )}
 
-      {/* Создатели */}
-      {(item.director.length > 0 || item.cast.length > 0) && (
-        <div className="mb-8 grid gap-4 sm:grid-cols-2">
-          {item.director.length > 0 && (
-            <div>
-              <h3 className="mb-1 text-sm font-semibold text-white">Режиссёр</h3>
-              <p className="text-sm text-muted">{item.director.join(", ")}</p>
-            </div>
-          )}
-          {item.cast.length > 0 && (
-            <div>
-              <h3 className="mb-1 text-sm font-semibold text-white">В ролях</h3>
-              <p className="text-sm text-muted">{item.cast.join(", ")}</p>
-            </div>
-          )}
-        </div>
+      {/* Актёры и команда: фото, роли; старые карточки — строкой имён */}
+      {item.credits && (item.credits.cast.length > 0 || item.credits.crew.length > 0) ? (
+        <ItemCredits credits={item.credits} />
+      ) : (
+        (item.director.length > 0 || item.cast.length > 0) && (
+          <div className="mb-8 grid gap-4 sm:grid-cols-2">
+            {item.director.length > 0 && (
+              <div>
+                <h3 className="mb-1 text-sm font-semibold text-white">Режиссёр</h3>
+                <p className="text-sm text-muted">{item.director.join(", ")}</p>
+              </div>
+            )}
+            {item.cast.length > 0 && (
+              <div>
+                <h3 className="mb-1 text-sm font-semibold text-white">В ролях</h3>
+                <p className="text-sm text-muted">{item.cast.join(", ")}</p>
+              </div>
+            )}
+          </div>
+        )
       )}
 
       {/* Сезоны и эпизоды */}
       {item.seasons ? (
-        item.seasons.length > 0 ? (
+        seasonTabs.length > 0 ? (
         <div data-testid="seasons">
           <div className="mb-4 flex gap-2 overflow-x-auto pb-1">
-            {item.seasons.map((s, i) => (
+            {seasonTabs.map((s, i) => (
               <button
                 type="button"
                 key={s.id}
@@ -377,7 +389,7 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
                   seasonPickedByUser.current = true;
                   setActiveSeason(i);
                 }}
-                data-testid="season-tab"
+                data-testid={s.number === 0 ? "specials-tab" : "season-tab"}
               >
                 {s.title ?? `Сезон ${s.number}`}
                 <span className="ml-1.5 text-xs opacity-70">{s.episodes.length}</span>
@@ -442,6 +454,13 @@ export function ItemDetailView({ item }: { item: ItemDetail }) {
             </li>
           ))}
         </ul>
+      )}
+
+      {/* Франшиза (аниме): сезоны, фильмы, OVA по порядку */}
+      {item.franchise && item.franchise.entries.length > 1 && (
+        <div className="mt-8">
+          <ItemFranchise franchise={item.franchise} itemId={item.id} />
+        </div>
       )}
 
       {/* Комментарии */}
