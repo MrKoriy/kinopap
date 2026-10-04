@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Держит дисковый кэш TorrServer в пределах TS_CACHE_MAX_GB (по умолчанию 20).
-Первыми уходят раздачи, к которым дольше всех не обращались (mtime)."""
+"""Держит дисковый кэш TorrServer в пределах TS_CACHE_MAX_GB (по умолчанию 25).
+Первыми уходят раздачи, к которым дольше всех не обращались (mtime).
+Прогрев голов топ-N (apps/worker, stream-headwarm) сам не вытесняет — он
+останавливается у 90% потолка и обновляет mtime каталогов горячих раздач,
+чтобы LRU здесь убирал холодное, а не только что прогретое."""
 import os, shutil
 
 root = os.environ.get("TS_CACHE_DIR", "/opt/kinopap/data/ts-cache")
-limit = float(os.environ.get("TS_CACHE_MAX_GB", "20")) * 1024 ** 3
+limit = float(os.environ.get("TS_CACHE_MAX_GB", "25")) * 1024 ** 3
 
 
 def size(p):

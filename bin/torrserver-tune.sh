@@ -5,7 +5,8 @@
 # через TorrentDisconnectTimeout без читателей, и RAM-кэш уходит вместе с ней.
 # Прогрев API (PREWARM) тянет голову файла заранее — без диска она исчезала
 # через полминуты. Теперь куски остаются в TS_CACHE_DIR, а объём держит
-# kinopap-ts-prune.timer (TS_CACHE_MAX_GB, по умолчанию 20 ГБ).
+# kinopap-ts-prune.timer (TS_CACHE_MAX_GB, по умолчанию 25 ГБ). Головы файлов
+# топ-N заранее читает воркер (stream-headwarm, STREAM_HEAD_WARM_TOP/STREAM_HEAD_MB).
 set -euo pipefail
 TS="${TORRSERVER_URL:-http://127.0.0.1:7002}"
 DIR="${TS_CACHE_DIR:-/opt/kinopap/data/ts-cache}"

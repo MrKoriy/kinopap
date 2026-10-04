@@ -7,16 +7,22 @@ import {
   type MediaFile,
   type MediaTracks,
   parseCatalogQuery,
+  prefetchRequestSchema,
   searchRawQuerySchema,
   shortcutQuerySchema,
+  streamHashFromUrl,
+  streamReportRequestSchema,
   type WarmRelease,
 } from "@zal/api-client";
 import {
+  bannedStreamHashes,
   type Db,
+  deleteSource,
   episodes,
   getItem,
   getItemsByIds,
   getSource,
+  getStreamSources,
   isSourceFresh,
   items,
   listCountries,
@@ -27,14 +33,21 @@ import {
   mediaLinks,
   patchSource,
   prewarmCandidates,
+  recordStreamSources,
+  refreshItemPlayable,
+  reportStreamSource,
   resolveItemRedirect,
+  type StreamResolveTarget,
+  type StreamSourceCandidate,
   saveSource,
   searchItems,
   seasons,
   shortcutItems,
   similarItems,
+  streamResolveTarget,
+  usableStreamSources,
 } from "@zal/db";
-import { StreamResolver } from "@zal/ingest";
+import { type StreamCandidate, StreamResolver } from "@zal/ingest";
 import { and, eq, sql } from "drizzle-orm";
 import type { FastifyInstance } from "fastify";
 import type { Redis } from "ioredis";
@@ -110,33 +123,6 @@ export async function catalogRoutes(
       if (oldest === undefined) break;
       resolveCache.delete(oldest);
     }
-  }
-
-  /** Сезон и серия media — их ждёт резолвер (поиск «s01e05», эпизоды аниме). */
-  async function episodeContext(
-    targetDb: Db,
-    mediaId: number,
-  ): Promise<{ seasonNumber: number | null; episodeNumber: number | null; sourceKey: string | null; absoluteNumber: number | null }> {
-    const rows = await targetDb
-      // Координаты источника: после перестройки сезонов «Сезон 12, серия 5»
-      // у нас — это s01e245 у TMDb/AniLibria, и искать поток надо по ним.
-      .select({
-        season: sql<number | null>`coalesce(${episodes.origSeason}, ${seasons.number})`,
-        episode: sql<number | null>`coalesce(${episodes.origNumber}, ${episodes.number})`,
-        sourceKey: media.sourceKey,
-        absolute: episodes.absoluteNumber,
-      })
-      .from(media)
-      .leftJoin(episodes, eq(episodes.id, media.episodeId))
-      .leftJoin(seasons, eq(seasons.id, episodes.seasonId))
-      .where(eq(media.id, mediaId))
-      .limit(1);
-    return {
-      seasonNumber: rows[0]?.season ?? null,
-      episodeNumber: rows[0]?.episode ?? null,
-      sourceKey: rows[0]?.sourceKey ?? null,
-      absoluteNumber: rows[0]?.absolute ?? null,
-    };
   }
 
   function applyCached(links: {
@@ -474,52 +460,82 @@ export async function catalogRoutes(
     return links;
   }
 
-  /** Один холодный резолв пары (item, media): внешний мир → entry кэша. */
+  /** Кандидаты резолвера → строки stream_sources; прогретый — с индексом файла. */
+  function toSourceRows(list: StreamCandidate[], warm: WarmRelease | null): StreamSourceCandidate[] {
+    return list.map((c) => ({
+      infohash: c.hash,
+      magnet: c.magnet,
+      title: c.title,
+      quality: c.quality,
+      sizeBytes: c.sizeBytes,
+      voices: c.voices,
+      seeds: c.seeds,
+      peers: c.peers,
+      fileIndex: warm && warm.magnet === c.magnet ? warm.fileIndex : null,
+    }));
+  }
+
+  /** Записать найденные раздачи (фоном: ответ клиенту не ждёт БД). */
+  function persistCandidates(
+    target: StreamResolveTarget,
+    list: StreamCandidate[],
+    warm: WarmRelease | null,
+  ): void {
+    if (list.length === 0) return;
+    void recordStreamSources(
+      db,
+      { itemId: target.itemId, mediaId: target.mediaId, episodeId: target.episodeId },
+      toSourceRows(list, warm),
+    )
+      .then(() => (warm ? refreshItemPlayable(db, target.itemId, { checked: false }) : undefined))
+      .catch(() => {});
+  }
+
+  /**
+   * Один холодный резолв пары (item, media). Сначала — проверенные заранее
+   * раздачи из stream_sources (stream-precheck воркера): тогда rutor не
+   * трогаем вовсе. Пожалованные (bad) хеши не выдаются ни оттуда, ни из поиска.
+   */
   async function resolveZeroStorage(
     id: number,
     mediaId: number,
     warm: WarmRelease | null,
   ): Promise<ResolveCacheEntry | null> {
-    const item = await getItem(db, id);
-    if (!item) return null;
-    // external id — точный матч релиза AniLibria для аниме-тайтлов.
-    const [ext] = await db
-      .select({ source: items.externalSource, id: items.externalId })
-      .from(items)
-      .where(eq(items.id, id))
-      .limit(1);
-    const ctx = await episodeContext(db, mediaId);
-    // Источник решает media, а не тайтл: в TMDb-сериал влит релиз AniLibria —
-    // его серии («anilibria:<release>:<ordinal>») играют HLS AniLibria, а
-    // серии вне релиза (другие сезоны) идут торрентами, без подмены на
-    // «серию k» релиза.
-    const ani = /^anilibria:(\d+):(\d+)$/.exec(ctx.sourceKey ?? "");
-    const isAniItem = ext?.source === "anilibria";
-    const externalSource = ani ? "anilibria" : isAniItem && ctx.sourceKey == null && ctx.seasonNumber != null ? null : (ext?.source ?? null);
-    const externalId = ani ? ani[1]! : externalSource ? (ext?.id ?? null) : null;
-    const type = ani ? ("anime" as const) : isAniItem && externalSource == null ? ("serial" as const) : item.type;
-    // Фильм-релиз AniLibria без серий — без S/E (иначе rutor искал бы «s01e01»).
-    const seasonNumber = ani && ctx.seasonNumber != null ? 1 : ctx.seasonNumber;
-    const episodeNumber = ani && ctx.episodeNumber != null ? Number(ani[2]) : ctx.episodeNumber;
+    const target = await streamResolveTarget(db, id, mediaId);
+    if (!target) return null;
+    const sources = await getStreamSources(db, mediaId).catch(() => []);
+    const known = usableStreamSources(sources, config.streamSourceTtlMs).map((r) => ({
+      hash: r.infohash,
+      magnet: r.magnet,
+      title: r.title,
+      fileIndex: r.fileIndex!,
+      quality: r.quality,
+      sizeBytes: r.sizeBytes,
+      seeds: r.seeds,
+      peers: r.peers,
+    }));
+    const excludeHashes = bannedStreamHashes(sources);
     const startedAt = Date.now();
     const resolved = await streamResolver.resolve({
       itemId: id,
       mediaId,
-      title: item.title,
-      originalTitle: item.originalTitle,
-      year: item.year,
-      type,
-      seasonNumber: seasonNumber ?? undefined,
-      episodeNumber: episodeNumber ?? undefined,
-      absoluteNumber: ctx.absoluteNumber,
-      externalSource,
-      externalId,
-      warm,
+      title: target.title,
+      originalTitle: target.originalTitle,
+      year: target.year,
+      type: target.type,
+      seasonNumber: target.seasonNumber ?? undefined,
+      episodeNumber: target.episodeNumber ?? undefined,
+      absoluteNumber: target.absoluteNumber,
+      externalSource: target.externalSource,
+      externalId: target.externalId,
+      // Тёплый снимок не годится, если его релиз забанили.
+      warm: warm && !excludeHashes.includes(warm.hash.toLowerCase()) ? warm : null,
+      known,
+      excludeHashes,
     });
     // «Пустышки»: фильм или первая серия без единой раздачи — прячем тайтл
     // из лент (после двух промахов подряд), находка — возвращает обратно.
-    const isEntryMedia = ctx.seasonNumber == null || (ctx.seasonNumber <= 1 && (ctx.episodeNumber ?? 1) <= 1);
-    if (isEntryMedia) void markSourceAvailability(db, id, resolved.files.length > 0).catch(() => {});
+    if (target.isEntryMedia) void markSourceAvailability(db, id, resolved.files.length > 0).catch(() => {});
     if (resolved.files.length === 0) return null;
 
     const guessed = !resolved.warm && resolved.files.length > 0;
@@ -529,9 +545,11 @@ export async function catalogRoutes(
     }
     console.log(
       `resolve: item=${id} media=${mediaId} in ${Date.now() - startedAt}ms ` +
-        `files=${resolved.files.length} warm=${resolved.warm ? "ready" : guessed ? "guess" : "pending"}`,
+        `files=${resolved.files.length} src=${resolved.torrentSource} ` +
+        `warm=${resolved.warm ? "ready" : guessed ? "guess" : "pending"}`,
     );
     if (!guessed) {
+      persistCandidates(target, resolved.candidates, resolved.warm);
       void saveSource(db, {
         itemId: id,
         mediaId,
@@ -541,6 +559,7 @@ export async function catalogRoutes(
         warm: resolved.warm,
       }).catch(() => {});
     } else {
+      persistCandidates(target, resolved.candidates, null);
       // Угаданный fileIndex=1 — не в БД и не продлеваем: дождёмся точного warm
       // и только его сохраняем (патч warm + инвалидация L1, чтобы следующий
       // медиалинк перестроил URLs уже с реальным индексом).
@@ -550,6 +569,11 @@ export async function catalogRoutes(
           if (!warm2) return;
           const cacheKey = `${id}:${mediaId}`;
           resolveCache.delete(cacheKey);
+          persistCandidates(
+            target,
+            resolved.candidates.filter((c) => c.magnet === warm2.magnet),
+            warm2,
+          );
           return patchSource(db, id, mediaId, { warm: warm2 }).catch(() => {
             return saveSource(db, {
               itemId: id,
@@ -564,6 +588,97 @@ export async function catalogRoutes(
         .catch(() => {});
     }
     return entry;
+  }
+
+  /* ---------- «Не играет / не та серия» ----------
+   * Жалоба из плеера: раздача → bad для этой серии (stream_sources), кэши
+   * пары сбрасываются, следующий media-links соберёт ссылки без неё. Гостям
+   * тоже можно — защищает per-IP лимит, а бан бьёт только по одной паре. */
+  app.post(
+    "/media/:id/report",
+    { config: { rateLimit: { max: 10, timeWindow: "1 minute" } } },
+    async (request) => {
+      const { id: mediaId } = parseOrThrow(idParamsSchema, request.params);
+      const body = parseOrThrow(streamReportRequestSchema, request.body ?? {});
+      const [row] = await db
+        .select({ itemId: media.itemId, episodeId: media.episodeId })
+        .from(media)
+        .where(eq(media.id, mediaId))
+        .limit(1);
+      if (!row) throw notFound(`Media ${mediaId} not found`);
+      const hash = body.hash?.toLowerCase() ?? streamHashFromUrl(body.url);
+      // Сбрасываем всё, что помнит прежний набор ссылок пары.
+      const cacheKey = `${row.itemId}:${mediaId}`;
+      resolveCache.delete(cacheKey);
+      streamResolver.invalidate(row.itemId, mediaId);
+      await deleteSource(db, row.itemId, mediaId).catch(() => {});
+      let banned = false;
+      if (hash) {
+        await reportStreamSource(db, { itemId: row.itemId, mediaId, episodeId: row.episodeId }, hash);
+        banned = true;
+      }
+      console.log(
+        `stream-report: item=${row.itemId} media=${mediaId} reason=${body.reason} hash=${hash ?? "-"}`,
+      );
+      return { ok: true as const, banned };
+    },
+  );
+
+  /* ---------- Префетч с карточки ----------
+   * Наведение/фокус на карточку → фоновый резолв первой серии (или явной
+   * mid), чтобы клик «Смотреть» взял готовое. Ответ мгновенный, резолв
+   * идёт фоном с потолком параллельности — карусель под мышью не должна
+   * устраивать шторм по rutor. */
+  let prefetchInFlight = 0;
+  app.post(
+    "/items/:id/prefetch",
+    { config: { rateLimit: { max: 30, timeWindow: "1 minute" } } },
+    async (request) => {
+      const { id } = parseOrThrow(idParamsSchema, request.params);
+      const body = parseOrThrow(prefetchRequestSchema, request.body ?? {});
+      const mediaId = body.mid ?? (await entryMediaId(id));
+      if (!mediaId) return { ready: false, queued: false };
+      const key = `${id}:${mediaId}`;
+      const l1 = resolveCache.get(key);
+      if (l1 && Date.now() - l1.at < RESOLVE_CACHE_TTL_MS) return { ready: true, queued: false };
+      if (linkResolves.has(key)) return { ready: false, queued: true };
+      const [stored, sources] = await Promise.all([
+        getSource(db, id, mediaId).catch(() => null),
+        getStreamSources(db, mediaId).catch(() => []),
+      ]);
+      if (stored && isSourceFresh(stored, RESOLVE_DB_TTL_MS)) return { ready: true, queued: false };
+      // Проверенная раздача есть — клик и так не пойдёт в rutor.
+      if (usableStreamSources(sources, config.streamSourceTtlMs).length > 0) {
+        return { ready: true, queued: false };
+      }
+      if (prefetchInFlight >= config.prefetchConcurrency) return { ready: false, queued: false };
+      prefetchInFlight++;
+      void resolveMediaLinks(id, mediaId)
+        .catch(() => null)
+        .finally(() => {
+          prefetchInFlight--;
+        });
+      return { ready: false, queued: true };
+    },
+  );
+
+  /** media, с которой стартует просмотр тайтла: фильм или первая серия первого сезона. */
+  async function entryMediaId(itemId: number): Promise<number | null> {
+    const rows = await db
+      .select({ id: media.id })
+      .from(media)
+      .leftJoin(episodes, eq(episodes.id, media.episodeId))
+      .leftJoin(seasons, eq(seasons.id, episodes.seasonId))
+      .where(eq(media.itemId, itemId))
+      .orderBy(
+        sql`(${seasons.number} = 0) nulls first`,
+        sql`${seasons.number} nulls first`,
+        sql`${episodes.number} nulls first`,
+        media.partNumber,
+        media.id,
+      )
+      .limit(1);
+    return rows[0]?.id ?? null;
   }
 
   /**

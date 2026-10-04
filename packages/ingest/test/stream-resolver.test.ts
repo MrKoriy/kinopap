@@ -546,3 +546,78 @@ describe("StreamResolver.tracksFor", () => {
     expect(b).toEqual(c);
   });
 });
+
+describe("stream_sources: известные раздачи и жалобы", () => {
+  const KNOWN = {
+    hash: HASH2,
+    magnet: `magnet:?xt=urn:btih:${HASH2}&dn=Known`,
+    title: "Гадкий я 2010 1080p WEB-DL",
+    fileIndex: 5,
+    quality: "1080p",
+    sizeBytes: 2_500_000_000,
+    seeds: 40,
+  };
+
+  it("проверенная раздача есть — rutor не трогаем, индекс файла точный", async () => {
+    const resolved = await resolver.resolve(query({ itemId: 11, mediaId: 11, known: [KNOWN] }));
+    expect(rutorQueries).toHaveLength(0);
+    expect(counters.add).toBe(0);
+    expect(resolved.torrentSource).toBe("known");
+    expect(resolved.candidates).toEqual([]);
+    expect(resolved.files).toHaveLength(1);
+    expect(resolved.files[0]?.urls.hls).toBe(`${base}/gst/${HASH2}/master.m3u8?index=5&audio=0`);
+    expect(resolved.warm).toMatchObject({ hash: HASH2, fileIndex: 5 });
+  });
+
+  it("известная раздача забанена — идём в поиск", async () => {
+    rutorHtmlOverride = RUTOR_HTML;
+    const resolved = await resolver.resolve(
+      query({ itemId: 12, mediaId: 12, known: [KNOWN], excludeHashes: [HASH2.toUpperCase()] }),
+    );
+    expect(rutorQueries.length).toBeGreaterThan(0);
+    expect(resolved.torrentSource).toBe("search");
+    expect(resolved.candidates.map((c) => c.hash)).toEqual([HASH]);
+  });
+
+  it("пожалованный релиз из поиска не выдаётся", async () => {
+    rutorHtmlOverride = RUTOR_HTML;
+    const resolved = await resolver.resolve(query({ itemId: 13, mediaId: 13, excludeHashes: [HASH] }));
+    expect(resolved.files).toEqual([]);
+    expect(resolved.torrentSource).toBe("none");
+  });
+
+  it("кандидаты поиска несут озвучки из названия", async () => {
+    rutorHtmlOverride = rutorHtmlWith("Гадкий я / Despicable Me (2010) WEB-DL 1080p | D, LostFilm");
+    const resolved = await resolver.resolve(query({ itemId: 14, mediaId: 14 }));
+    expect(resolved.candidates[0]?.voices).toEqual(expect.arrayContaining(["Дубляж", "LostFilm"]));
+  });
+
+  it("checkRelease: метаданные + файл фильма, голову не тянет", async () => {
+    // Фоновые preopen прошлых кейсов (fire-and-forget) должны доехать до сброса.
+    await new Promise((r) => setTimeout(r, 100));
+    counters.preopen = 0;
+    rutorHtmlOverride = RUTOR_HTML;
+    const [rel] = await resolver.findTorrentReleases(query());
+    expect(rel).toBeDefined();
+    const check = await resolver.checkRelease(rel!, query(), { metadataWaitMs: 100 });
+    expect(check).toEqual({ hash: HASH, fileIndex: 3 });
+    expect(counters.preopen).toBe(0);
+  });
+
+  it("checkRelease: нужной серии в раздаче нет — null", async () => {
+    rutorHtmlOverride = RUTOR_HTML;
+    const [rel] = await resolver.findTorrentReleases(query());
+    const check = await resolver.checkRelease(
+      rel!,
+      query({ type: "serial", seasonNumber: 3, episodeNumber: 9 }),
+      { metadataWaitMs: 100 },
+    );
+    expect(check).toBeNull();
+  });
+
+  it("warmHead читает голову файла через TorrServer", async () => {
+    const read = await resolver.warmHead(HASH, 3, 1024);
+    expect(read).toBeGreaterThan(0);
+    expect(counters.preopen).toBe(1);
+  });
+});

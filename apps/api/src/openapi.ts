@@ -33,6 +33,8 @@ import {
   mediaTracksSchema,
   newEpisodeSchema,
   newEpisodesResponseSchema,
+  prefetchRequestSchema,
+  prefetchResponseSchema,
   profileItemSchema,
   profileOverviewResponseSchema,
   profileStatsSchema,
@@ -41,6 +43,8 @@ import {
   refreshResponseSchema,
   refreshSchema,
   registerSchema,
+  streamReportRequestSchema,
+  streamReportResponseSchema,
   subscriptionListResponseSchema,
   subscriptionPutSchema,
   subscriptionResponseSchema,
@@ -283,6 +287,27 @@ export function buildOpenApiSpec(): Record<string, unknown> {
             { name: "mid", in: "query", required: true, schema: { type: "integer" } },
           ],
           responses: { 200: jsonBody("MediaTracks") },
+        },
+      },
+      "/v1/items/{id}/prefetch": {
+        post: {
+          summary: "Префетч источника при наведении на карточку (фоновый резолв, гостям тоже)",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: jsonBody("PrefetchRequest"),
+          responses: { 200: jsonBody("PrefetchResponse"), 429: errorResponse },
+        },
+      },
+      "/v1/media/{id}/report": {
+        post: {
+          summary: "«Не играет / не та серия»: раздача помечается bad для этой серии",
+          parameters: [{ name: "id", in: "path", required: true, schema: { type: "integer" } }],
+          requestBody: jsonBody("StreamReportRequest"),
+          responses: {
+            200: jsonBody("StreamReportResponse"),
+            400: errorResponse,
+            404: errorResponse,
+            429: errorResponse,
+          },
         },
       },
       "/v1/items/{id}/similar": {
@@ -664,6 +689,10 @@ export function buildOpenApiSpec(): Record<string, unknown> {
         ItemsSummaryResponse: z.toJSONSchema(itemsSummaryResponseSchema),
         MediaLinks: z.toJSONSchema(mediaLinksSchema),
         MediaTracks: z.toJSONSchema(mediaTracksSchema),
+        PrefetchRequest: z.toJSONSchema(prefetchRequestSchema),
+        PrefetchResponse: z.toJSONSchema(prefetchResponseSchema),
+        StreamReportRequest: z.toJSONSchema(streamReportRequestSchema),
+        StreamReportResponse: z.toJSONSchema(streamReportResponseSchema),
         Genre: z.toJSONSchema(genreSchema),
         Country: z.toJSONSchema(countrySchema),
         GenresResponse: {

@@ -165,12 +165,110 @@ export interface ResolveQuery {
    * рестарта API), ответ не ждёт addTorrent вообще — индекс файла известен.
    */
   warm?: WarmRelease | null;
+  /**
+   * Заранее найденные и проверенные раздачи (stream_sources, status good,
+   * fileIndex известен). Есть хоть одна — rutor не трогаем вовсе: клик
+   * «Смотреть» стоит один запрос в БД, а не поиск + DHT.
+   */
+  known?: KnownRelease[];
+  /** Хеши, на которые пожаловались для этой пары: не выдавать ни из known, ни из поиска. */
+  excludeHashes?: string[];
+}
+
+/** Проверенная раздача из stream_sources. */
+export interface KnownRelease {
+  hash: string;
+  magnet: string;
+  title: string;
+  fileIndex: number;
+  quality?: string | null;
+  sizeBytes?: number | null;
+  seeds?: number;
+  peers?: number;
+}
+
+/** Релиз-кандидат для записи в stream_sources (без ссылок для клиента). */
+export interface StreamCandidate {
+  hash: string;
+  magnet: string;
+  title: string;
+  quality: string;
+  sizeBytes: number;
+  seeds: number;
+  peers: number;
+  voices: string[];
 }
 
 /** Результат резолва: публичные ссылки + внутренний прогрев. */
 export interface ResolvedStream extends MediaLinks {
   /** В публичный DTO не уходит — магнит-ссылки клиенту не положены. */
   warm: WarmRelease | null;
+  /** Откуда торрент-файлы: известные раздачи (без rutor), поиск или ничего. */
+  torrentSource: "known" | "search" | "none";
+  /** Найденные релизы — для stream_sources (пусто, если брали known). */
+  candidates: StreamCandidate[];
+}
+
+/** Озвучки релиза из названия: «Дубляж, LostFilm» → ["Дубляж", "LostFilm"]. */
+export function releaseVoices(rel: Pick<RutorRelease, "dub">): string[] {
+  return (rel.dub ?? "")
+    .split(",")
+    .map((v) => v.trim())
+    .filter(Boolean);
+}
+
+/** RutorRelease → кандидат для stream_sources. */
+export function toStreamCandidate(rel: RutorRelease): StreamCandidate {
+  return {
+    hash: rel.hash,
+    magnet: rel.magnet,
+    title: rel.title,
+    quality: rel.quality,
+    sizeBytes: rel.sizeBytes,
+    seeds: rel.seeds,
+    peers: rel.peers,
+    voices: releaseVoices(rel),
+  };
+}
+
+/** Человекочитаемый размер для подписи качества: 2.5 GB. */
+function formatSize(bytes: number | null | undefined): string {
+  if (!bytes || bytes <= 0) return "? GB";
+  const gb = bytes / (1024 * 1024 * 1024);
+  return gb >= 1 ? `${gb.toFixed(2)} GB` : `${Math.round(bytes / (1024 * 1024))} MB`;
+}
+
+/**
+ * Известная раздача в форме релиза rutor — чтобы собрать files и проверить
+ * её тем же кодом (stream-precheck перепроверяет записи из stream_sources).
+ */
+export function knownToRelease(
+  k: Omit<KnownRelease, "fileIndex"> & { fileIndex?: number | null },
+): RutorRelease {
+  return {
+    title: k.title,
+    hash: k.hash.toLowerCase(),
+    magnet: k.magnet,
+    size: formatSize(k.sizeBytes),
+    sizeBytes: k.sizeBytes ?? 0,
+    seeds: k.seeds ?? 0,
+    peers: k.peers ?? 0,
+    quality: k.quality ?? "",
+    dub: null,
+    year: null,
+    category: null,
+  };
+}
+
+/** Хеш релиза: из поля или из магнита (у известных раздач поле есть всегда). */
+function releaseHash(rel: Pick<RutorRelease, "hash" | "magnet">): string {
+  return (rel.hash || btihOf(rel.magnet) || "").toLowerCase();
+}
+
+/** Итог проверки релиза в TorrServer (stream-precheck). */
+export interface ReleaseCheck {
+  hash: string;
+  fileIndex: number;
 }
 
 export class StreamResolver {
@@ -179,7 +277,10 @@ export class StreamResolver {
   public readonly anilibria: AnilibriaConnector;
 
   /** Фоновые прогревы по паре (item, media) → их результат. */
-  private readonly warms = new Map<string, { at: number; promise: Promise<WarmedRelease | null> }>();
+  private readonly warms = new Map<
+    string,
+    { at: number; hash: string; promise: Promise<WarmedRelease | null> }
+  >();
   /** Активные gst-пробы по файлу: параллельные запросы делят одну пробу. */
   private readonly trackProbes = new Map<string, Promise<AudioTrack[]>>();
 
@@ -205,16 +306,37 @@ export class StreamResolver {
     // 1. Аниме: AniLibria отдаёт готовый HLS — мгновенный старт без торрентов.
     const anime = await this.resolveAnime(query);
 
-    // 2. Поиск торрент-релизов на rutor + скоринг под веб-стриминг.
-    const releases = await this.findTorrentReleases(query);
+    // 2. Торрент-релизы: сперва проверенные заранее (stream_sources) —
+    //    тогда rutor не трогаем вовсе; нет их — поиск на rutor + скоринг.
+    const excluded = new Set((query.excludeHashes ?? []).map((h) => h.toLowerCase()));
+    const known = (query.known ?? []).filter((k) => !excluded.has(k.hash.toLowerCase()));
+    let releases: RutorRelease[];
+    let torrentSource: ResolvedStream["torrentSource"];
+    let candidates: StreamCandidate[] = [];
+    let warmQuery = query;
+    if (known.length > 0) {
+      releases = known.map(knownToRelease);
+      torrentSource = "known";
+      // Индекс файла лучшей известной раздачи уже проверен — прогрев
+      // идёт по «тёплому» пути без addTorrent в критическом пути.
+      const top = known[0]!;
+      warmQuery = {
+        ...query,
+        warm: { hash: top.hash.toLowerCase(), fileIndex: top.fileIndex, magnet: top.magnet, title: top.title },
+      };
+    } else {
+      releases = await this.findTorrentReleases(query, excluded);
+      torrentSource = releases.length > 0 ? "search" : "none";
+      candidates = releases.map(toStreamCandidate);
+    }
 
     // 3. Прогрев лучшего релиза: тёплый кэш не ждём вовсе, новый — только
     //    в пределах бюджета (точный fileIndex доедет фоном).
-    const warmed = await this.warmTopRelease(query, releases);
+    const warmed = await this.warmTopRelease(warmQuery, releases);
 
     // 4. Сборка files из релизов; источников нет — честный пустой список
     //    (без мёртвой заглушки stream?link=none, плеер показал бы ошибку).
-    const torrentFiles = this.buildTorrentFiles(releases, warmed);
+    const torrentFiles = this.buildTorrentFiles(releases, warmed, known);
 
     // Аудио-дорожки НЕ резолвим здесь: gst-проба читает голову файла из
     // торрента и на холодных пирах занимает до 45с. Дорожки подтягиваются
@@ -230,6 +352,8 @@ export class StreamResolver {
       posterUrl: null,
       sprites: null,
       intro: anime.intro,
+      torrentSource,
+      candidates,
       // Только 4 поля: url (прямая ссылка) — производная, в кэш не нужна.
       warm: warmed
         ? {
@@ -345,7 +469,10 @@ export class StreamResolver {
   }
 
   /** Фаза 2: поиск релизов на rutor, сверка названий и скоринг. */
-  private async findTorrentReleases(query: ResolveQuery): Promise<RutorRelease[]> {
+  async findTorrentReleases(
+    query: ResolveQuery,
+    excluded: ReadonlySet<string> = new Set(),
+  ): Promise<RutorRelease[]> {
     // Search torrent releases on Rutor: русский титул И оригинальный
     // параллельно. Названия франшиз расходятся: под «Форсаж» rutor держит
     // мусор, под «The Fast and the Furious» — все фильмы. Слияние по хешу.
@@ -385,7 +512,7 @@ export class StreamResolver {
 
     const settled = await Promise.allSettled([...searchQueries].map((q) => this.rutor.search(q)));
     for (const r of settled) mergeReleases(r);
-    let matching = this.matchReleases([...byHash.values()], candidates, query.year);
+    let matching = this.matchReleases([...byHash.values()], candidates, query.year, excluded);
 
     // Если год не помог (релизы без года в названии или чужие) — ищем без
     // года и сверяем заново.
@@ -395,7 +522,7 @@ export class StreamResolver {
         [...new Set(bare)].map((q) => this.rutor.search(q)),
       );
       for (const r of bareSettled) mergeReleases(r);
-      matching = this.matchReleases([...byHash.values()], candidates, query.year);
+      matching = this.matchReleases([...byHash.values()], candidates, query.year, excluded);
     }
     return matching;
   }
@@ -409,9 +536,12 @@ export class StreamResolver {
     releases: RutorRelease[],
     candidates: string[],
     year: number | null | undefined,
+    excluded: ReadonlySet<string> = new Set(),
   ): RutorRelease[] {
     // Filter out non-video releases (books, mp3s, games, etc.)
     const videoReleases = releases.filter((r) => {
+      // Пожалованные зрителями раздачи этой пары — не выдаём.
+      if (excluded.has(releaseHash(r))) return false;
       const lower = r.title.toLowerCase();
       if (/mp3|flac|fb2|epub|pdf|аудиокнига|ост|\bost\b|сборник музыки|\bpc\b|игра|game/i.test(lower))
         return false;
@@ -483,11 +613,26 @@ export class StreamResolver {
   private buildTorrentFiles(
     releases: RutorRelease[],
     warmed: WarmedRelease | null,
+    known: KnownRelease[] = [],
   ): MediaFile[] {
     const files: MediaFile[] = [];
+    const knownByHash = new Map(known.map((k) => [k.hash.toLowerCase(), k]));
     for (const rel of releases) {
       // Generate TorrServer stream link for the magnet
-      const warmHit = warmed && warmed.magnet === rel.magnet ? warmed : null;
+      const k = knownByHash.get(releaseHash(rel));
+      // Известная раздача: индекс файла проверен — ссылка точная и без прогрева.
+      const warmHit =
+        warmed && warmed.magnet === rel.magnet
+          ? warmed
+          : k
+            ? {
+                hash: k.hash.toLowerCase(),
+                fileIndex: k.fileIndex,
+                magnet: k.magnet,
+                title: k.title,
+                url: this.torrServer.getStreamUrl(k.hash.toLowerCase(), k.fileIndex),
+              }
+            : null;
       const streamUrl = warmHit
         ? warmHit.url
         : this.torrServer.getStreamUrlForMagnet(rel.magnet, 1);
@@ -529,15 +674,25 @@ export class StreamResolver {
     return entry.promise;
   }
 
+  /**
+   * Забыть прогрев пары: после жалобы на раздачу дедуп startWarm иначе
+   * ещё 10 минут возвращал бы прогрев забаненного релиза.
+   */
+  invalidate(itemId: number, mediaId: number): void {
+    this.warms.delete(`${itemId}:${mediaId}`);
+  }
+
   /** Запускает прогрев релиза под пару (item, media) с дедупликацией. */
   private startWarm(key: string, rel: RutorRelease | null, queryForWarm?: ResolveQuery | null): Promise<WarmedRelease | null> {
     if (!rel) return Promise.resolve(null);
     const existing = this.warms.get(key);
-    if (existing && Date.now() - existing.at <= WARM_TTL_MS) return existing.promise;
+    if (existing && Date.now() - existing.at <= WARM_TTL_MS && existing.hash === releaseHash(rel)) {
+      return existing.promise;
+    }
 
     // Ошибки глотаем: прогрев опционален, резолв и без него отдаёт файлы.
     const promise = this.warmBestRelease(rel, queryForWarm).catch(() => null);
-    this.warms.set(key, { at: Date.now(), promise });
+    this.warms.set(key, { at: Date.now(), hash: releaseHash(rel), promise });
     if (this.warms.size > 500) {
       const cutoff = Date.now() - WARM_TTL_MS;
       for (const [k, v] of this.warms) {
@@ -606,11 +761,51 @@ export class StreamResolver {
   }
 
   /**
+   * Готовый HLS AniLibria для пары есть? Для stream-precheck: такой серии
+   * торрент не нужен вовсе, тайтл играбелен сразу.
+   */
+  async hasDirectStream(query: ResolveQuery): Promise<boolean> {
+    const anime = await this.resolveAnime(query);
+    return anime.files.length > 0;
+  }
+
+  /**
+   * Проверка релиза для stream-precheck: метаданные пришли из TorrServer и в
+   * раздаче есть файл нужной серии (или фильма). Голову файла не тянем —
+   * это забота прогрева топ-N; ждём метаданные дольше, чем клик (фон).
+   * null — релиз не годится (нет пиров/метаданных или нет файла серии).
+   */
+  async checkRelease(
+    rel: RutorRelease,
+    query: ResolveQuery,
+    opts: { metadataWaitMs?: number } = {},
+  ): Promise<ReleaseCheck | null> {
+    const warmed = await this.warmBestRelease(rel, query, {
+      preopen: false,
+      metadataWaitMs: opts.metadataWaitMs ?? 8000,
+      requireFiles: true,
+    });
+    return warmed ? { hash: warmed.hash, fileIndex: warmed.fileIndex } : null;
+  }
+
+  /**
+   * Прогрев головы файла (топ-N): TorrServer подключает пиров и кладёт
+   * первые `bytes` в дисковый кэш. Результат не важен — best effort.
+   */
+  warmHead(hash: string, fileIndex: number, bytes: number): Promise<number> {
+    return this.torrServer.preloadHead(hash, fileIndex, bytes);
+  }
+
+  /**
    * Добавляет релиз в TorrServer (idempotent) и возвращает прямую ссылку
    * на крупнейший видеофайл торрента. null — TorrServer недоступен или
    * метаданные не подтянулись: вызывающий код откатывается на magnet-URL.
    */
-  private async warmBestRelease(rel: RutorRelease | null, queryForWarm?: ResolveQuery | null): Promise<WarmedRelease | null> {
+  private async warmBestRelease(
+    rel: RutorRelease | null,
+    queryForWarm?: ResolveQuery | null,
+    opts: { preopen?: boolean; metadataWaitMs?: number; requireFiles?: boolean } = {},
+  ): Promise<WarmedRelease | null> {
     if (!rel) return null;
     try {
       const added = await this.torrServer.addTorrent(rel.magnet, rel.title);
@@ -619,10 +814,18 @@ export class StreamResolver {
         added.file_stats && added.file_stats.length > 0
           ? added
           : await this.torrServer.getTorrent(hash);
-      if (!torrent?.file_stats || torrent.file_stats.length === 0) {
-        // Метаданные качаются через DHT — даём полторы секунды и пробуем снова.
-        await new Promise((r) => setTimeout(r, 1500));
+      // Метаданные качаются через DHT — по умолчанию даём полторы секунды
+      // (клик), фоновой проверке — дольше, опрашивая раз в 1.5 с.
+      const deadline = Date.now() + (opts.metadataWaitMs ?? 1500);
+      while (!torrent?.file_stats || torrent.file_stats.length === 0) {
+        const left = deadline - Date.now();
+        if (left <= 0) break;
+        await new Promise((r) => setTimeout(r, Math.min(1500, left)));
         torrent = await this.torrServer.getTorrent(hash);
+      }
+      // Проверке нужны реальные файлы: без метаданных релиз не подтверждён.
+      if (opts.requireFiles && (!torrent?.file_stats || torrent.file_stats.length === 0)) {
+        return null;
       }
       // Эпизод запрошен — ищем файл по S/E в имени, не крупнейший.
       let best: { id: number; path: string } | null = null;
@@ -648,8 +851,10 @@ export class StreamResolver {
       // Предоткрытие: тянем голову файла — TorrServer подключает пиров и
       // закачивает первые куски в кэш. Ноунейм-фильмам (0–1 сид) даём 32МБ,
       // чтобы первые сегменты gst не ждали по 2–3 секунды каждый. Fire-and-forget.
-      const noName = (rel.seeds ?? 0) <= 1;
-      void this.torrServer.preopenStream(hash, index, noName).catch(() => {});
+      if (opts.preopen !== false) {
+        const noName = (rel.seeds ?? 0) <= 1;
+        void this.torrServer.preopenStream(hash, index, noName).catch(() => {});
+      }
 
       return {
         magnet: rel.magnet,

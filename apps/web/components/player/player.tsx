@@ -37,6 +37,7 @@ import {
   useSubtitleTracks,
   useTransport,
 } from "./hooks";
+import { LoadingStages } from "./loading-stages";
 import {
   BufferingOverlay,
   NextEpisodeOverlay,
@@ -45,6 +46,7 @@ import {
   SubtitleOverlay,
   UnmuteOverlay,
 } from "./overlays";
+import { StreamReportButton } from "./report-button";
 import { useStreamSetup } from "./stream-init";
 
 /** Скрываем контролы после стольких секунд бездействия (мышь или палец). */
@@ -65,6 +67,8 @@ export interface PlayerProps {
   currentMediaId?: number;
   /** Первое реальное воспроизведение: watch-страница греет следующую серию. */
   onPlaybackStart?: () => void;
+  /** Жалоба «не играет / не та серия» принята — пора перезапросить ссылки. */
+  onSourceReported?: () => void;
 }
 
 export function Player({
@@ -73,6 +77,7 @@ export function Player({
   episodeGroups,
   currentMediaId,
   onPlaybackStart,
+  onSourceReported,
 }: PlayerProps) {
   const { api, isAuthed } = useAuth();
   const router = useRouter();
@@ -102,6 +107,10 @@ export function Player({
   const [controlsVisible, setControlsVisible] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [isBuffering, setIsBuffering] = React.useState(false);
+  // Старт источника: «подключаемся» (до метаданных) → «буферизуем» (до
+  // canplay/playing) → готово. Источник уже найден (links есть), поэтому
+  // первый этап «ищем источник» здесь всегда пройден.
+  const [startPhase, setStartPhase] = React.useState<"connect" | "buffer" | "done">("connect");
   // gst-HLS недоступен (транскодер упал / версия без gst) — откат на прямой
   // HTTP-стрим: картинка и звук родными кодеками есть не у всех браузеров,
   // но это лучше, чем чёрный экран.
@@ -295,6 +304,12 @@ export function Player({
     setSourceEpoch((n) => n + 1);
   }, [links.files]);
 
+  // Новый источник (другая раздача/качество/повтор) — этапы старта заново.
+  // sourceEpoch в условии — «Попробовать снова» на том же URL тоже сброс.
+  React.useEffect(() => {
+    if (streamUrl && sourceEpoch >= 0) setStartPhase("connect");
+  }, [streamUrl, sourceEpoch]);
+
   useStreamSetup({
     videoRef,
     hlsRef,
@@ -325,6 +340,7 @@ export function Player({
     const onMeta = () => {
       setDuration(video.duration || 0);
       setIsBuffering(false);
+      setStartPhase((p) => (p === "connect" ? "buffer" : p));
       // Прямой HTTP-стрим узнаёт о готовности только здесь — пробуем play.
       tryAutoplayRef.current();
     };
@@ -332,6 +348,7 @@ export function Player({
     const onPause = () => setPlaying(false);
     const onPlaying = () => {
       setIsBuffering(false);
+      setStartPhase("done");
       setError(null);
       // Раздача заиграла — перебор закончен, убираем плашку «пробуем другую».
       setSwitchingSource(false);
@@ -341,7 +358,11 @@ export function Player({
       }
     };
     const onWaiting = () => setIsBuffering(true);
-    const onCanPlay = () => setIsBuffering(false);
+    const onCanPlay = () => {
+      setIsBuffering(false);
+      // Готово к показу: дальше ждём уже не сеть, а play (автоплей/клик).
+      setStartPhase("done");
+    };
     const onError = () => {
       setIsBuffering(false);
       const err = video.error;
@@ -788,8 +809,29 @@ export function Player({
         />
       )}
 
+      {/* Старт источника: этапы вместо пустого спиннера. Перебор раздач
+          показывает свой текст — он важнее этапов. */}
+      {startPhase !== "done" && !error && !switchingSource && (
+        <LoadingStages
+          overlay
+          stage={startPhase}
+          hint={startPhase === "connect" ? "Связываемся с раздачей и пирами…" : "Загружаем начало видео…"}
+        />
+      )}
+
+      {/* «Не играет / не та серия» — рядом с контролами, пока они видны,
+          и всегда на экране ошибки. */}
+      {onSourceReported && (controlsVisible || error) && (
+        <StreamReportButton
+          mediaId={links.mediaId}
+          streamUrl={activeFile?.urls.hls ?? activeFile?.urls.http}
+          isEpisode={(episodeGroups?.length ?? 0) > 0}
+          onReported={onSourceReported}
+        />
+      )}
+
       {/* Индикатор буферизации */}
-      {isBuffering && !error && (
+      {isBuffering && !error && (startPhase === "done" || switchingSource) && (
         <BufferingOverlay
           switchingSource={switchingSource}
           deadCount={deadFiles.length}
