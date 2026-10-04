@@ -69,6 +69,12 @@ export const items = pgTable(
     /** Резолв первой серии/фильма не нашёл ни одной раздачи (подряд) — прячем из лент. */
     noSourceCount: integer("no_source_count").notNull().default(0),
     noSourceAt: timestamp("no_source_at", { withTimezone: true }),
+    /**
+     * Можно ли смотреть: true — у тайтла есть проверенная (good) раздача
+     * в stream_sources, false — stream-precheck проверял и не нашёл ничего
+     * живого, null — ещё не проверяли (не обещаем и не прячем).
+     */
+    playable: boolean("playable"),
     /** Когда релиз AniLibria сверяли с поиском TMDb (повтор через 30 дней). */
     tmdbMatchedAt: timestamp("tmdb_matched_at", { withTimezone: true }),
     tmdbType: varchar("tmdb_type", { length: 8 }),

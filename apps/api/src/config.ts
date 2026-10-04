@@ -42,6 +42,10 @@ const envSchema = z.object({
   PREWARM_BATCH: z.coerce.number().int().positive().default(120),
   PREWARM_TOP: z.coerce.number().int().nonnegative().default(150),
   PREWARM_PAUSE_MS: z.coerce.number().int().nonnegative().default(1500),
+  /** Сколько часов проверенная раздача из stream_sources годится клику без rutor. */
+  STREAM_SOURCE_TTL_HOURS: z.coerce.number().positive().default(168),
+  /** Потолок одновременных фоновых резолвов от префетча карточек. */
+  PREFETCH_CONCURRENCY: z.coerce.number().int().nonnegative().default(3),
 });
 
 export interface Config {
@@ -65,6 +69,8 @@ export interface Config {
   prewarmBatch: number;
   prewarmTop: number;
   prewarmPauseMs: number;
+  streamSourceTtlMs: number;
+  prefetchConcurrency: number;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -90,5 +96,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     prewarmBatch: e.PREWARM_BATCH,
     prewarmTop: e.PREWARM_TOP,
     prewarmPauseMs: e.PREWARM_PAUSE_MS,
+    streamSourceTtlMs: e.STREAM_SOURCE_TTL_HOURS * 60 * 60 * 1000,
+    prefetchConcurrency: e.PREFETCH_CONCURRENCY,
   };
 }

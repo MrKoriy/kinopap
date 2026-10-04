@@ -4,6 +4,7 @@ import { Redis } from "ioredis";
 import { startAutopilot } from "./autopilot";
 import { createCatalogWorker } from "./catalog";
 import { makeWorkerDeps } from "./deps";
+import { startStreamJobs } from "./stream-jobs";
 import { createTranscoderWorker } from "./worker";
 
 const redisUrl = process.env.REDIS_URL ?? "redis://localhost:6379";
@@ -94,6 +95,23 @@ if (process.env.AUTOPILOT !== "0" && tmdbApiKey) {
   });
 }
 
+// Старт видео без скрейпа: stream-precheck (раздачи заранее) и прогрев
+// голов файлов топ-N в TorrServer. Выключается STREAM_PRECHECK=0.
+let stopStreamJobs: (() => Promise<void>) | null = null;
+if (process.env.STREAM_PRECHECK !== "0") {
+  const streamConnection = new Redis(redisUrl, { maxRetriesPerRequest: null });
+  streamConnection.on("error", (err) => {
+    console.warn("worker: stream redis error (non-fatal):", String(err).slice(0, 300));
+  });
+  startStreamJobs(streamConnection, db)
+    .then((stop) => {
+      stopStreamJobs = stop;
+    })
+    .catch((err) => {
+      console.warn("worker: stream jobs failed to start (non-fatal):", String(err).slice(0, 300));
+    });
+}
+
 // BullMQ-воркеры и Redis-коннекты эмитят 'error' (сбой jobs, реконнект).
 // Без слушателя an unhandled 'error' роняет процесс — падение Redis
 // не должно убивать воркера, оно должно попадать в лог и ретраиться.
@@ -141,7 +159,7 @@ async function shutdown(signal: string): Promise<void> {
   // Сначала останавливаем дочерние ffmpeg/ffprobe — иначе close() ждёт
   // завершения активной джобы часами.
   await stopActiveChildren(5_000);
-  await Promise.allSettled([worker.close(), catalogWorker.close()]);
+  await Promise.allSettled([worker.close(), catalogWorker.close(), stopStreamJobs?.()]);
   await Promise.allSettled([connection.quit(), catalogConnection.quit()]);
   clearTimeout(exitTimer);
   process.exit(0);

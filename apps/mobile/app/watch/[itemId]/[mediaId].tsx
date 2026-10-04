@@ -1,6 +1,12 @@
 "use client";
 
-import type { AudioTrack, ItemDetail, MediaLinks, Subtitle } from "@zal/api-client";
+import {
+  type AudioTrack,
+  type ItemDetail,
+  type MediaLinks,
+  type Subtitle,
+  streamHashFromUrl,
+} from "@zal/api-client";
 import { episodeGroups, flattenEpisodes, PLAYBACK_SPEEDS, pollMediaTracks } from "@zal/shared";
 import { tokens } from "@zal/ui";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
@@ -82,6 +88,11 @@ export default function WatchScreen() {
   const focusNext = useTvFocus();
   const focusRetry = useTvFocus();
   const focusErrBack = useTvFocus();
+  const focusReport = useTvFocus();
+  // Жалоба «не играет / не та серия»: растёт после принятой жалобы, и
+  // эффект загрузки ниже перезапрашивает ссылки (сервер отдаст другую раздачу).
+  const [reloadKey, setReloadKey] = React.useState(0);
+  const [reportState, setReportState] = React.useState<"idle" | "sending" | "error">("idle");
 
   const resumeRef = React.useRef(0);
   const appliedResumeRef = React.useRef(false);
@@ -105,7 +116,8 @@ export default function WatchScreen() {
   // стейт прошлого эпизода: субтитры, аудио, ошибку — иначе реплики
   // предыдущей серии рисуются поверх нового видео.
   React.useEffect(() => {
-    if (!ready) return;
+    // reloadKey < 0 не бывает: он здесь, чтобы жалоба на раздачу перезапускала загрузку.
+    if (!ready || reloadKey < 0) return;
     let cancelled = false;
     setCues([]);
     setActiveSub(null);
@@ -145,7 +157,7 @@ export default function WatchScreen() {
     return () => {
       cancelled = true;
     };
-  }, [api, ready, itemIdNum, mediaIdNum]);
+  }, [api, ready, itemIdNum, mediaIdNum, reloadKey]);
 
   // 2. Следующая серия (для кнопки) — из карточки тайтла.
   React.useEffect(() => {
@@ -633,6 +645,43 @@ export default function WatchScreen() {
             {...focusNext.props}
           >
             <Text style={styles.controlText}>Следующая серия →</Text>
+          </Pressable>
+        )}
+
+        {links && streamHashFromUrl(sourceUri) && (
+          <Pressable
+            testID="player-report"
+            style={[styles.nextButton, focusReport.ring]}
+            disabled={reportState === "sending"}
+            // Одна кнопка на оба случая: серия — «не та серия», фильм — «не
+            // играет». Сервер банит раздачу только для этой серии.
+            onPress={() => {
+              const hash = streamHashFromUrl(sourceUri);
+              if (!hash) return;
+              setReportState("sending");
+              api
+                .reportStream(links.mediaId, {
+                  reason: item?.seasons?.length ? "wrong_episode" : "not_playing",
+                  hash,
+                })
+                .then(() => {
+                  setReportState("idle");
+                  resumeRef.current = positionRef.current;
+                  setLinks(null);
+                  setReloadKey((k) => k + 1);
+                })
+                .catch(() => setReportState("error"));
+            }}
+            accessibilityRole="button"
+            {...focusReport.props}
+          >
+            <Text style={styles.controlText}>
+              {reportState === "error"
+                ? "Не отправилось — ещё раз"
+                : item?.seasons?.length
+                  ? "Не играет / не та серия"
+                  : "Не играет — другая раздача"}
+            </Text>
           </Pressable>
         )}
 

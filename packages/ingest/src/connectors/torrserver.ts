@@ -277,6 +277,39 @@ export class TorrServerConnector {
   }
 
   /**
+   * Прогрев головы файла для топ-N: читаем первые `bytes` целиком (Range),
+   * чтобы куски гарантированно легли в дисковый кэш TorrServer, а не
+   * только встали в очередь, как при preopenStream. Возвращает, сколько
+   * байт реально прочитано (0 — не вышло: нет пиров, таймаут).
+   */
+  async preloadHead(
+    hash: string,
+    fileIndex: number,
+    bytes: number,
+    timeoutMs = 90_000,
+  ): Promise<number> {
+    if (bytes <= 0) return 0;
+    let read = 0;
+    try {
+      const res = await fetch(`${this.baseUrl}/stream?link=${hash}&index=${fileIndex}&play`, {
+        headers: { Range: `bytes=0-${bytes - 1}` },
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok || !res.body) return 0;
+      const reader = res.body.getReader();
+      while (read < bytes) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        read += value?.byteLength ?? 0;
+      }
+      await reader.cancel().catch(() => {});
+    } catch {
+      // Best effort: прогрев не удался — клик просто стартует медленнее.
+    }
+    return read;
+  }
+
+  /**
    * Finds the best (largest) video file in a torrent.
    */
   findBestVideoFile(

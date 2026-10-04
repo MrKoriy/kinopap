@@ -63,8 +63,12 @@ module.exports = {
         // false: без прокси заголовок подделывается и обходит лимиты).
         // Перекрывается через .env, если топология изменится.
         TRUST_PROXY: process.env.TRUST_PROXY ?? "true",
-        // Фоновый прогрев популярного: клик «Смотреть» не ждёт rutor/TorrServer.
-        PREWARM: process.env.PREWARM ?? "1",
+        // Старый in-process прогрев API. Его работу теперь делает воркер
+        // (stream-precheck + stream-headwarm) — по умолчанию выключен, чтобы
+        // rutor не получал двойную нагрузку; вернуть можно PREWARM=1 в .env.
+        PREWARM: process.env.PREWARM ?? "0",
+        // Сколько часов проверенная раздача из stream_sources годится клику без rutor.
+        STREAM_SOURCE_TTL_HOURS: process.env.STREAM_SOURCE_TTL_HOURS ?? "168",
         // Догон серий сериалов и раскладка длинных сезонов — раз в час.
         GAP_FILL: process.env.GAP_FILL ?? "1",
         RESOLVE_SOURCE_TTL_HOURS: process.env.RESOLVE_SOURCE_TTL_HOURS ?? "48",
@@ -87,6 +91,19 @@ module.exports = {
         TMDB_API_KEY: process.env.TMDB_API_KEY,
         // Автопилот каталога: свежие релизы/аниме каждые 6 ч, широкий проход и трейлеры — раз в сутки.
         AUTOPILOT: process.env.AUTOPILOT ?? "1",
+        // Старт видео: раздачи заранее (stream-precheck) и головы файлов топ-N
+        // в кэше TorrServer (stream-headwarm). Потолок диска — общий с
+        // kinopap-ts-prune.timer (TS_CACHE_MAX_GB из того же .env).
+        STREAM_PRECHECK: process.env.STREAM_PRECHECK ?? "1",
+        TORRSERVER_URL: process.env.TORRSERVER_URL ?? "http://127.0.0.1:7002",
+        ANILIBRIA_URL: process.env.ANILIBRIA_URL,
+        TS_CACHE_DIR: process.env.TS_CACHE_DIR ?? "/opt/kinopap/data/ts-cache",
+        TS_CACHE_MAX_GB: process.env.TS_CACHE_MAX_GB ?? "25",
+        STREAM_HEAD_WARM_TOP: process.env.STREAM_HEAD_WARM_TOP ?? "200",
+        STREAM_HEAD_MB: process.env.STREAM_HEAD_MB ?? "64",
+        STREAM_PRECHECK_BATCH: process.env.STREAM_PRECHECK_BATCH,
+        STREAM_PRECHECK_TOP: process.env.STREAM_PRECHECK_TOP,
+        STREAM_PRECHECK_RUTOR_PER_MIN: process.env.STREAM_PRECHECK_RUTOR_PER_MIN,
       },
     },
     {

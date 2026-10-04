@@ -11,6 +11,7 @@ import { ItemHoverPreview, useHoverPreview } from "@/components/item-hover-previ
 import { PosterImage } from "@/components/poster-image";
 import { Badge } from "@/components/ui/badge";
 import { displayRating, formatDurationHuman } from "@/lib/format";
+import { useStreamPrefetch } from "@/lib/stream-prefetch";
 
 /**
  * Бейдж типа показываем только там, где он различает контент в сетке
@@ -35,6 +36,8 @@ export function ItemCard({
 }) {
   const [imgError, setImgError] = React.useState(false);
   const preview = useHoverPreview();
+  // Наведение/фокус — вероятный клик: источник ищется заранее (с дебаунсом).
+  const prefetch = useStreamPrefetch(item.id);
   const poster = !imgError ? (item.posters.medium ?? item.posters.small ?? item.posters.big) : null;
   const rating = displayRating(item);
   const typeTitle = TYPED_BADGE.has(item.type) ? ITEM_TYPE_TITLES[item.type] : null;
@@ -47,13 +50,21 @@ export function ItemCard({
     // biome-ignore lint/a11y/noStaticElementInteractions: hover лишь открывает превью — те же действия доступны ссылкой карточки
     <div
       className={cn("group relative w-full", className)}
-      onMouseEnter={(e) => preview.onEnter(e.currentTarget)}
-      onMouseLeave={preview.onLeave}
+      onMouseEnter={(e) => {
+        preview.onEnter(e.currentTarget);
+        prefetch.intent();
+      }}
+      onMouseLeave={() => {
+        preview.onLeave();
+        prefetch.cancel();
+      }}
     >
       <Link
         href={`/item/${item.id}`}
         className="block w-full"
         data-testid="item-card"
+        onFocus={prefetch.intent}
+        onBlur={prefetch.cancel}
       >
         <div className="relative aspect-[2/3] w-full overflow-hidden rounded-[var(--radius-card)] bg-surface-2 ring-1 ring-white/5 transition group-hover:ring-white/20">
           {poster ? (

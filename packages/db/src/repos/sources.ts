@@ -96,6 +96,13 @@ export async function patchSource(
     .where(and(eq(mediaSources.itemId, itemId), eq(mediaSources.mediaId, mediaId)));
 }
 
+/** Сброс снимка резолва пары: после жалобы на раздачу собираем ссылки заново. */
+export async function deleteSource(db: Db, itemId: number, mediaId: number): Promise<void> {
+  await db
+    .delete(mediaSources)
+    .where(and(eq(mediaSources.itemId, itemId), eq(mediaSources.mediaId, mediaId)));
+}
+
 /** Гигиена: протухшие записи кэша (старше `maxAgeMs`) удаляем. */
 export async function purgeStaleSources(db: Db, maxAgeMs: number): Promise<number> {
   const deleted = await db
@@ -124,11 +131,32 @@ export interface PrewarmTarget {
  */
 export async function prewarmCandidates(
   db: Db,
-  opts: { limit: number; topLimit: number; extraItemIds?: number[]; freshMs: number },
+  opts: {
+    limit: number;
+    topLimit: number;
+    extraItemIds?: number[];
+    freshMs: number;
+    /**
+     * Что считать «уже готово»: снимок резолва (media_sources, прогрев API)
+     * или проверенная раздача (stream_sources, stream-precheck воркера).
+     */
+    freshness?: "media_sources" | "stream_sources";
+  },
 ): Promise<PrewarmTarget[]> {
   const extra = (opts.extraItemIds ?? []).filter((n) => Number.isInteger(n) && n > 0);
   const extraArr = sql.raw(`ARRAY[${extra.length ? extra.join(",") : "NULL"}]::int[]`);
   const freshBefore = new Date(Date.now() - opts.freshMs);
+  const freshExists =
+    opts.freshness === "stream_sources"
+      ? sql`
+      select 1 from stream_sources ss
+      where d.media_id is not null and ss.media_id = d.media_id
+        and ss.status = 'good' and ss.checked_at > ${freshBefore.toISOString()}::timestamptz`
+      : sql`
+      select 1 from media_sources ms
+      where ms.item_id = d.item_id
+        and d.media_id is not null and ms.media_id = d.media_id
+        and ms.resolved_at > ${freshBefore.toISOString()}::timestamptz`;
   const res = await db.execute<{ item_id: number; media_id: number | null; priority: number }>(sql`
     with recent as (
       select distinct on (wp.item_id) wp.item_id, wp.media_id, wp.completed_at
@@ -192,12 +220,7 @@ export async function prewarmCandidates(
     select d.item_id, d.media_id, d.priority
     from dedup d
     join items i on i.id = d.item_id
-    where not exists (
-      select 1 from media_sources ms
-      where ms.item_id = d.item_id
-        and d.media_id is not null and ms.media_id = d.media_id
-        and ms.resolved_at > ${freshBefore.toISOString()}::timestamptz
-    )
+    where not exists (${freshExists})
     order by d.priority, i.views desc nulls last, d.item_id
     limit ${opts.limit}
   `);
