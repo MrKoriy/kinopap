@@ -75,7 +75,7 @@ export function nightlyTasks(env: NodeJS.ProcessEnv = process.env): NightlyTask[
  * Скрипт воркера дочерним процессом: из исходников — тем же tsx-загрузчиком
  * (execArgv), из прод-бандла — собранным dist/<имя>.js (см. siblingScript).
  */
-function runScript(script: string, args: string[]): Promise<number | null> {
+export function runScript(script: string, args: string[]): Promise<number | null> {
   return new Promise((resolve) => {
     const target = siblingScript(import.meta.url, script.replace(/\.ts$/, ""));
     const child = spawn(process.execPath, [...target.args, ...args], {

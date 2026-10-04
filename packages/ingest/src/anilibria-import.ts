@@ -162,3 +162,39 @@ export async function importAnilibriaCatalog(
 
   return { ...out, durationMs: Date.now() - startedAt };
 }
+
+/**
+ * Свежие серии AniLibria (Catalog Daemon, раз в 15 мин): `/releases/latest` →
+ * известные релизы дописываются сериями, новые — материализуются целиком.
+ * Дешевле полного прохода каталога: 1 запрос листинга + по релизу на новинку.
+ */
+export async function importAnilibriaUpdates(
+  opts: Omit<AnimeImportOptions, "maxReleases"> & { limit?: number },
+): Promise<AnimeImportSummary> {
+  const startedAt = Date.now();
+  const connector = new AnilibriaConnector(opts.baseUrl, opts.fetch);
+  const interval = opts.requestIntervalMs ?? 150;
+  const known = await listExternalIds(opts.db, EXTERNAL_SOURCE);
+  const out: AnimeImportProgress = { listed: 0, added: 0, updated: 0, episodes: 0 };
+  const latest = await connector.listLatest(opts.limit ?? 50);
+  for (const listed of latest) {
+    out.listed += 1;
+    const full = await connector.getRelease(listed.id).catch(() => null);
+    if (!full) continue;
+    try {
+      if (known.has(String(listed.id))) {
+        await materializeIncremental(opts.db, full);
+        out.updated += 1;
+      } else if (full.episodes.some((e) => Number.isInteger(e.ordinal))) {
+        out.episodes += await materialize(opts.db, full);
+        out.added += 1;
+        known.add(String(listed.id));
+      }
+    } catch (err) {
+      console.warn(`anilibria-updates: release ${listed.id} failed:`, String(err).slice(0, 200));
+    }
+    opts.onProgress?.({ ...out });
+    await sleep(interval);
+  }
+  return { ...out, durationMs: Date.now() - startedAt };
+}

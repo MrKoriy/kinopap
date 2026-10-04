@@ -162,6 +162,13 @@
       "when": 1791109053169,
       "tag": "0022_crazy_ender_wiggin",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1791113463561,
+      "tag": "0023_low_strong_guy",
+      "breakpoints": true
     }
   ]
 }

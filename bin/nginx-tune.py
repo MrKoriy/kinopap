@@ -12,7 +12,11 @@
 3. /torrents (админ-API TorrServer) наружу закрыт: им пользуется только API
    через 127.0.0.1:7002. Раньше любой мог добавлять и удалять раздачи.
 4. HTTP/2 на 443: десятки постеров на странице идут по одному соединению.
+5. brotli (если модуль ngx_brotli загружен): HTML, JS, CSS, JSON — на 15–20%
+   легче gzip. Next отдаёт несжатым (compress: false), сжимает nginx.
+   HTTP/3 (QUIC) системный nginx 1.24 не умеет — нужен ≥ 1.25 и UDP 443.
 """
+import glob
 import os
 import re
 import sys
@@ -34,6 +38,23 @@ PROXY_HEADERS = """        proxy_http_version 1.1;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;"""
+
+BROTLI_TYPES = "text/plain text/css application/json application/javascript text/javascript image/svg+xml application/manifest+json text/vtt application/xml"
+
+
+def brotli_available() -> bool:
+    return bool(glob.glob("/etc/nginx/modules-enabled/*brotli*"))
+
+
+def brotli_block() -> str:
+    if not brotli_available():
+        return ""
+    return f"""    brotli on;
+    brotli_comp_level 5;
+    brotli_min_length 1024;
+    brotli_types {BROTLI_TYPES};
+"""
+
 
 BLOCK = f"""    # BEGIN kinopap-perf (managed by bin/nginx-tune.py)
     gzip on;
@@ -113,7 +134,8 @@ def tune(path: str) -> None:
     m = re.compile(r"^[ \t]+location\s[^{\n]*\{", re.M).search(s, max(s.find("server {"), 0))
     if not m:
         sys.exit(f"{path}: не найден ни один location")
-    s = s[: m.start()] + BLOCK + "\n" + s[m.start():]
+    block = BLOCK.replace("    gzip on;\n", "    gzip on;\n" + brotli_block(), 1)
+    s = s[: m.start()] + block + "\n" + s[m.start():]
     s = s.replace("listen 443 ssl;", "listen 443 ssl http2;")
     s = s.replace("listen [::]:443 ssl;", "listen [::]:443 ssl http2;")
     if s != orig:

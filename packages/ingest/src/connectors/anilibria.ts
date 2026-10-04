@@ -81,6 +81,27 @@ function absPoster(poster: unknown): string | null {
   return src.startsWith("http") ? src : `https://anilibria.top${src}`;
 }
 
+/** Элемент листинга (каталог / latest) → краткий релиз; мусор — []. */
+function mapCatalogRelease(raw: unknown): AnilibriaCatalogRelease[] {
+  const item = raw as Record<string, unknown>;
+  const id = typeof item.id === "number" ? item.id : null;
+  const name = item.name as { main?: unknown; english?: unknown } | undefined;
+  const title = String(name?.main ?? "").trim();
+  if (!id || !title) return [];
+  const year = typeof item.year === "number" ? item.year : null;
+  const description = item.description ?? item.plot;
+  return [
+    {
+      id,
+      title,
+      englishTitle: name?.english ? String(name.english) : null,
+      year: year && year > 1900 ? year : null,
+      posterUrl: absPoster(item.poster),
+      plot: description ? String(description) : null,
+    } satisfies AnilibriaCatalogRelease,
+  ];
+}
+
 export class AnilibriaConnector {
   private readonly baseUrl: string;
   private readonly fetchFn: typeof fetch;
@@ -122,29 +143,35 @@ export class AnilibriaConnector {
       const totalPages = typeof rawTotal === "number" ? rawTotal : Number(rawTotal ?? 0) || 0;
 
       return {
-        releases: data.flatMap((raw) => {
-          const item = raw as Record<string, unknown>;
-          const id = typeof item.id === "number" ? item.id : null;
-          const name = item.name as { main?: unknown; english?: unknown } | undefined;
-          const title = String(name?.main ?? "").trim();
-          if (!id || !title) return [];
-          const year = typeof item.year === "number" ? item.year : null;
-          const description = item.description ?? item.plot;
-          return [
-            {
-              id,
-              title,
-              englishTitle: name?.english ? String(name.english) : null,
-              year: year && year > 1900 ? year : null,
-              posterUrl: absPoster(item.poster),
-              plot: description ? String(description) : null,
-            } satisfies AnilibriaCatalogRelease,
-          ];
-        }),
+        releases: data.flatMap(mapCatalogRelease),
         totalPages,
       };
     } catch {
       return { releases: [], totalPages: 0 };
+    }
+  }
+
+  /**
+   * Свежие релизы — те, где только что вышли серии (`/anime/releases/latest`).
+   * Catalog Daemon (anilibria-updates) опрашивает раз в 15 минут.
+   */
+  async listLatest(limit = 50): Promise<AnilibriaCatalogRelease[]> {
+    const url = `${this.baseUrl}/anime/releases/latest?limit=${limit}`;
+    try {
+      const res = await fetchWithTimeout(url, 8000, {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        fetchImpl: this.fetchFn,
+      });
+      if (!res.ok) return [];
+      const json = (await res.json()) as unknown;
+      const data = Array.isArray(json)
+        ? json
+        : Array.isArray((json as { data?: unknown })?.data)
+          ? ((json as { data: unknown[] }).data)
+          : [];
+      return data.flatMap(mapCatalogRelease);
+    } catch {
+      return [];
     }
   }
 

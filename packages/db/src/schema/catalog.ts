@@ -114,6 +114,13 @@ export const items = pgTable(
     /** Доминантный цвет постера «#rrggbb» — фон плейсхолдера и шапки. */
     dominantColor: varchar("dominant_color", { length: 7 }),
     imagesCheckedAt: timestamp("images_checked_at", { withTimezone: true }),
+    /** Catalog Daemon: когда метаданные последний раз сверяли с TMDb (/changes). */
+    tmdbRefreshedAt: timestamp("tmdb_refreshed_at", { withTimezone: true }),
+    /**
+     * TMDb сообщил о новых сериях (number_of_episodes больше нашего) —
+     * gap-filler API догидрирует сезоны и снимет пометку.
+     */
+    tmdbChangedAt: timestamp("tmdb_changed_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
