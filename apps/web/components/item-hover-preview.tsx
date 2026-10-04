@@ -15,12 +15,16 @@ import Link from "next/link";
 import * as React from "react";
 import { createPortal } from "react-dom";
 import { PosterImage } from "@/components/poster-image";
-import { TrailerButton } from "@/components/trailer-button";
+import { TrailerButton, youtubeId } from "@/components/trailer-button";
+import { canAutoPreview, MutedTrailer } from "@/components/trailer-preview";
 import { displayRating, formatDurationHuman } from "@/lib/format";
+import { backdropFor } from "@/lib/images";
 import { useStreamPrefetch } from "@/lib/stream-prefetch";
 
 const OPEN_DELAY_MS = 500;
 const CLOSE_DELAY_MS = 120;
+/** Беззвучный клип трейлера — если курсор задержался на превью. */
+const CLIP_DELAY_MS = 900;
 
 export function useHoverPreview() {
   const [rect, setRect] = React.useState<DOMRect | null>(null);
@@ -116,9 +120,16 @@ export function ItemHoverPreview({
     const id = window.requestAnimationFrame(() => setShown(true));
     return () => window.cancelAnimationFrame(id);
   }, []);
+  const trailerId = youtubeId(item.trailer);
+  const [clip, setClip] = React.useState(false);
+  React.useEffect(() => {
+    if (!trailerId || !canAutoPreview()) return;
+    const t = window.setTimeout(() => setClip(true), CLIP_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [trailerId]);
 
   const pos = previewPosition(rect, { width: window.innerWidth, height: window.innerHeight });
-  const image = item.posters.big ?? item.posters.medium ?? item.posters.small;
+  const { src: image, isPoster } = backdropFor(item);
   const rating = displayRating(item);
   const meta = [
     item.year,
@@ -144,9 +155,10 @@ export function ItemHoverPreview({
             alt=""
             fill
             sizes="380px"
-            className="object-cover object-[50%_20%]"
+            className={`h-full w-full object-cover ${isPoster ? "object-[50%_20%]" : ""}`}
           />
         )}
+        {clip && trailerId && <MutedTrailer youtubeId={trailerId} title={item.title} />}
         <div className="absolute inset-0 bg-gradient-to-t from-surface via-surface/20 to-transparent" />
         <p className="absolute inset-x-4 bottom-2 line-clamp-2 text-lg font-bold leading-tight text-white drop-shadow">
           {item.title}

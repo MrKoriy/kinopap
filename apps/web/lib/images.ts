@@ -30,3 +30,16 @@ export function ownPoster(item: Pick<ItemSummary, "images">): (OwnImageSources &
   if (!img?.poster) return null;
   return { ...ownImageSources(img.poster, POSTER_WIDTHS), blurhash: img.blurhash, color: img.color };
 }
+
+/**
+ * Широкая картинка тайтла (hero, превью, 16:9-карточки): своя нарезка
+ * бэкдропа → бэкдроп TMDb → постер (крупный) как последний фолбэк.
+ */
+export function backdropFor(
+  item: Pick<ItemSummary, "images" | "backdrop" | "posters">,
+): { src: string | null; isPoster: boolean } {
+  const own = item.images?.backdrop;
+  if (own) return { src: ownImageSources(own, BACKDROP_WIDTHS).src, isPoster: false };
+  if (item.backdrop) return { src: item.backdrop, isPoster: false };
+  return { src: item.posters.big ?? item.posters.medium ?? item.posters.small, isPoster: true };
+}

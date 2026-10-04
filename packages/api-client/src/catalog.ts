@@ -240,6 +240,8 @@ export const itemSummarySchema = z.object({
   }),
   /** Бэкдроп TMDb (w1280): OG-картинка и фон шапки. */
   backdrop: z.string().nullable().optional(),
+  /** Есть проверенная раздача (true), проверяли — нет (false), не проверяли (null). */
+  playable: z.boolean().nullable().optional(),
   /**
    * Свои нарезки картинок (воркер, MEDIA_ROOT/img): базовый URL каталога
    * с файлами `<w>.avif|webp` и blurhash/цвет для плейсхолдера.

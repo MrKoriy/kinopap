@@ -11,8 +11,8 @@
  */
 import { Clapperboard, ExternalLink, X } from "lucide-react";
 import * as React from "react";
-import { createPortal } from "react-dom";
 import { buttonVariants } from "@/components/ui/button";
+import { Dialog } from "@/components/ui/dialog";
 
 const YT_ID = /^[A-Za-z0-9_-]{6,20}$/;
 
@@ -45,20 +45,6 @@ export function TrailerButton({
     onOpenChangeRef.current?.(v);
   }, []);
 
-  React.useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    window.addEventListener("keydown", onKey);
-    return () => {
-      document.body.style.overflow = prev;
-      window.removeEventListener("keydown", onKey);
-    };
-  }, [open, setOpen]);
-
   if (!id) return null;
 
   return (
@@ -72,58 +58,44 @@ export function TrailerButton({
         <Clapperboard className="mr-2 h-4 w-4" />
         Трейлер
       </button>
-      {open &&
-        createPortal(
-          <div
-            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm"
-            role="dialog"
-            aria-modal="true"
-            aria-label={`Трейлер: ${title}`}
-            data-testid="trailer-modal"
-          >
-            {/* Клик мимо плеера закрывает модалку. */}
+      <Dialog
+        open={open}
+        onClose={() => setOpen(false)}
+        label={`Трейлер: ${title}`}
+        className="max-w-5xl"
+        testId="trailer-modal"
+      >
+        <div className="mb-2 flex items-center justify-between gap-3 text-sm text-white/80">
+          <span className="truncate font-medium">{title} — трейлер</span>
+          <div className="flex shrink-0 items-center gap-1">
+            <a
+              href={`https://www.youtube.com/watch?v=${id}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-white/70 hover:bg-white/10 hover:text-white"
+            >
+              <ExternalLink className="h-3.5 w-3.5" /> YouTube
+            </a>
             <button
               type="button"
-              aria-label="Закрыть трейлер"
-              tabIndex={-1}
-              className="absolute inset-0 cursor-default"
+              aria-label="Закрыть"
+              className="rounded-md p-1.5 hover:bg-white/10"
               onClick={() => setOpen(false)}
-            />
-            <div className="relative z-10 w-full max-w-5xl">
-              <div className="mb-2 flex items-center justify-between gap-3 text-sm text-white/80">
-                <span className="truncate font-medium">{title} — трейлер</span>
-                <div className="flex shrink-0 items-center gap-1">
-                  <a
-                    href={`https://www.youtube.com/watch?v=${id}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-white/70 hover:bg-white/10 hover:text-white"
-                  >
-                    <ExternalLink className="h-3.5 w-3.5" /> YouTube
-                  </a>
-                  <button
-                    type="button"
-                    aria-label="Закрыть"
-                    className="rounded-md p-1.5 hover:bg-white/10"
-                    onClick={() => setOpen(false)}
-                  >
-                    <X className="h-5 w-5" />
-                  </button>
-                </div>
-              </div>
-              <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] bg-black shadow-2xl">
-                <iframe
-                  className="absolute inset-0 h-full w-full"
-                  src={`https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
-                  title={`Трейлер: ${title}`}
-                  allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
-                  allowFullScreen
-                />
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+            >
+              <X className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+        <div className="relative aspect-video w-full overflow-hidden rounded-[var(--radius-card)] bg-black shadow-popover">
+          <iframe
+            className="absolute inset-0 h-full w-full"
+            src={`https://www.youtube-nocookie.com/embed/${id}?autoplay=1&rel=0&modestbranding=1&playsinline=1`}
+            title={`Трейлер: ${title}`}
+            allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+            allowFullScreen
+          />
+        </div>
+      </Dialog>
     </>
   );
 }

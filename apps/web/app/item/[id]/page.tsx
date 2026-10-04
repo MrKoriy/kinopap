@@ -1,9 +1,6 @@
 import type { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
-import { Suspense } from "react";
 import { ItemDetailView } from "@/components/item-detail";
-import { ItemRail } from "@/components/item-rail";
-import { RailSkeleton } from "@/components/skeletons";
 import { fetchItem, fetchSimilar } from "@/lib/api";
 import { isSeriesLike, itemJsonLd, ogImages, serializeJsonLd } from "@/lib/seo";
 
@@ -61,30 +58,22 @@ export default async function ItemPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const item = await fetchItem(Number(id));
+  const [item, similar] = await Promise.all([
+    fetchItem(Number(id)),
+    fetchSimilar(Number(id)).catch(() => ({ items: [] })),
+  ]);
   if (!item) notFound();
   // Карточку влили в другую (склейка дублей) — постоянный редирект.
   if (item.id !== Number(id)) permanentRedirect(`/item/${item.id}`);
 
   return (
-    <main className="mx-auto max-w-7xl px-4 py-8">
+    <main className="mx-auto max-w-7xl px-4 py-6">
       <script
         type="application/ld+json"
         // biome-ignore lint/security/noDangerouslySetInnerHtml: JSON-LD по рецепту Next — «<» экранирован в serializeJsonLd.
         dangerouslySetInnerHTML={{ __html: serializeJsonLd(itemJsonLd(item)) }}
       />
-      <ItemDetailView item={item} />
-      <div className="mt-12">
-        <Suspense fallback={<RailSkeleton />}>
-          <Similar itemId={item.id} />
-        </Suspense>
-      </div>
+      <ItemDetailView item={item} similar={similar.items} />
     </main>
   );
-}
-
-async function Similar({ itemId }: { itemId: number }) {
-  const similar = await fetchSimilar(itemId);
-  if (similar.items.length === 0) return null;
-  return <ItemRail title="Похожее" items={similar.items} />;
 }

@@ -208,6 +208,7 @@ function mapItem(row: ItemRow, refs: ItemRefs): ItemSummary {
     },
     trailer: { id: row.trailerId, url: row.trailerUrl },
     backdrop: row.backdropUrl ?? null,
+    playable: row.playable ?? null,
     images:
       row.posterHash || row.backdropHash
         ? {

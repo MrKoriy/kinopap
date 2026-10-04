@@ -1,20 +1,43 @@
 @import "tailwindcss";
 
 @theme {
-  /* Тёмная кинематографичная тема «Зал». */
+  /* Тёмная кинематографичная тема «Зал». Значения — из packages/ui/src/tokens.ts. */
   --color-background: #0b0b0f;
   --color-surface: #141419;
-  --color-surface-hover: #1c1c24;
+  --color-surface-2: #1c1c24;
+  --color-surface-hover: #22222c;
   --color-border: #26262f;
   --color-foreground: #f2f2f5;
   --color-muted: #9a9aa8;
   --color-accent: #e50914;
   --color-accent-hover: #ff1f2b;
+  --color-accent-soft: rgba(229, 9, 20, 0.16);
   --color-success: #2ecc71;
 
   --font-sans: "Inter", "Helvetica Neue", Arial, sans-serif;
 
+  --text-display: 3.75rem;
+  --text-display--line-height: 1.05;
+
   --radius-card: 12px;
+
+  --shadow-card: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --shadow-popover: 0 24px 60px rgba(0, 0, 0, 0.7);
+  --shadow-glow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 12px 40px rgba(229, 9, 20, 0.25);
+}
+
+/* «Стекло»: шапка, липкие панели, кнопки поверх картинок. */
+@utility glass {
+  background: rgba(11, 11, 15, 0.72);
+  border-color: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(16px) saturate(140%);
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+}
+
+/* Дешёвая виртуализация длинных сеток: браузер не рендерит карточки вне экрана. */
+@utility cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 340px;
 }
 
 html,
