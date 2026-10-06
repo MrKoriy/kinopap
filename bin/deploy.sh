@@ -29,10 +29,12 @@ RELEASES_DIR=$APP_DIR/releases
 CURRENT=$APP_DIR/current
 PREVIOUS=$APP_DIR/previous
 PUBLIC_URL="http://94.103.1.126"
-# HTTPS-адрес: имя в зоне sslip.io резолвится в тот же IP, сертификат Let's Encrypt
-# выпущен (vhost zal-ssl). Нужен потому, что мобильные браузеры по умолчанию идут
-# на HTTPS, а на 443 за голым IP отвечает чужой сертификат — телефон блокирует сайт.
-HTTPS_URL="https://zal.94-103-1-126.sslip.io"
+# HTTPS-адрес сайта: свой домен, сертификат Let's Encrypt в vhost zal-ssl.
+# Свой домен нужен балансерам (доступ выдают под сайт) и CDN. Старое имя в зоне
+# sslip.io живёт в том же сертификате и 301-редиректит сюда — старые ссылки и
+# закладки не ломаются; в CORS оставлено на время переезда.
+HTTPS_URL="https://kino.leonidku.ru"
+LEGACY_HTTPS_URL="https://zal.94-103-1-126.sslip.io"
 API_INTERNAL="http://127.0.0.1:7001"
 
 MODE=deploy
@@ -153,7 +155,7 @@ add_env() {
 }
 touch .env
 add_env TMDB_API_KEY "$TMDB_KEY"
-add_env CORS_ORIGIN "$PUBLIC_URL,$HTTPS_URL"
+add_env CORS_ORIGIN "$PUBLIC_URL,$HTTPS_URL,$LEGACY_HTTPS_URL"
 # Сайт отдаётся по HTTPS, а порт 80 теперь только редиректит на него (vhost
 # «default»). Значит refresh-cookie обязан идти с флагом Secure: по plain HTTP
 # браузер такую cookie не отправит, и попасть туда можно лишь через редирект.

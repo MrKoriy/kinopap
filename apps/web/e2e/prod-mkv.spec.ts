@@ -31,7 +31,7 @@ import { expect, test } from "@playwright/test";
  * Запуск (в обычный прогон не входит, testIgnore):
  *   cd apps/web && npx playwright test --config=playwright.prod.config.ts -g MKV
  */
-const SITE = "https://zal.94-103-1-126.sslip.io";
+const SITE = "https://kino.leonidku.ru";
 const ITEM = 149;
 /** Какую раздачу глушим. Не первую: перебор обязан вернуться к первой. */
 const DEAD_INDEX = 3;
