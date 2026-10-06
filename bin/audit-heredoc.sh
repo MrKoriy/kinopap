@@ -41,7 +41,7 @@ FILE=${1:-bin/deploy.sh}
 # это и есть смысл: незаэкранированная подстановка ловится здесь, а не выясняется
 # на сервере по «вечно зелёной» проверке. RELEASES_DIR/CURRENT/PREVIOUS/TS — из
 # раскладки релизов (bin/deploy.sh).
-LOCAL_OK='APP_DIR|SERVER|PUBLIC_URL|HTTPS_URL|API_INTERNAL|TMDB_KEY|RELEASES_DIR|CURRENT|PREVIOUS|TS'
+LOCAL_OK='APP_DIR|SERVER|PUBLIC_URL|HTTPS_URL|LEGACY_HTTPS_URL|API_INTERNAL|TMDB_KEY|RELEASES_DIR|CURRENT|PREVIOUS|TS'
 
 FINDINGS=$(awk -v local_ok="$LOCAL_OK" '
   /bash -s <<REMOTE/ { inblock=1; next }
