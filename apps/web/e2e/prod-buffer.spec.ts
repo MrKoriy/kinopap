@@ -18,7 +18,7 @@ import { expect, test } from "@playwright/test";
  * Запуск (в обычный прогон не входит, testIgnore):
  *   cd apps/web && npx playwright test --config=playwright.prod.config.ts -g буфер
  */
-const SITE = "https://zal.94-103-1-126.sslip.io";
+const SITE = "https://kino.leonidku.ru";
 const ITEM = 20961;
 const S3E1 = 40501;
 
